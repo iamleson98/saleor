@@ -125,6 +125,7 @@ class CollectionSortingInput(ChannelSortInputObjectType):
 
 class ProductOrderField(graphene.Enum):
     NAME = ["name", "slug"]
+    RANK = ["rank"]
     PRICE = ["min_variants_price_amount", "name", "slug"]
     MINIMAL_PRICE = ["discounted_price_amount", "name", "slug"]
     DATE = ["updated_at", "name", "slug"]
@@ -141,6 +142,9 @@ class ProductOrderField(graphene.Enum):
             ProductOrderField.COLLECTION.name: (
                 "collection. Note: "
                 "This option is available only for the `Collection.products` query."
+            ),
+            ProductOrderField.RANK.name: (
+                "rank. Note: This option is available only with the `search` filter."
             ),
             ProductOrderField.NAME.name: "name.",
             ProductOrderField.PRICE.name: "price.",
@@ -163,7 +167,8 @@ class ProductOrderField(graphene.Enum):
         return queryset.annotate(
             min_variants_price_amount=Min(
                 "variants__channel_listings__price_amount",
-                filter=Q(variants__channel_listings__channel__slug=channel_slug),
+                filter=Q(variants__channel_listings__channel__slug=channel_slug)
+                & Q(variants__channel_listings__price_amount__isnull=False),
             )
         )
 

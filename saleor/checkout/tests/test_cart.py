@@ -2,7 +2,7 @@ import pytest
 from measurement.measures import Weight
 from prices import Money, TaxedMoney
 
-from ...checkout.utils import fetch_checkout_lines
+from ...checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ...plugins.manager import get_plugins_manager
 from ...product.models import Category
 from .. import calculations, utils
@@ -25,23 +25,27 @@ def test_get_user_checkout(
 
 def test_adding_zero_quantity(checkout, product):
     variant = product.variants.get()
-    add_variant_to_checkout(checkout, variant, 0)
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
+    add_variant_to_checkout(checkout_info, variant, 0)
     assert checkout.lines.count() == 0
 
 
 def test_adding_same_variant(checkout, product):
     variant = product.variants.get()
-    add_variant_to_checkout(checkout, variant, 1)
-    add_variant_to_checkout(checkout, variant, 2)
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
+    add_variant_to_checkout(checkout_info, variant, 1)
+    add_variant_to_checkout(checkout_info, variant, 2)
     assert checkout.lines.count() == 1
     assert checkout.quantity == 3
     subtotal = TaxedMoney(Money("30.00", "USD"), Money("30.00", "USD"))
+    manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, [], manager)
     manager = get_plugins_manager()
     assert (
         calculations.checkout_subtotal(
             manager=manager,
-            checkout=checkout,
+            checkout_info=checkout_info,
             lines=lines,
             address=checkout.shipping_address,
         )
@@ -51,29 +55,33 @@ def test_adding_same_variant(checkout, product):
 
 def test_replacing_same_variant(checkout, product):
     variant = product.variants.get()
-    add_variant_to_checkout(checkout, variant, 1, replace=True)
-    add_variant_to_checkout(checkout, variant, 2, replace=True)
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
+    add_variant_to_checkout(checkout_info, variant, 1, replace=True)
+    add_variant_to_checkout(checkout_info, variant, 2, replace=True)
     assert checkout.lines.count() == 1
     assert checkout.quantity == 2
 
 
 def test_adding_invalid_quantity(checkout, product):
     variant = product.variants.get()
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
     with pytest.raises(ValueError):
-        add_variant_to_checkout(checkout, variant, -1)
+        add_variant_to_checkout(checkout_info, variant, -1)
 
 
 def test_getting_line(checkout, product):
     variant = product.variants.get()
     assert checkout.get_line(variant) is None
-    add_variant_to_checkout(checkout, variant)
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
+    add_variant_to_checkout(checkout_info, variant)
     assert checkout.lines.get() == checkout.get_line(variant)
 
 
 def test_shipping_detection(checkout, product):
     assert not checkout.is_shipping_required()
     variant = product.variants.get()
-    add_variant_to_checkout(checkout, variant, replace=True)
+    checkout_info = fetch_checkout_info(checkout, [], [], get_plugins_manager())
+    add_variant_to_checkout(checkout_info, variant, replace=True)
     assert checkout.is_shipping_required()
 
 
@@ -95,8 +103,9 @@ def test_get_prices_of_discounted_specific_product(
 
     manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, [], manager)
     prices = utils.get_prices_of_discounted_specific_product(
-        manager, checkout, lines, voucher, channel
+        manager, checkout_info, lines, voucher
     )
 
     excepted_value = [
@@ -120,13 +129,14 @@ def test_get_prices_of_discounted_specific_product_only_product(
     channel = checkout.channel
     variant_channel_listing = line.variant.channel_listings.get(channel=channel)
 
-    add_variant_to_checkout(checkout, product2.variants.get(), 1)
+    manager = get_plugins_manager()
+    checkout_info = fetch_checkout_info(checkout, [], [], manager)
+    add_variant_to_checkout(checkout_info, product2.variants.get(), 1)
     voucher.products.add(product)
 
-    manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
     prices = utils.get_prices_of_discounted_specific_product(
-        manager, checkout, lines, voucher, channel
+        manager, checkout_info, lines, voucher
     )
 
     excepted_value = [
@@ -152,14 +162,15 @@ def test_get_prices_of_discounted_specific_product_only_collection(
     channel = checkout.channel
     variant_channel_listing = line.variant.channel_listings.get(channel=channel)
 
-    add_variant_to_checkout(checkout, product2.variants.get(), 1)
+    manager = get_plugins_manager()
+    checkout_info = fetch_checkout_info(checkout, [], [], manager)
+    add_variant_to_checkout(checkout_info, product2.variants.get(), 1)
     product.collections.add(collection)
     voucher.collections.add(collection)
 
-    manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
     prices = utils.get_prices_of_discounted_specific_product(
-        manager, checkout, lines, voucher, checkout.channel
+        manager, checkout_info, lines, voucher
     )
 
     excepted_value = [
@@ -188,13 +199,14 @@ def test_get_prices_of_discounted_specific_product_only_category(
 
     product2.category = category2
     product2.save()
-    add_variant_to_checkout(checkout, product2.variants.get(), 1)
+    manager = get_plugins_manager()
+    checkout_info = fetch_checkout_info(checkout, [], [], manager)
+    add_variant_to_checkout(checkout_info, product2.variants.get(), 1)
     voucher.categories.add(category)
 
-    manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
     prices = utils.get_prices_of_discounted_specific_product(
-        manager, checkout, lines, voucher, channel
+        manager, checkout_info, lines, voucher
     )
 
     excepted_value = [
@@ -218,8 +230,9 @@ def test_get_prices_of_discounted_specific_product_all_products(
 
     manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, [], manager)
     prices = utils.get_prices_of_discounted_specific_product(
-        manager, checkout, lines, voucher, channel
+        manager, checkout_info, lines, voucher
     )
 
     excepted_value = [
@@ -265,4 +278,5 @@ def test_get_total_weight(checkout_with_item):
     variant.save()
     line.quantity = 6
     line.save()
-    assert checkout_with_item.get_total_weight() == Weight(kg=60)
+    lines = fetch_checkout_lines(checkout_with_item)
+    assert checkout_with_item.get_total_weight(lines) == Weight(kg=60)

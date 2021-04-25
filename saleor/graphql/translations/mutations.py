@@ -1,5 +1,6 @@
 import graphene
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
 from ...attribute import models as attribute_models
 from ...core.permissions import SitePermissions
@@ -9,12 +10,12 @@ from ...page import models as page_models
 from ...product import models as product_models
 from ...shipping import models as shipping_models
 from ..channel import ChannelContext
+from ..core.enums import LanguageCodeEnum
 from ..core.mutations import BaseMutation, ModelMutation, registry
 from ..core.types.common import TranslationError
-from ..core.utils import from_global_id_strict_type
+from ..core.utils import from_global_id_or_error
 from ..product.types import Product, ProductVariant
 from ..shop.types import Shop
-from .enums import LanguageCodeEnum
 
 # discount types need to be imported to get Voucher in the graphene registry
 from ..discount import types  # noqa # pylint: disable=unused-import, isort:skip
@@ -23,10 +24,6 @@ from ..discount import types  # noqa # pylint: disable=unused-import, isort:skip
 class BaseTranslateMutation(ModelMutation):
     class Meta:
         abstract = True
-
-    @classmethod
-    def check_permissions(cls, context):
-        return context.user.has_perm(SitePermissions.MANAGE_TRANSLATIONS)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -47,14 +44,23 @@ class NameTranslationInput(graphene.InputObjectType):
     name = graphene.String()
 
 
+class AttributeValueTranslationInput(NameTranslationInput):
+    rich_text = graphene.JSONString()
+
+
 class SeoTranslationInput(graphene.InputObjectType):
     seo_title = graphene.String()
     seo_description = graphene.String()
 
 
 class TranslationInput(NameTranslationInput, SeoTranslationInput):
-    description = graphene.String()
-    description_json = graphene.JSONString()
+    description = graphene.JSONString()
+
+
+class ShippingPriceTranslationInput(NameTranslationInput):
+    description = graphene.JSONString(
+        description="Translated shipping method description (JSON)."
+    )
 
 
 class CategoryTranslate(BaseTranslateMutation):
@@ -70,6 +76,7 @@ class CategoryTranslate(BaseTranslateMutation):
         model = product_models.Category
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
 
 class ProductTranslate(BaseTranslateMutation):
@@ -85,6 +92,7 @@ class ProductTranslate(BaseTranslateMutation):
         model = product_models.Product
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -93,7 +101,7 @@ class ProductTranslate(BaseTranslateMutation):
                 {"id": ValidationError("This field is required", code="required")}
             )
 
-        product_pk = from_global_id_strict_type(data["id"], Product, field="id")
+        _type, product_pk = from_global_id_or_error(data["id"], only_type=Product)
         product = product_models.Product.objects.get(pk=product_pk)
         product.translations.update_or_create(
             language_code=data["language_code"], defaults=data["input"]
@@ -115,6 +123,7 @@ class CollectionTranslate(BaseTranslateMutation):
         model = product_models.Collection
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -136,20 +145,31 @@ class ProductVariantTranslate(BaseTranslateMutation):
         model = product_models.ProductVariant
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
+    @transaction.atomic()
     def perform_mutation(cls, _root, info, **data):
         if "id" in data and not data["id"]:
             raise ValidationError(
                 {"id": ValidationError("This field is required", code="required")}
             )
 
-        variant_pk = from_global_id_strict_type(data["id"], ProductVariant, field="id")
-        variant = product_models.ProductVariant.objects.get(pk=variant_pk)
+        _type, variant_pk = from_global_id_or_error(
+            data["id"], only_type=ProductVariant
+        )
+        variant = product_models.ProductVariant.objects.prefetched_for_webhook().get(
+            pk=variant_pk
+        )
         variant.translations.update_or_create(
             language_code=data["language_code"], defaults=data["input"]
         )
         variant = ChannelContext(node=variant, channel_slug=None)
+
+        transaction.on_commit(
+            lambda: info.context.plugins.product_variant_updated(variant)
+        )
+
         return cls(**{cls._meta.return_field_name: variant})
 
 
@@ -166,6 +186,7 @@ class AttributeTranslate(BaseTranslateMutation):
         model = attribute_models.Attribute
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
 
 class AttributeValueTranslate(BaseTranslateMutation):
@@ -174,13 +195,14 @@ class AttributeValueTranslate(BaseTranslateMutation):
         language_code = graphene.Argument(
             LanguageCodeEnum, required=True, description="Translation language code."
         )
-        input = NameTranslationInput(required=True)
+        input = AttributeValueTranslationInput(required=True)
 
     class Meta:
         description = "Creates/Updates translations for attribute value."
         model = attribute_models.AttributeValue
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
 
 class SaleTranslate(BaseTranslateMutation):
@@ -196,6 +218,7 @@ class SaleTranslate(BaseTranslateMutation):
         model = discount_models.Sale
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -217,6 +240,7 @@ class VoucherTranslate(BaseTranslateMutation):
         model = discount_models.Voucher
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -231,13 +255,14 @@ class ShippingPriceTranslate(BaseTranslateMutation):
         language_code = graphene.Argument(
             LanguageCodeEnum, required=True, description="Translation language code."
         )
-        input = NameTranslationInput(required=True)
+        input = ShippingPriceTranslationInput(required=True)
 
     class Meta:
         description = "Creates/Updates translations for shipping method."
         model = shipping_models.ShippingMethod
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -259,6 +284,7 @@ class MenuItemTranslate(BaseTranslateMutation):
         model = menu_models.MenuItem
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, **data):
@@ -269,8 +295,7 @@ class MenuItemTranslate(BaseTranslateMutation):
 
 class PageTranslationInput(SeoTranslationInput):
     title = graphene.String()
-    content = graphene.String()
-    content_json = graphene.JSONString()
+    content = graphene.JSONString()
 
 
 class PageTranslate(BaseTranslateMutation):
@@ -286,6 +311,7 @@ class PageTranslate(BaseTranslateMutation):
         model = page_models.Page
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
 
 class ShopSettingsTranslationInput(graphene.InputObjectType):
@@ -307,9 +333,9 @@ class ShopSettingsTranslate(BaseMutation):
 
     class Meta:
         description = "Creates/Updates translations for Shop Settings."
-        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
         error_type_class = TranslationError
         error_type_field = "translation_errors"
+        permissions = (SitePermissions.MANAGE_TRANSLATIONS,)
 
     @classmethod
     def perform_mutation(cls, _root, info, language_code, **data):

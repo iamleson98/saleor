@@ -1,9 +1,11 @@
+import json
+
 from measurement.measures import Weight
 
 from .....attribute.models import Attribute, AttributeValue
 from .....attribute.utils import associate_attribute_values_to_instance
 from .....channel.models import Channel
-from .....product.models import Product, ProductVariant, VariantImage
+from .....product.models import Product, ProductVariant, VariantMedia
 from .....warehouse.models import Warehouse
 from ....utils import ProductExportFields
 from ....utils.products_data import get_products_data
@@ -18,13 +20,18 @@ from .utils import (
 
 def test_get_products_data(product, product_with_image, collection, image, channel_USD):
     # given
+    product.description = {
+        "blocks": [
+            {"data": {"text": "This is an example description."}, "type": "paragraph"}
+        ]
+    }
     product.weight = Weight(kg=5)
-    product.save()
+    product.save(update_fields=["description", "weight"])
 
     collection.products.add(product)
 
     variant = product.variants.first()
-    VariantImage.objects.create(variant=variant, image=product.images.first())
+    VariantMedia.objects.create(variant=variant, media=product.media.first())
 
     products = Product.objects.all()
     export_fields = set(
@@ -62,7 +69,7 @@ def test_get_products_data(product, product_with_image, collection, image, chann
         product_data = {
             "id": product.id,
             "name": product.name,
-            "description": product.description,
+            "description_as_str": json.dumps(product.description),
             "category__slug": product.category.slug,
             "product_type__name": product.product_type.name,
             "charge_taxes": product.charge_taxes,
@@ -76,10 +83,10 @@ def test_get_products_data(product, product_with_image, collection, image, chann
                 if product.weight
                 else ""
             ),
-            "images__image": (
+            "media__image": (
                 ""
-                if not product.images.all()
-                else "http://mirumee.com{}".format(product.images.first().image.url)
+                if not product.media.all()
+                else "http://mirumee.com{}".format(product.media.first().image.url)
             ),
         }
 
@@ -93,10 +100,10 @@ def test_get_products_data(product, product_with_image, collection, image, chann
         for variant in product.variants.all():
             data = {
                 "variants__sku": variant.sku,
-                "variants__images__image": (
+                "variants__media__image": (
                     ""
-                    if not variant.images.all()
-                    else "http://mirumee.com{}".format(variant.images.first().image.url)
+                    if not variant.media.all()
+                    else "http://mirumee.com{}".format(variant.media.first().image.url)
                 ),
                 "variant_weight": (
                     "{} g".foramt(int(variant.weight.value * 1000))
@@ -222,14 +229,16 @@ def test_get_products_data_for_product_without_channel(
 
 
 def test_get_products_data_for_specified_warehouses_channels_and_attributes(
-    product,
-    variant_with_many_stocks,
-    product_with_image,
-    product_with_variant_with_two_attributes,
     file_attribute,
+    page_list,
+    product,
     product_type_page_reference_attribute,
     product_type_product_reference_attribute,
-    page_list,
+    product_with_image,
+    product_with_variant_with_two_attributes,
+    rich_text_attribute,
+    color_attribute,
+    variant_with_many_stocks,
 ):
     # given
     product.variants.add(variant_with_many_stocks)
@@ -237,11 +246,13 @@ def test_get_products_data_for_specified_warehouses_channels_and_attributes(
         file_attribute,
         product_type_page_reference_attribute,
         product_type_product_reference_attribute,
+        rich_text_attribute,
     )
     product.product_type.product_attributes.add(
         file_attribute,
         product_type_page_reference_attribute,
         product_type_product_reference_attribute,
+        rich_text_attribute,
     )
 
     # add file attribute
@@ -250,6 +261,16 @@ def test_get_products_data_for_specified_warehouses_channels_and_attributes(
     )
     associate_attribute_values_to_instance(
         product, file_attribute, file_attribute.values.first()
+    )
+
+    # add rich text attribute
+    associate_attribute_values_to_instance(
+        variant_with_many_stocks,
+        rich_text_attribute,
+        rich_text_attribute.values.first(),
+    )
+    associate_attribute_values_to_instance(
+        product, rich_text_attribute, rich_text_attribute.values.first()
     )
 
     # add page reference attribute
@@ -294,6 +315,13 @@ def test_get_products_data_for_specified_warehouses_channels_and_attributes(
     associate_attribute_values_to_instance(
         product, product_type_product_reference_attribute, product_product_ref_value
     )
+
+    # create assigned product without values
+    associate_attribute_values_to_instance(
+        product, color_attribute, color_attribute.values.first()
+    )
+    assigned_product = product.attributes.get(assignment__attribute=color_attribute)
+    assigned_product.values.clear()
 
     products = Product.objects.all()
     export_fields = {"id", "variants__sku"}

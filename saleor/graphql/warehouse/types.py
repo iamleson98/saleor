@@ -3,11 +3,13 @@ from django.db.models import Sum
 from django.db.models.functions import Coalesce
 
 from ...core.permissions import OrderPermissions, ProductPermissions
+from ...core.tracing import traced_resolver
 from ...warehouse import models
 from ..account.enums import CountryCodeEnum
 from ..channel import ChannelContext
 from ..core.connection import CountableDjangoObjectType
 from ..decorators import one_of_permissions_required
+from ..meta.types import ObjectWithMetadata
 
 
 class WarehouseAddressInput(graphene.InputObjectType):
@@ -48,7 +50,7 @@ class Warehouse(CountableDjangoObjectType):
     class Meta:
         description = "Represents warehouse."
         model = models.Warehouse
-        interfaces = [graphene.relay.Node]
+        interfaces = [graphene.relay.Node, ObjectWithMetadata]
         only_fields = [
             "id",
             "name",
@@ -60,6 +62,7 @@ class Warehouse(CountableDjangoObjectType):
         ]
 
     @staticmethod
+    @traced_resolver
     def resolve_shipping_zones(root, *_args, **_kwargs):
         instances = root.shipping_zones.all()
         shipping_zones = [
@@ -122,6 +125,7 @@ class Allocation(CountableDjangoObjectType):
     @one_of_permissions_required(
         [ProductPermissions.MANAGE_PRODUCTS, OrderPermissions.MANAGE_ORDERS]
     )
+    @traced_resolver
     def resolve_warehouse(root, *_args):
         return root.stock.warehouse
 

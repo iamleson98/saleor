@@ -4,9 +4,9 @@ from graphene_django.filter import GlobalIDMultipleChoiceFilter
 
 from ...order.models import Order
 from ..channel.types import Channel
-from ..core.filters import ListObjectTypeFilter, ObjectTypeFilter
+from ..core.filters import ListObjectTypeFilter, MetadataFilterBase, ObjectTypeFilter
 from ..core.types.common import DateRangeInput
-from ..core.utils import from_global_id_strict_type
+from ..core.utils import from_global_id_or_error
 from ..payment.enums import PaymentChargeStatusEnum
 from ..utils import resolve_global_ids_to_primary_keys
 from ..utils.filters import filter_by_query_param, filter_range_field
@@ -21,7 +21,7 @@ def filter_payment_status(qs, _, value):
 
 def get_payment_id_from_query(value):
     try:
-        return from_global_id_strict_type(value, only_type="Payment", field="pk")
+        return from_global_id_or_error(value, only_type="Payment", field="pk")[1]
     except Exception:
         return None
 
@@ -70,8 +70,8 @@ def filter_created_range(qs, _, value):
 def filter_order_search(qs, _, value):
     order_fields = [
         "pk",
-        "discount_name",
-        "translated_discount_name",
+        "discounts__name",
+        "discounts__translated_name",
         "user_email",
         "user__first_name",
         "user__last_name",
@@ -92,7 +92,7 @@ def filter_channels(qs, _, values):
     return qs
 
 
-class DraftOrderFilter(django_filters.FilterSet):
+class DraftOrderFilter(MetadataFilterBase):
     customer = django_filters.CharFilter(method=filter_customer)
     created = ObjectTypeFilter(input_class=DateRangeInput, method=filter_created_range)
     search = django_filters.CharFilter(method=filter_order_search)

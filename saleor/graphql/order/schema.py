@@ -1,6 +1,7 @@
 import graphene
 
 from ...core.permissions import OrderPermissions
+from ...core.tracing import traced_resolver
 from ..core.enums import ReportingPeriod
 from ..core.fields import FilterInputConnectionField, PrefetchingConnectionField
 from ..core.scalars import UUID
@@ -10,18 +11,23 @@ from .bulk_mutations.draft_orders import DraftOrderBulkDelete, DraftOrderLinesBu
 from .bulk_mutations.orders import OrderBulkCancel
 from .enums import OrderStatusFilter
 from .filters import DraftOrderFilter, OrderFilter
+from .mutations.discount_order import (
+    OrderDiscountAdd,
+    OrderDiscountDelete,
+    OrderDiscountUpdate,
+    OrderLineDiscountRemove,
+    OrderLineDiscountUpdate,
+)
 from .mutations.draft_orders import (
     DraftOrderComplete,
     DraftOrderCreate,
     DraftOrderDelete,
-    DraftOrderLineDelete,
-    DraftOrderLinesCreate,
-    DraftOrderLineUpdate,
     DraftOrderUpdate,
 )
 from .mutations.fulfillments import (
     FulfillmentCancel,
     FulfillmentRefundProducts,
+    FulfillmentReturnProducts,
     FulfillmentUpdateTracking,
     OrderFulfill,
 )
@@ -30,6 +36,9 @@ from .mutations.orders import (
     OrderCancel,
     OrderCapture,
     OrderConfirm,
+    OrderLineDelete,
+    OrderLinesCreate,
+    OrderLineUpdate,
     OrderMarkAsPaid,
     OrderRefund,
     OrderUpdate,
@@ -123,6 +132,7 @@ class OrderQueries(graphene.ObjectType):
     )
 
     @permission_required(OrderPermissions.MANAGE_ORDERS)
+    @traced_resolver
     def resolve_homepage_events(self, *_args, **_kwargs):
         return resolve_homepage_events()
 
@@ -142,6 +152,7 @@ class OrderQueries(graphene.ObjectType):
     def resolve_orders_total(self, info, period, channel=None, **_kwargs):
         return resolve_orders_total(info, period, channel)
 
+    @traced_resolver
     def resolve_order_by_token(self, _info, token):
         return resolve_order_by_token(token)
 
@@ -152,9 +163,6 @@ class OrderMutations(graphene.ObjectType):
     draft_order_delete = DraftOrderDelete.Field()
     draft_order_bulk_delete = DraftOrderBulkDelete.Field()
     draft_order_lines_bulk_delete = DraftOrderLinesBulkDelete.Field()
-    draft_order_lines_create = DraftOrderLinesCreate.Field()
-    draft_order_line_delete = DraftOrderLineDelete.Field()
-    draft_order_line_update = DraftOrderLineUpdate.Field()
     draft_order_update = DraftOrderUpdate.Field()
 
     order_add_note = OrderAddNote.Field()
@@ -166,6 +174,18 @@ class OrderMutations(graphene.ObjectType):
     order_fulfillment_cancel = FulfillmentCancel.Field()
     order_fulfillment_update_tracking = FulfillmentUpdateTracking.Field()
     order_fulfillment_refund_products = FulfillmentRefundProducts.Field()
+    order_fulfillment_return_products = FulfillmentReturnProducts.Field()
+
+    order_lines_create = OrderLinesCreate.Field()
+    order_line_delete = OrderLineDelete.Field()
+    order_line_update = OrderLineUpdate.Field()
+
+    order_discount_add = OrderDiscountAdd.Field()
+    order_discount_update = OrderDiscountUpdate.Field()
+    order_discount_delete = OrderDiscountDelete.Field()
+
+    order_line_discount_update = OrderLineDiscountUpdate.Field()
+    order_line_discount_remove = OrderLineDiscountRemove.Field()
 
     order_mark_as_paid = OrderMarkAsPaid.Field()
     order_refund = OrderRefund.Field()

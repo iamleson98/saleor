@@ -3,6 +3,7 @@ from django.conf import settings
 
 from ...attribute import models as attribute_models
 from ...core.permissions import DiscountPermissions, ShippingPermissions
+from ...core.tracing import traced_resolver
 from ...discount import models as discount_models
 from ...menu import models as menu_models
 from ...page import models as page_models
@@ -11,10 +12,10 @@ from ...shipping import models as shipping_models
 from ...site import models as site_models
 from ..channel import ChannelContext
 from ..core.connection import CountableDjangoObjectType
+from ..core.enums import LanguageCodeEnum
 from ..core.types import LanguageDisplay
 from ..core.utils import str_to_enum
 from ..decorators import permission_required
-from .enums import LanguageCodeEnum
 from .fields import TranslationField
 
 BASIC_TRANSLATABLE_FIELDS = ["id", "name"]
@@ -22,7 +23,6 @@ EXTENDED_TRANSLATABLE_FIELDS = [
     "id",
     "name",
     "description",
-    "description_json",
     "seo_title",
     "seo_description",
 ]
@@ -37,6 +37,7 @@ class BaseTranslationType(CountableDjangoObjectType):
         abstract = True
 
     @staticmethod
+    @traced_resolver
     def resolve_language(root, *_args):
         try:
             language = next(
@@ -55,7 +56,7 @@ class AttributeValueTranslation(BaseTranslationType):
     class Meta:
         model = attribute_models.AttributeValueTranslation
         interfaces = [graphene.relay.Node]
-        only_fields = BASIC_TRANSLATABLE_FIELDS
+        only_fields = BASIC_TRANSLATABLE_FIELDS + ["rich_text"]
 
 
 class AttributeValueTranslatableContent(CountableDjangoObjectType):
@@ -130,13 +131,31 @@ class ProductVariantTranslatableContent(CountableDjangoObjectType):
 
 
 class ProductTranslation(BaseTranslationType):
+    description_json = graphene.JSONString(
+        description="Translated description of the product (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
+
     class Meta:
         model = product_models.ProductTranslation
         interfaces = [graphene.relay.Node]
         only_fields = EXTENDED_TRANSLATABLE_FIELDS
 
+    @staticmethod
+    def resolve_description_json(root: product_models.ProductTranslation, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class ProductTranslatableContent(CountableDjangoObjectType):
+    description_json = graphene.JSONString(
+        description="Description of the product (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
     translation = TranslationField(ProductTranslation, type_name="product")
     product = graphene.Field(
         "saleor.graphql.product.types.products.Product",
@@ -152,15 +171,38 @@ class ProductTranslatableContent(CountableDjangoObjectType):
     def resolve_product(root: product_models.Product, info):
         return ChannelContext(node=root, channel_slug=None)
 
+    @staticmethod
+    def resolve_description_json(root: product_models.Product, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class CollectionTranslation(BaseTranslationType):
+    description_json = graphene.JSONString(
+        description="Translated description of the product (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
+
     class Meta:
         model = product_models.CollectionTranslation
         interfaces = [graphene.relay.Node]
         only_fields = EXTENDED_TRANSLATABLE_FIELDS
 
+    @staticmethod
+    def resolve_description_json(root: product_models.CollectionTranslation, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class CollectionTranslatableContent(CountableDjangoObjectType):
+    description_json = graphene.JSONString(
+        description="Description of the collection (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
     translation = TranslationField(CollectionTranslation, type_name="collection")
     collection = graphene.Field(
         "saleor.graphql.product.types.products.Collection",
@@ -173,21 +215,45 @@ class CollectionTranslatableContent(CountableDjangoObjectType):
         only_fields = EXTENDED_TRANSLATABLE_FIELDS
 
     @staticmethod
+    @traced_resolver
     def resolve_collection(root: product_models.Collection, info):
         collection = product_models.Collection.objects.all().filter(pk=root.id).first()
         return (
             ChannelContext(node=collection, channel_slug=None) if collection else None
         )
 
+    @staticmethod
+    def resolve_description_json(root: product_models.Collection, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class CategoryTranslation(BaseTranslationType):
+    description_json = graphene.JSONString(
+        description="Translated description of the product (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
+
     class Meta:
         model = product_models.CategoryTranslation
         interfaces = [graphene.relay.Node]
         only_fields = EXTENDED_TRANSLATABLE_FIELDS
 
+    @staticmethod
+    def resolve_description_json(root: product_models.CategoryTranslation, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class CategoryTranslatableContent(CountableDjangoObjectType):
+    description_json = graphene.JSONString(
+        description="Description of the category (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `description` field instead."
+        ),
+    )
     translation = TranslationField(CategoryTranslation, type_name="category")
     category = graphene.Field(
         "saleor.graphql.product.types.products.Category",
@@ -203,22 +269,44 @@ class CategoryTranslatableContent(CountableDjangoObjectType):
     def resolve_category(root: product_models.Category, _info):
         return root
 
+    @staticmethod
+    def resolve_description_json(root: product_models.Category, _info):
+        description = root.description
+        return description if description is not None else {}
+
 
 class PageTranslation(BaseTranslationType):
+    content_json = graphene.JSONString(
+        description="Translated description of the page (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `content` field instead."
+        ),
+    )
+
     class Meta:
         model = page_models.PageTranslation
         interfaces = [graphene.relay.Node]
         only_fields = [
             "content",
-            "content_json",
             "id",
             "seo_description",
             "seo_title",
             "title",
         ]
 
+    @staticmethod
+    def resolve_content_json(root: page_models.PageTranslation, _info):
+        content = root.content
+        return content if content is not None else {}
+
 
 class PageTranslatableContent(CountableDjangoObjectType):
+    content_json = graphene.JSONString(
+        description="Content of the page (JSON).",
+        deprecation_reason=(
+            "Will be removed in Saleor 4.0. Use the `content` field instead."
+        ),
+    )
     translation = TranslationField(PageTranslation, type_name="page")
     page = graphene.Field(
         "saleor.graphql.page.types.Page",
@@ -233,7 +321,6 @@ class PageTranslatableContent(CountableDjangoObjectType):
         interfaces = [graphene.relay.Node]
         only_fields = [
             "content",
-            "content_json",
             "id",
             "seo_description",
             "seo_title",
@@ -241,12 +328,18 @@ class PageTranslatableContent(CountableDjangoObjectType):
         ]
 
     @staticmethod
+    @traced_resolver
     def resolve_page(root: page_models.Page, info):
         return (
             page_models.Page.objects.visible_to_user(info.context.user)
             .filter(pk=root.id)
             .first()
         )
+
+    @staticmethod
+    def resolve_content_json(root: page_models.Page, _info):
+        content = root.content
+        return content if content is not None else {}
 
 
 class VoucherTranslation(BaseTranslationType):
@@ -344,7 +437,7 @@ class ShippingMethodTranslation(BaseTranslationType):
     class Meta:
         model = shipping_models.ShippingMethodTranslation
         interfaces = [graphene.relay.Node]
-        only_fields = BASIC_TRANSLATABLE_FIELDS
+        only_fields = BASIC_TRANSLATABLE_FIELDS + ["description"]
 
 
 class ShippingMethodTranslatableContent(CountableDjangoObjectType):
@@ -362,7 +455,7 @@ class ShippingMethodTranslatableContent(CountableDjangoObjectType):
     class Meta:
         model = shipping_models.ShippingMethod
         interfaces = [graphene.relay.Node]
-        only_fields = BASIC_TRANSLATABLE_FIELDS
+        only_fields = BASIC_TRANSLATABLE_FIELDS + ["description"]
 
     @staticmethod
     @permission_required(ShippingPermissions.MANAGE_SHIPPING)

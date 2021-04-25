@@ -4,9 +4,11 @@ import graphene
 import pytest
 from django_countries import countries
 
+from .... import __version__
 from ....account.models import Address
 from ....core.error_codes import ShopErrorCode
 from ....core.permissions import get_permissions_codename
+from ....shipping import PostalCodeRuleInclusionType
 from ....shipping.models import ShippingMethod
 from ....site.models import Site
 from ...account.enums import CountryCodeEnum
@@ -21,6 +23,21 @@ COUNTRIES_QUERY = """
                 country
             }
         }
+    }
+"""
+
+LIMIT_INFO_QUERY = """
+    {
+      shop {
+        limits {
+          currentUsage {
+            channels
+          }
+          allowedUsage {
+            channels
+          }
+        }
+      }
     }
 """
 
@@ -565,28 +582,38 @@ def test_query_default_country(user_api_client, settings):
     assert data["country"] == "United States of America"
 
 
-def test_query_geolocalization(user_api_client):
-    query = """
-        query {
-            shop {
-                geolocalization {
-                    country {
-                        code
-                    }
-                }
+AVAILABLE_EXTERNAL_AUTHENTICATIONS_QUERY = """
+    query{
+        shop {
+            availableExternalAuthentications{
+                id
+                name
             }
         }
-    """
-    GERMAN_IP = "79.222.222.22"
-    response = user_api_client.post_graphql(query, HTTP_X_FORWARDED_FOR=GERMAN_IP)
-    content = get_graphql_content(response)
-    data = content["data"]["shop"]["geolocalization"]
-    assert data["country"]["code"] == "DE"
+    }
+"""
 
+
+@pytest.mark.parametrize(
+    "external_auths",
+    [
+        [{"id": "auth1", "name": "Auth-1"}],
+        [{"id": "auth1", "name": "Auth-1"}, {"id": "auth2", "name": "Auth-2"}],
+        [],
+    ],
+)
+def test_query_available_external_authentications(
+    external_auths, user_api_client, monkeypatch
+):
+    monkeypatch.setattr(
+        "saleor.plugins.manager.PluginsManager.list_external_authentications",
+        lambda self, active_only: external_auths,
+    )
+    query = AVAILABLE_EXTERNAL_AUTHENTICATIONS_QUERY
     response = user_api_client.post_graphql(query)
     content = get_graphql_content(response)
-    data = content["data"]["shop"]["geolocalization"]
-    assert data["country"] is None
+    data = content["data"]["shop"]["availableExternalAuthentications"]
+    assert data == external_auths
 
 
 AVAILABLE_PAYMENT_GATEWAYS_QUERY = """
@@ -668,12 +695,30 @@ def test_query_available_shipping_methods_no_address(
     # then
     content = get_graphql_content(response)
     data = content["data"]["shop"]["availableShippingMethods"]
+    assert len(data) > 0
     assert {ship_meth["id"] for ship_meth in data} == {
         graphene.Node.to_global_id("ShippingMethod", ship_meth.pk)
         for ship_meth in ShippingMethod.objects.filter(
-            channel_listings__channel__slug=channel_USD.slug
+            shipping_zone__channels__slug=channel_USD.slug,
+            channel_listings__channel__slug=channel_USD.slug,
         )
     }
+
+
+def test_query_available_shipping_methods_no_channel_shipping_zones(
+    staff_api_client, shipping_method, shipping_method_channel_PLN, channel_USD
+):
+    # given
+    query = AVAILABLE_SHIPPING_METHODS_QUERY
+    channel_USD.shipping_zones.clear()
+
+    # when
+    response = staff_api_client.post_graphql(query, {"channel": channel_USD.slug})
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["shop"]["availableShippingMethods"]
+    assert len(data) == 0
 
 
 def test_query_available_shipping_methods_for_given_address(
@@ -699,7 +744,7 @@ def test_query_available_shipping_methods_for_given_address(
     data = content["data"]["shop"]["availableShippingMethods"]
     assert len(data) == shipping_method_count - 1
     assert graphene.Node.to_global_id(
-        "ShippingMethod", shipping_zone_without_countries.pk
+        "ShippingMethod", shipping_zone_without_countries.shipping_methods.first().pk
     ) not in {ship_meth["id"] for ship_meth in data}
 
 
@@ -753,6 +798,54 @@ def test_query_available_shipping_methods_for_given_address_vatlayer_set(
     assert graphene.Node.to_global_id(
         "ShippingMethod", shipping_zone_without_countries.pk
     ) not in {ship_meth["id"] for ship_meth in data}
+
+
+def test_query_available_shipping_methods_for_excluded_postal_code(
+    staff_api_client, channel_USD, shipping_method
+):
+    # given
+    query = AVAILABLE_SHIPPING_METHODS_QUERY
+    variables = {
+        "channel": channel_USD.slug,
+        "address": {"country": CountryCodeEnum.PL.name, "postalCode": "53-601"},
+    }
+    shipping_method.postal_code_rules.create(
+        start="53-600", end="54-600", inclusion_type=PostalCodeRuleInclusionType.EXCLUDE
+    )
+
+    # when
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["shop"]["availableShippingMethods"]
+    assert graphene.Node.to_global_id("ShippingMethod", shipping_method.pk) not in {
+        ship_meth["id"] for ship_meth in data
+    }
+
+
+def test_query_available_shipping_methods_for_included_postal_code(
+    staff_api_client, channel_USD, shipping_method
+):
+    # given
+    query = AVAILABLE_SHIPPING_METHODS_QUERY
+    variables = {
+        "channel": channel_USD.slug,
+        "address": {"country": CountryCodeEnum.PL.name, "postalCode": "53-601"},
+    }
+    shipping_method.postal_code_rules.create(
+        start="53-600", end="54-600", inclusion_type=PostalCodeRuleInclusionType.INCLUDE
+    )
+
+    # when
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["shop"]["availableShippingMethods"]
+    assert graphene.Node.to_global_id("ShippingMethod", shipping_method.pk) in {
+        ship_meth["id"] for ship_meth in data
+    }
 
 
 MUTATION_SHOP_ADDRESS_UPDATE = """
@@ -1206,3 +1299,56 @@ def test_order_settings_query_as_staff(
 def test_order_settings_query_as_user(user_api_client, site_settings):
     response = user_api_client.post_graphql(ORDER_SETTINGS_QUERY)
     assert_no_permission(response)
+
+
+API_VERSION_QUERY = """
+    query {
+        shop {
+            version
+        }
+    }
+"""
+
+
+def test_version_query_as_anonymous_user(api_client):
+    response = api_client.post_graphql(API_VERSION_QUERY)
+    assert_no_permission(response)
+
+
+def test_version_query_as_customer(user_api_client):
+    response = user_api_client.post_graphql(API_VERSION_QUERY)
+    assert_no_permission(response)
+
+
+def test_version_query_as_app(app_api_client):
+    response = app_api_client.post_graphql(API_VERSION_QUERY)
+    content = get_graphql_content(response)
+    assert content["data"]["shop"]["version"] == __version__
+
+
+def test_version_query_as_staff_user(staff_api_client):
+    response = staff_api_client.post_graphql(API_VERSION_QUERY)
+    content = get_graphql_content(response)
+    assert content["data"]["shop"]["version"] == __version__
+
+
+def test_cannot_get_shop_limit_info_when_not_staff(user_api_client):
+    query = LIMIT_INFO_QUERY
+    response = user_api_client.post_graphql(query)
+    assert_no_permission(response)
+
+
+def test_get_shop_limit_info_returns_null_by_default(staff_api_client):
+    query = LIMIT_INFO_QUERY
+    response = staff_api_client.post_graphql(query)
+    content = get_graphql_content(response)
+    assert content == {
+        "data": {
+            "shop": {
+                "limits": {
+                    "currentUsage": {"channels": None},
+                    "allowedUsage": {"channels": None},
+                }
+            }
+        }
+    }

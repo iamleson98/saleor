@@ -7,6 +7,7 @@ from django.db.models import F, Sum
 from django.db.models.functions import Coalesce
 
 from ..account.models import Address
+from ..core.models import ModelWithMetadata
 from ..order.models import OrderLine
 from ..product.models import Product, ProductVariant
 from ..shipping.models import ShippingZone
@@ -24,7 +25,7 @@ class WarehouseQueryset(models.QuerySet):
         )
 
 
-class Warehouse(models.Model):
+class Warehouse(ModelWithMetadata):
     id = models.UUIDField(default=uuid.uuid4, primary_key=True)
     name = models.CharField(max_length=250)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
@@ -37,7 +38,7 @@ class Warehouse(models.Model):
 
     objects = WarehouseQueryset.as_manager()
 
-    class Meta:
+    class Meta(ModelWithMetadata.Meta):
         ordering = ("-slug",)
 
     def __str__(self):
@@ -61,27 +62,42 @@ class StockQuerySet(models.QuerySet):
             - Coalesce(Sum("allocations__quantity_allocated"), 0)
         )
 
-    def for_country(self, country_code: str):
+    def for_channel(self, channel_slug: str):
         query_warehouse = models.Subquery(
             Warehouse.objects.filter(
-                shipping_zones__countries__contains=country_code
+                shipping_zones__channels__slug=channel_slug
             ).values("pk")
         )
         return self.select_related("product_variant", "warehouse").filter(
             warehouse__in=query_warehouse
         )
 
+    def for_country_and_channel(self, country_code: str, channel_slug):
+        filter_lookup = {"shipping_zones__countries__contains": country_code}
+        if channel_slug is not None:
+            filter_lookup["shipping_zones__channels__slug"] = channel_slug
+        query_warehouse = models.Subquery(
+            Warehouse.objects.filter(**filter_lookup).values("pk")
+        )
+        return self.select_related("product_variant", "warehouse").filter(
+            warehouse__in=query_warehouse
+        )
+
     def get_variant_stocks_for_country(
-        self, country_code: str, product_variant: ProductVariant
+        self, country_code: str, channel_slug: str, product_variant: ProductVariant
     ):
         """Return the stock information about the a stock for a given country.
 
         Note it will raise a 'Stock.DoesNotExist' exception if no such stock is found.
         """
-        return self.for_country(country_code).filter(product_variant=product_variant)
+        return self.for_country_and_channel(country_code, channel_slug).filter(
+            product_variant=product_variant
+        )
 
-    def get_product_stocks_for_country(self, country_code: str, product: Product):
-        return self.for_country(country_code).filter(
+    def get_product_stocks_for_country_and_channel(
+        self, country_code: str, channel_slug: str, product: Product
+    ):
+        return self.for_country_and_channel(country_code, channel_slug).filter(
             product_variant__product_id=product.pk
         )
 

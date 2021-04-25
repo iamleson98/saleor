@@ -2,7 +2,8 @@ from typing import TYPE_CHECKING, Optional
 
 import graphene
 
-from ...plugins import manager, models
+from ...core.tracing import traced_resolver
+from ...plugins import models
 from ...plugins.base_plugin import ConfigurationTypeField
 from ..core.connection import CountableDjangoObjectType
 from .enums import ConfigurationTypeFieldEnum
@@ -59,10 +60,11 @@ class Plugin(CountableDjangoObjectType):
         return self.identifier
 
     @staticmethod
+    @traced_resolver
     def resolve_configuration(
-        root: models.PluginConfiguration, _info
+        root: models.PluginConfiguration, info
     ) -> Optional["PluginConfigurationType"]:
-        plugin = manager.get_plugins_manager().get_plugin(root.identifier)
+        plugin = info.context.plugins.get_plugin(root.identifier)
         if not plugin:
             return None
         configuration = plugin.configuration

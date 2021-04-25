@@ -13,12 +13,9 @@ from ....page.error_codes import PageErrorCode
 from ...attribute.utils import AttributeAssignmentMixin
 from ...core.mutations import ModelDeleteMutation, ModelMutation
 from ...core.types.common import PageError, SeoInput
-from ...core.utils import (
-    clean_seo_fields,
-    get_duplicates_ids,
-    validate_slug_and_generate_if_needed,
-)
+from ...core.utils import clean_seo_fields, validate_slug_and_generate_if_needed
 from ...product.mutations.products import AttributeValueInput
+from ...utils.validators import check_for_duplicates
 
 if TYPE_CHECKING:
     from ....attribute.models import Attribute
@@ -27,10 +24,7 @@ if TYPE_CHECKING:
 class PageInput(graphene.InputObjectType):
     slug = graphene.String(description="Page internal name.")
     title = graphene.String(description="Page title.")
-    content = graphene.String(
-        description=("Page content. May consist of ordinary text, HTML and images.")
-    )
-    content_json = graphene.JSONString(description="Page content in JSON format.")
+    content = graphene.JSONString(description="Page content in JSON format.")
     attributes = graphene.List(
         graphene.NonNull(AttributeValueInput), description="List of attributes."
     )
@@ -111,6 +105,11 @@ class PageCreate(ModelMutation):
         if attributes:
             AttributeAssignmentMixin.save(instance, attributes)
 
+    @classmethod
+    def save(cls, info, instance, cleaned_input):
+        super().save(info, instance, cleaned_input)
+        info.context.plugins.page_created(instance)
+
 
 class PageUpdate(PageCreate):
     class Arguments:
@@ -126,6 +125,11 @@ class PageUpdate(PageCreate):
         error_type_class = PageError
         error_type_field = "page_errors"
 
+    @classmethod
+    def save(cls, info, instance, cleaned_input):
+        super(PageCreate, cls).save(info, instance, cleaned_input)
+        info.context.plugins.page_updated(instance)
+
 
 class PageDelete(ModelDeleteMutation):
     class Arguments:
@@ -137,6 +141,13 @@ class PageDelete(ModelDeleteMutation):
         permissions = (PagePermissions.MANAGE_PAGES,)
         error_type_class = PageError
         error_type_field = "page_errors"
+
+    @classmethod
+    def perform_mutation(cls, _root, info, **data):
+        page = cls.get_instance(info, **data)
+        response = super().perform_mutation(_root, info, **data)
+        info.context.plugins.page_deleted(page)
+        return response
 
 
 class PageTypeCreateInput(graphene.InputObjectType):
@@ -239,31 +250,14 @@ class PageTypeUpdate(PageTypeMixin, ModelMutation):
         error_type_field = "page_errors"
 
     @classmethod
-    def check_for_duplicates(cls, errors: Dict[str, List[ValidationError]], data: dict):
-        """Check if any items are on both list for adding and removing.
-
-        Raise error if some of items are duplicated.
-        """
-        add_attributes = data.get("add_attributes")
-        remove_attributes = data.get("remove_attributes")
-
-        duplicated_ids = get_duplicates_ids(add_attributes, remove_attributes)
-        if duplicated_ids:
-            error_msg = (
-                "The same object cannot be in both list"
-                "for adding and removing items."
-            )
-            error = ValidationError(
-                error_msg,
-                code=PageErrorCode.DUPLICATED_INPUT_ITEM.value,
-                params={"attributes": duplicated_ids},
-            )
-            errors["attributes"].append(error)
-
-    @classmethod
     def clean_input(cls, info, instance, data):
         errors = defaultdict(list)
-        cls.check_for_duplicates(errors, data)
+        error = check_for_duplicates(
+            data, "add_attributes", "remove_attributes", "attributes"
+        )
+        if error:
+            error.code = PageErrorCode.DUPLICATED_INPUT_ITEM.value
+            errors["attributes"].append(error)
 
         cleaned_input = super().clean_input(info, instance, data)
         try:

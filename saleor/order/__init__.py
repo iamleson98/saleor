@@ -1,3 +1,11 @@
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from ..product.models import ProductVariant
+    from .models import FulfillmentLine, OrderLine
+
+
 class OrderStatus:
     DRAFT = "draft"  # fully editable, not finalized order created by staff users
     UNCONFIRMED = (
@@ -8,6 +16,11 @@ class OrderStatus:
         "partially fulfilled"  # order with some items marked as fulfilled
     )
     FULFILLED = "fulfilled"  # order with all items marked as fulfilled
+
+    PARTIALLY_RETURNED = (
+        "partially_returned"  # order with some items marked as returned
+    )
+    RETURNED = "returned"  # order with all items marked as returned
     CANCELED = "canceled"  # permanently canceled order
 
     CHOICES = [
@@ -15,6 +28,8 @@ class OrderStatus:
         (UNCONFIRMED, "Unconfirmed"),
         (UNFULFILLED, "Unfulfilled"),
         (PARTIALLY_FULFILLED, "Partially fulfilled"),
+        (PARTIALLY_RETURNED, "Partially returned"),
+        (RETURNED, "Returned"),
         (FULFILLED, "Fulfilled"),
         (CANCELED, "Canceled"),
     ]
@@ -23,11 +38,19 @@ class OrderStatus:
 class FulfillmentStatus:
     FULFILLED = "fulfilled"  # group of products in an order marked as fulfilled
     REFUNDED = "refunded"  # group of refunded products
+    RETURNED = "returned"  # group of returned products
+    REFUNDED_AND_RETURNED = (
+        "refunded_and_returned"  # group of returned and replaced products
+    )
+    REPLACED = "replaced"  # group of replaced products
     CANCELED = "canceled"  # fulfilled group of products in an order marked as canceled
 
     CHOICES = [
         (FULFILLED, "Fulfilled"),
         (REFUNDED, "Refunded"),
+        (RETURNED, "Returned"),
+        (REPLACED, "Replaced"),
+        (REFUNDED_AND_RETURNED, "Refunded and returned"),
         (CANCELED, "Canceled"),
     ]
 
@@ -37,8 +60,10 @@ class OrderEvents:
 
     CONFIRMED = "confirmed"
     DRAFT_CREATED = "draft_created"
-    DRAFT_ADDED_PRODUCTS = "draft_added_products"
-    DRAFT_REMOVED_PRODUCTS = "draft_removed_products"
+    DRAFT_CREATED_FROM_REPLACE = "draft_created_from_replace"
+
+    ADDED_PRODUCTS = "added_products"
+    REMOVED_PRODUCTS = "removed_products"
 
     PLACED = "placed"
     PLACED_FROM_DRAFT = "placed_from_draft"
@@ -48,6 +73,14 @@ class OrderEvents:
 
     ORDER_MARKED_AS_PAID = "order_marked_as_paid"
     ORDER_FULLY_PAID = "order_fully_paid"
+    ORDER_REPLACEMENT_CREATED = "order_replacement_created"
+
+    ORDER_DISCOUNT_ADDED = "order_discount_added"
+    ORDER_DISCOUNT_AUTOMATICALLY_UPDATED = "order_discount_automatically_updated"
+    ORDER_DISCOUNT_UPDATED = "order_discount_updated"
+    ORDER_DISCOUNT_DELETED = "order_discount_deleted"
+    ORDER_LINE_DISCOUNT_UPDATED = "order_line_discount_updated"
+    ORDER_LINE_DISCOUNT_REMOVED = "order_line_discount_removed"
 
     UPDATED_ADDRESS = "updated_address"
 
@@ -69,6 +102,8 @@ class OrderEvents:
     FULFILLMENT_RESTOCKED_ITEMS = "fulfillment_restocked_items"
     FULFILLMENT_FULFILLED_ITEMS = "fulfillment_fulfilled_items"
     FULFILLMENT_REFUNDED = "fulfillment_refunded"
+    FULFILLMENT_RETURNED = "fulfillment_returned"
+    FULFILLMENT_REPLACED = "fulfillment_replaced"
     TRACKING_UPDATED = "tracking_updated"
     NOTE_ADDED = "note_added"
 
@@ -77,14 +112,25 @@ class OrderEvents:
 
     CHOICES = [
         (DRAFT_CREATED, "The draft order was created"),
-        (DRAFT_ADDED_PRODUCTS, "Some products were added to the draft order"),
-        (DRAFT_REMOVED_PRODUCTS, "Some products were removed from the draft order"),
+        (DRAFT_CREATED_FROM_REPLACE, "The draft order with replace lines was created"),
+        (ADDED_PRODUCTS, "Some products were added to the order"),
+        (REMOVED_PRODUCTS, "Some products were removed from the order"),
         (PLACED, "The order was placed"),
         (PLACED_FROM_DRAFT, "The draft order was placed"),
         (OVERSOLD_ITEMS, "The draft order was placed with oversold items"),
         (CANCELED, "The order was canceled"),
         (ORDER_MARKED_AS_PAID, "The order was manually marked as fully paid"),
         (ORDER_FULLY_PAID, "The order was fully paid"),
+        (ORDER_REPLACEMENT_CREATED, "The draft order was created based on this order."),
+        (ORDER_DISCOUNT_ADDED, "New order discount applied to this order."),
+        (
+            ORDER_DISCOUNT_AUTOMATICALLY_UPDATED,
+            "Order discount was automatically updated after the changes in order.",
+        ),
+        (ORDER_DISCOUNT_UPDATED, "Order discount was updated for this order."),
+        (ORDER_DISCOUNT_DELETED, "Order discount was deleted for this order."),
+        (ORDER_LINE_DISCOUNT_UPDATED, "Order line was discounted."),
+        (ORDER_LINE_DISCOUNT_REMOVED, "The discount for order line was removed."),
         (UPDATED_ADDRESS, "The address from the placed order was updated"),
         (EMAIL_SENT, "The email was sent"),
         (CONFIRMED, "Order was confirmed"),
@@ -102,6 +148,8 @@ class OrderEvents:
         (FULFILLMENT_RESTOCKED_ITEMS, "The items of the fulfillment were restocked"),
         (FULFILLMENT_FULFILLED_ITEMS, "Some items were fulfilled"),
         (FULFILLMENT_REFUNDED, "Some items were refunded"),
+        (FULFILLMENT_RETURNED, "Some items were returned"),
+        (FULFILLMENT_REPLACED, "Some items were replaced"),
         (TRACKING_UPDATED, "The fulfillment's tracking code was updated"),
         (NOTE_ADDED, "A note was added to the order"),
         (OTHER, "An unknown order event containing a message"),
@@ -132,3 +180,19 @@ class OrderEventsEmails:
         (FULFILLMENT, "The fulfillment confirmation email was sent"),
         (DIGITAL_LINKS, "The email containing the digital links was sent"),
     ]
+
+
+@dataclass
+class OrderLineData:
+    line: "OrderLine"
+    quantity: int
+    variant: Optional["ProductVariant"] = None
+    replace: bool = False
+    warehouse_pk: Optional[str] = None
+
+
+@dataclass
+class FulfillmentLineData:
+    line: "FulfillmentLine"
+    quantity: int
+    replace: bool = False

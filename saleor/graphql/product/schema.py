@@ -1,4 +1,7 @@
 import graphene
+from graphql.error import GraphQLError
+
+from saleor.core.tracing import traced_resolver
 
 from ...account.utils import requestor_is_staff_member_or_app
 from ...core.permissions import ProductPermissions
@@ -10,6 +13,7 @@ from ..core.fields import (
     FilterInputConnectionField,
     PrefetchingConnectionField,
 )
+from ..core.utils import from_global_id_or_error
 from ..core.validators import validate_one_of_args_is_in_query
 from ..decorators import permission_required
 from ..translations.mutations import (
@@ -23,7 +27,7 @@ from .bulk_mutations.products import (
     CategoryBulkDelete,
     CollectionBulkDelete,
     ProductBulkDelete,
-    ProductImageBulkDelete,
+    ProductMediaBulkDelete,
     ProductTypeBulkDelete,
     ProductVariantBulkCreate,
     ProductVariantBulkDelete,
@@ -69,10 +73,10 @@ from .mutations.products import (
     CollectionUpdate,
     ProductCreate,
     ProductDelete,
-    ProductImageCreate,
-    ProductImageDelete,
-    ProductImageReorder,
-    ProductImageUpdate,
+    ProductMediaCreate,
+    ProductMediaDelete,
+    ProductMediaReorder,
+    ProductMediaUpdate,
     ProductTypeCreate,
     ProductTypeDelete,
     ProductTypeUpdate,
@@ -82,8 +86,8 @@ from .mutations.products import (
     ProductVariantReorder,
     ProductVariantSetDefault,
     ProductVariantUpdate,
-    VariantImageAssign,
-    VariantImageUnassign,
+    VariantMediaAssign,
+    VariantMediaUnassign,
 )
 from .resolvers import (
     resolve_categories,
@@ -105,6 +109,7 @@ from .sorters import (
     CategorySortingInput,
     CollectionSortingInput,
     ProductOrder,
+    ProductOrderField,
     ProductTypeSortingInput,
 )
 from .types import (
@@ -250,6 +255,7 @@ class ProductQueries(graphene.ObjectType):
     def resolve_categories(self, info, level=None, **kwargs):
         return resolve_categories(info, level=level, **kwargs)
 
+    @traced_resolver
     def resolve_category(self, info, id=None, slug=None, **kwargs):
         validate_one_of_args_is_in_query("id", id, "slug", slug)
         if id:
@@ -257,6 +263,7 @@ class ProductQueries(graphene.ObjectType):
         if slug:
             return resolve_category_by_slug(slug=slug)
 
+    @traced_resolver
     def resolve_collection(self, info, id=None, slug=None, channel=None, **_kwargs):
         validate_one_of_args_is_in_query("id", id, "slug", slug)
         requestor = get_user_or_app_from_context(info.context)
@@ -265,7 +272,7 @@ class ProductQueries(graphene.ObjectType):
         if channel is None and not is_staff:
             channel = get_default_channel_slug_or_graphql_error()
         if id:
-            _, id = graphene.Node.from_global_id(id)
+            _, id = from_global_id_or_error(id)
             collection = resolve_collection_by_id(info, id, channel, requestor)
         else:
             collection = resolve_collection_by_slug(
@@ -292,6 +299,7 @@ class ProductQueries(graphene.ObjectType):
     def resolve_digital_contents(self, info, **_kwargs):
         return resolve_digital_contents(info)
 
+    @traced_resolver
     def resolve_product(self, info, id=None, slug=None, channel=None, **_kwargs):
         validate_one_of_args_is_in_query("id", id, "slug", slug)
         requestor = get_user_or_app_from_context(info.context)
@@ -300,7 +308,7 @@ class ProductQueries(graphene.ObjectType):
         if channel is None and not is_staff:
             channel = get_default_channel_slug_or_graphql_error()
         if id:
-            _, id = graphene.Node.from_global_id(id)
+            _type, id = from_global_id_or_error(id, only_type="Product")
             product = resolve_product_by_id(
                 info, id, channel_slug=channel, requestor=requestor
             )
@@ -310,7 +318,19 @@ class ProductQueries(graphene.ObjectType):
             )
         return ChannelContext(node=product, channel_slug=channel) if product else None
 
+    @traced_resolver
     def resolve_products(self, info, channel=None, **kwargs):
+        # sort by RANK can be used only with search filter
+        if "sort_by" in kwargs and ProductOrderField.RANK == kwargs["sort_by"].get(
+            "field"
+        ):
+            if (
+                "filter" not in kwargs
+                or kwargs["filter"].get("search") is None
+                or not kwargs["filter"]["search"].strip()
+            ):
+                raise GraphQLError("Sorting by Rank is available only with searching.")
+
         requestor = get_user_or_app_from_context(info.context)
         if channel is None and not requestor_is_staff_member_or_app(requestor):
             channel = get_default_channel_slug_or_graphql_error()
@@ -322,6 +342,7 @@ class ProductQueries(graphene.ObjectType):
     def resolve_product_types(self, info, **kwargs):
         return resolve_product_types(info, **kwargs)
 
+    @traced_resolver
     def resolve_product_variant(
         self,
         info,
@@ -335,9 +356,13 @@ class ProductQueries(graphene.ObjectType):
         if channel is None and not is_staff:
             channel = get_default_channel_slug_or_graphql_error()
         if id:
-            _, id = graphene.Node.from_global_id(id)
+            _, id = from_global_id_or_error(id)
             variant = resolve_variant_by_id(
-                info, id, channel_slug=channel, requestor=requestor
+                info,
+                id,
+                channel_slug=channel,
+                requestor=requestor,
+                requestor_has_access_to_all=is_staff,
             )
         else:
             variant = resolve_product_variant_by_sku(
@@ -363,6 +388,7 @@ class ProductQueries(graphene.ObjectType):
         )
 
     @permission_required(ProductPermissions.MANAGE_PRODUCTS)
+    @traced_resolver
     def resolve_report_product_sales(self, *_args, period, channel, **_kwargs):
         return resolve_report_product_sales(period, channel_slug=channel)
 
@@ -395,12 +421,12 @@ class ProductMutations(graphene.ObjectType):
 
     product_channel_listing_update = ProductChannelListingUpdate.Field()
 
-    product_image_create = ProductImageCreate.Field()
+    product_media_create = ProductMediaCreate.Field()
     product_variant_reorder = ProductVariantReorder.Field()
-    product_image_delete = ProductImageDelete.Field()
-    product_image_bulk_delete = ProductImageBulkDelete.Field()
-    product_image_reorder = ProductImageReorder.Field()
-    product_image_update = ProductImageUpdate.Field()
+    product_media_delete = ProductMediaDelete.Field()
+    product_media_bulk_delete = ProductMediaBulkDelete.Field()
+    product_media_reorder = ProductMediaReorder.Field()
+    product_media_update = ProductMediaUpdate.Field()
 
     product_type_create = ProductTypeCreate.Field()
     product_type_delete = ProductTypeDelete.Field()
@@ -430,5 +456,5 @@ class ProductMutations(graphene.ObjectType):
         ProductVariantReorderAttributeValues.Field()
     )
 
-    variant_image_assign = VariantImageAssign.Field()
-    variant_image_unassign = VariantImageUnassign.Field()
+    variant_media_assign = VariantMediaAssign.Field()
+    variant_media_unassign = VariantMediaUnassign.Field()

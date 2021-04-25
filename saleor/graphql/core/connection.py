@@ -32,7 +32,7 @@ def get_field_value(instance: DjangoModel, field_name: str):
     field_path = field_name.split("__")
     attr = instance
     for elem in field_path:
-        attr = getattr(attr, elem)
+        attr = getattr(attr, elem, None)
 
     if callable(attr):
         return "%s" % attr()
@@ -158,6 +158,10 @@ def _get_edges_for_connection(edge_type, qs, args, sorting_fields):
     last = args.get("last")
     cursor = after or before
     requested_count = first or last
+
+    # If we don't receive `first` and `last` we shouldn't build `edges` and `page_info`
+    if not first and not last:
+        return [], {}
 
     if last:
         start_slice, end_slice = 1, None

@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 import graphene
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -7,6 +9,9 @@ from ....core.permissions import ShippingPermissions
 from ....product import models as product_models
 from ....shipping import models
 from ....shipping.error_codes import ShippingErrorCode
+from ....shipping.tasks import (
+    drop_invalid_shipping_methods_relations_for_given_channels,
+)
 from ....shipping.utils import (
     default_shipping_zone_exists,
     get_countries_without_shipping_zone,
@@ -15,15 +20,23 @@ from ...channel.types import ChannelContext
 from ...core.mutations import BaseMutation, ModelDeleteMutation, ModelMutation
 from ...core.scalars import WeightScalar
 from ...core.types.common import ShippingError
-from ...core.utils import get_duplicates_ids
 from ...product import types as product_types
 from ...utils import resolve_global_ids_to_primary_keys
-from ..enums import ShippingMethodTypeEnum
-from ..types import ShippingMethod, ShippingMethodZipCodeRule, ShippingZone
+from ...utils.validators import check_for_duplicates
+from ..enums import PostalCodeRuleInclusionTypeEnum, ShippingMethodTypeEnum
+from ..types import ShippingMethod, ShippingMethodPostalCodeRule, ShippingZone
+
+
+class ShippingPostalCodeRulesCreateInputRange(graphene.InputObjectType):
+    start = graphene.String(
+        required=True, description="Start range of the postal code."
+    )
+    end = graphene.String(required=False, description="End range of the postal code.")
 
 
 class ShippingPriceInput(graphene.InputObjectType):
     name = graphene.String(description="Name of the shipping method.")
+    description = graphene.JSONString(description="Shipping method description (JSON).")
     minimum_order_weight = WeightScalar(
         description="Minimum order weight to use this shipping method."
     )
@@ -39,6 +52,17 @@ class ShippingPriceInput(graphene.InputObjectType):
     type = ShippingMethodTypeEnum(description="Shipping type: price or weight based.")
     shipping_zone = graphene.ID(
         description="Shipping zone this method belongs to.", name="shippingZone"
+    )
+    add_postal_code_rules = graphene.List(
+        graphene.NonNull(ShippingPostalCodeRulesCreateInputRange),
+        description="Postal code rules to add.",
+    )
+    delete_postal_code_rules = graphene.List(
+        graphene.NonNull(graphene.ID),
+        description="Postal code rules to delete.",
+    )
+    inclusion_type = PostalCodeRuleInclusionTypeEnum(
+        description="Inclusion type for currently assigned postal code rules.",
     )
 
 
@@ -60,6 +84,10 @@ class ShippingZoneCreateInput(graphene.InputObjectType):
         graphene.ID,
         description="List of warehouses to assign to a shipping zone",
     )
+    add_channels = graphene.List(
+        graphene.NonNull(graphene.ID),
+        description="List of channels to assign to the shipping zone.",
+    )
 
 
 class ShippingZoneUpdateInput(ShippingZoneCreateInput):
@@ -67,32 +95,49 @@ class ShippingZoneUpdateInput(ShippingZoneCreateInput):
         graphene.ID,
         description="List of warehouses to unassign from a shipping zone",
     )
+    remove_channels = graphene.List(
+        graphene.NonNull(graphene.ID),
+        description="List of channels to unassign from the shipping zone.",
+    )
 
 
 class ShippingZoneMixin:
     @classmethod
     def clean_input(cls, info, instance, data, input_cls=None):
-        duplicates_ids = get_duplicates_ids(
-            data.get("add_warehouses"), data.get("remove_warehouses")
+        errors = defaultdict(list)
+        cls.check_duplicates(
+            errors, data, "add_warehouses", "remove_warehouses", "warehouses"
         )
-        if duplicates_ids:
-            error_msg = (
-                "The same object cannot be in both lists "
-                "for adding and removing items."
-            )
-            raise ValidationError(
-                {
-                    "removeWarehouses": ValidationError(
-                        error_msg,
-                        code=ShippingErrorCode.DUPLICATED_INPUT_ITEM.value,
-                        params={"warehouses": list(duplicates_ids)},
-                    )
-                }
-            )
+        cls.check_duplicates(
+            errors, data, "add_channels", "remove_channels", "channels"
+        )
+
+        if errors:
+            raise ValidationError(errors)
 
         cleaned_input = super().clean_input(info, instance, data)
         cleaned_input = cls.clean_default(instance, cleaned_input)
         return cleaned_input
+
+    @classmethod
+    def check_duplicates(
+        cls,
+        errors: dict,
+        input_data: dict,
+        add_field: str,
+        remove_field: str,
+        error_class_field: str,
+    ):
+        """Check if any items are on both input field.
+
+        Raise error if some of items are duplicated.
+        """
+        error = check_for_duplicates(
+            input_data, add_field, remove_field, error_class_field
+        )
+        if error:
+            error.code = ShippingErrorCode.DUPLICATED_INPUT_ITEM.value
+            errors[error_class_field].append(error)
 
     @classmethod
     def clean_default(cls, instance, data):
@@ -126,6 +171,27 @@ class ShippingZoneMixin:
         remove_warehouses = cleaned_data.get("remove_warehouses")
         if remove_warehouses:
             instance.warehouses.remove(*remove_warehouses)
+
+        add_channels = cleaned_data.get("add_channels")
+        if add_channels:
+            instance.channels.add(*add_channels)
+
+        remove_channels = cleaned_data.get("remove_channels")
+        if remove_channels:
+            instance.channels.remove(*remove_channels)
+            shipping_channel_listings = (
+                models.ShippingMethodChannelListing.objects.filter(
+                    shipping_method__shipping_zone=instance, channel__in=remove_channels
+                )
+            )
+            shipping_method_ids = list(
+                shipping_channel_listings.values_list("shipping_method_id", flat=True)
+            )
+            shipping_channel_listings.delete()
+            channel_ids = [channel.id for channel in remove_channels]
+            drop_invalid_shipping_methods_relations_for_given_channels.delay(
+                shipping_method_ids, channel_ids
+            )
 
 
 class ShippingZoneCreate(ShippingZoneMixin, ModelMutation):
@@ -171,101 +237,6 @@ class ShippingZoneUpdate(ShippingZoneMixin, ModelMutation):
         return response
 
 
-class ShippingZipCodeRulesCreateInputRange(graphene.InputObjectType):
-    start = graphene.String(required=True, description="Start range of the zip code.")
-    end = graphene.String(required=False, description="End range of the zip code.")
-
-
-class ShippingZipCodeRulesCreateInput(graphene.InputObjectType):
-    zip_code_rules = graphene.List(
-        ShippingZipCodeRulesCreateInputRange,
-        required=True,
-        description="Zip code rules for shipping method.",
-    )
-
-
-class ShippingZipCodeRulesCreate(BaseMutation):
-    zip_code_rules = graphene.List(
-        ShippingMethodZipCodeRule,
-        description="A shipping method zip code range.",
-    )
-    shipping_method = graphene.Field(
-        ShippingMethod, description="Related shipping method."
-    )
-
-    class Arguments:
-        shipping_method_id = graphene.ID(
-            required=True, description="ID of a shipping method to assign."
-        )
-        input = ShippingZipCodeRulesCreateInput(
-            description="Fields required to create a shipping zip codes.", required=True
-        )
-
-    class Meta:
-        description = "Create a new zip code exclusion range for shipping method."
-        permissions = (ShippingPermissions.MANAGE_SHIPPING,)
-        error_type_class = ShippingError
-        error_type_field = "shipping_errors"
-
-    @classmethod
-    def perform_mutation(cls, root, info, **data):
-        shipping_method = cls.get_node_or_error(
-            info, data["shipping_method_id"], only_type=ShippingMethod
-        )
-        instances = []
-        with transaction.atomic():
-            for zip_range in data["input"]["zip_code_rules"]:
-                try:
-                    start = zip_range["start"]
-                    end = zip_range["end"]
-                    instance = models.ShippingMethodZipCodeRule.objects.create(
-                        shipping_method=shipping_method,
-                        start=start,
-                        end=end,
-                    )
-                except IntegrityError:
-                    raise ValidationError(
-                        {
-                            "zipCodeRules": ValidationError(
-                                f"Entry start: {start}, end: {end} already exists.",
-                                code=ShippingErrorCode.ALREADY_EXISTS.value,
-                            )
-                        }
-                    )
-                instances.append(instance)
-        return ShippingZipCodeRulesCreate(
-            zip_code_rules=instances,
-            shipping_method=ChannelContext(node=shipping_method, channel_slug=None),
-        )
-
-
-class ShippingZipCodeRulesDelete(ModelDeleteMutation):
-    shipping_method = graphene.Field(
-        ShippingMethod, description="Shipping method of deleted zip code rule."
-    )
-
-    class Arguments:
-        id = graphene.ID(
-            required=True, description="ID of a shipping method zip code to delete."
-        )
-
-    class Meta:
-        description = "Deletes a shipping method zip code."
-        model = models.ShippingMethodZipCodeRule
-        permissions = (ShippingPermissions.MANAGE_SHIPPING,)
-        error_type_class = ShippingError
-        error_type_field = "shipping_errors"
-
-    @classmethod
-    def perform_mutation(cls, _root, info, **data):
-        instance = cls.get_instance(info, **data)
-        shipping_method = instance.shipping_method
-        super().perform_mutation(_root, info, **data)
-        return ShippingZipCodeRulesDelete(
-            shipping_method=ChannelContext(node=shipping_method, channel_slug=None)
-        )
-
-
 class ShippingZoneDelete(ModelDeleteMutation):
     class Arguments:
         id = graphene.ID(required=True, description="ID of a shipping zone to delete.")
@@ -298,6 +269,24 @@ class ShippingPriceMixin:
             cls.clean_delivery_time(instance, cleaned_input, errors)
         if errors:
             raise ValidationError(errors)
+
+        if cleaned_input.get("delete_postal_code_rules"):
+            _, postal_code_rules_db_ids = resolve_global_ids_to_primary_keys(
+                data["delete_postal_code_rules"], ShippingMethodPostalCodeRule
+            )
+            cleaned_input["delete_postal_code_rules"] = postal_code_rules_db_ids
+        if cleaned_input.get("add_postal_code_rules") and not cleaned_input.get(
+            "inclusion_type"
+        ):
+            raise ValidationError(
+                {
+                    "inclusion_type": ValidationError(
+                        "This field is required.",
+                        code=ShippingErrorCode.REQUIRED,
+                    )
+                }
+            )
+
         return cleaned_input
 
     @classmethod
@@ -390,6 +379,34 @@ class ShippingPriceMixin:
             errors[field] = ValidationError(
                 error_msg, code=ShippingErrorCode.INVALID.value
             )
+
+    @classmethod
+    @transaction.atomic
+    def save(cls, info, instance, cleaned_input):
+        super().save(info, instance, cleaned_input)
+
+        delete_postal_code_rules = cleaned_input.get("delete_postal_code_rules")
+        if delete_postal_code_rules:
+            instance.postal_code_rules.filter(id__in=delete_postal_code_rules).delete()
+
+        if cleaned_input.get("add_postal_code_rules"):
+            inclusion_type = cleaned_input["inclusion_type"]
+            for postal_code_rule in cleaned_input["add_postal_code_rules"]:
+                start = postal_code_rule["start"]
+                end = postal_code_rule.get("end")
+                try:
+                    instance.postal_code_rules.create(
+                        start=start, end=end, inclusion_type=inclusion_type
+                    )
+                except IntegrityError:
+                    raise ValidationError(
+                        {
+                            "addPostalCodeRules": ValidationError(
+                                f"Entry start: {start}, end: {end} already exists.",
+                                code=ShippingErrorCode.ALREADY_EXISTS.value,
+                            )
+                        }
+                    )
 
 
 class ShippingPriceCreate(ShippingPriceMixin, ModelMutation):

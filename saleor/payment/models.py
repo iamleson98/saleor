@@ -10,8 +10,7 @@ from prices import Money
 
 from ..checkout.models import Checkout
 from ..core.taxes import zero_money
-from ..order.models import Order
-from . import ChargeStatus, CustomPaymentChoices, TransactionError, TransactionKind
+from . import ChargeStatus, CustomPaymentChoices, TransactionKind
 
 
 class Payment(models.Model):
@@ -56,7 +55,7 @@ class Payment(models.Model):
         Checkout, null=True, related_name="payments", on_delete=models.SET_NULL
     )
     order = models.ForeignKey(
-        Order, null=True, related_name="payments", on_delete=models.PROTECT
+        "order.Order", null=True, related_name="payments", on_delete=models.PROTECT
     )
 
     billing_email = models.EmailField(blank=True)
@@ -177,14 +176,13 @@ class Payment(models.Model):
             ChargeStatus.FULLY_CHARGED,
             ChargeStatus.PARTIALLY_REFUNDED,
         )
-        return (
-            self.is_active
-            and self.charge_status in can_refund_charge_status
-            and self.gateway != CustomPaymentChoices.MANUAL
-        )
+        return self.is_active and self.charge_status in can_refund_charge_status
 
     def can_confirm(self):
         return self.is_active and self.not_charged
+
+    def is_manual(self):
+        return self.gateway == CustomPaymentChoices.MANUAL
 
 
 class Transaction(models.Model):
@@ -212,7 +210,6 @@ class Transaction(models.Model):
         default=Decimal("0.0"),
     )
     error = models.CharField(
-        choices=[(tag, tag.value) for tag in TransactionError],
         max_length=256,
         null=True,
     )

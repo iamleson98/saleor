@@ -5,7 +5,8 @@ import pytest
 from django.utils import timezone
 from prices import Money
 
-from ...checkout.utils import fetch_checkout_lines, get_voucher_discount_for_checkout
+from ...checkout.fetch import fetch_checkout_info, fetch_checkout_lines
+from ...checkout.utils import get_voucher_discount_for_checkout
 from ...plugins.manager import get_plugins_manager
 from ...product.models import Product, ProductVariant, ProductVariantChannelListing
 from .. import DiscountInfo, DiscountValueType, VoucherType
@@ -213,7 +214,7 @@ def test_specific_products_voucher_checkout_discount(
     discounts = []
     monkeypatch.setattr(
         "saleor.checkout.utils.get_prices_of_discounted_specific_product",
-        lambda manager, checkout, lines, voucher, channel, discounts: (
+        lambda manager, checkout_info, lines, voucher, channel: (
             Money(price, "USD") for price in prices
         ),
     )
@@ -229,10 +230,12 @@ def test_specific_products_voucher_checkout_discount(
         discount=Money(discount_value, channel_USD.currency_code),
     )
     checkout = checkout_with_item
+    manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, discounts, manager)
     manager = get_plugins_manager()
     discount = get_voucher_discount_for_checkout(
-        manager, voucher, checkout, lines, checkout.shipping_address, discounts
+        manager, voucher, checkout_info, lines, checkout.shipping_address, discounts
     )
     assert discount == Money(expected_value, "USD")
 
@@ -241,8 +244,7 @@ def test_sale_applies_to_correct_products(product_type, category, channel_USD):
     product = Product.objects.create(
         name="Test Product",
         slug="test-product",
-        description="",
-        pk=111,
+        description={},
         product_type=product_type,
         category=category,
     )
@@ -256,11 +258,11 @@ def test_sale_applies_to_correct_products(product_type, category, channel_USD):
     product2 = Product.objects.create(
         name="Second product",
         slug="second-product",
-        description="",
+        description={},
         product_type=product_type,
         category=category,
     )
-    sec_variant = ProductVariant.objects.create(product=product2, sku="secvar", pk=111)
+    sec_variant = ProductVariant.objects.create(product=product2, sku="secvar")
     ProductVariantChannelListing.objects.create(
         variant=sec_variant,
         channel=channel_USD,

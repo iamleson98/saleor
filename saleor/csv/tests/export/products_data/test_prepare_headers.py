@@ -31,7 +31,7 @@ def test_get_export_fields_and_headers_fields_without_price():
         "collections__slug",
         "id",
         "variants__sku",
-        "description",
+        "description_as_str",
     }
     assert file_headers == expected_headers
 
@@ -43,10 +43,16 @@ def test_get_export_fields_and_headers_no_fields():
     assert file_headers == ["id"]
 
 
-def test_get_attributes_headers(product_with_multiple_values_attributes):
+def test_get_attributes_headers(
+    product_with_multiple_values_attributes, product_type_without_variant
+):
     # given
     attribute_ids = Attribute.objects.values_list("id", flat=True)
     export_info = {"attributes": attribute_ids}
+
+    product_type = product_with_multiple_values_attributes.product_type
+    product_attribute = product_type.product_attributes.first()
+    product_type_without_variant.product_attributes.add(product_attribute)
 
     # when
     attributes_headers = get_attributes_headers(export_info)
@@ -169,7 +175,7 @@ def test_get_export_fields_and_headers_info(
     expected_fields = [
         "id",
         "collections__slug",
-        "description",
+        "description_as_str",
     ]
 
     product_headers = []

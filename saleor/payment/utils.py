@@ -1,7 +1,7 @@
 import json
 import logging
 from decimal import Decimal
-from typing import Dict, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 import graphene
 from django.core.serializers.json import DjangoJSONEncoder
@@ -10,11 +10,13 @@ from django.db import transaction
 from ..account.models import User
 from ..checkout.models import Checkout
 from ..order.models import Order
-from ..plugins.manager import get_plugins_manager
 from . import ChargeStatus, GatewayError, PaymentError, TransactionKind
 from .error_codes import PaymentErrorCode
 from .interface import AddressData, GatewayResponse, PaymentData
 from .models import Payment, Transaction
+
+if TYPE_CHECKING:
+    from ..plugins.manager import PluginsManager
 
 logger = logging.getLogger(__name__)
 
@@ -152,6 +154,7 @@ def create_transaction(
     action_required: bool = False,
     gateway_response: GatewayResponse = None,
     error_msg=None,
+    is_success=False,
 ) -> Transaction:
     """Create a transaction based on transaction kind and gateway response."""
     # Default values for token, amount, currency are only used in cases where
@@ -161,7 +164,7 @@ def create_transaction(
             kind=kind,
             action_required=False,
             transaction_id=payment_information.token or "",
-            is_success=False,
+            is_success=is_success,
             amount=payment_information.amount,
             currency=payment_information.currency,
             error=error_msg,
@@ -358,7 +361,7 @@ def get_payment_token(payment: Payment):
     return auth_transaction.token
 
 
-def is_currency_supported(currency: str, gateway_id: str):
+def is_currency_supported(currency: str, gateway_id: str, manager: "PluginsManager"):
     """Return true if the given gateway supports given currency."""
-    available_gateways = get_plugins_manager().list_payment_gateways(currency=currency)
+    available_gateways = manager.list_payment_gateways(currency=currency)
     return any([gateway.id == gateway_id for gateway in available_gateways])

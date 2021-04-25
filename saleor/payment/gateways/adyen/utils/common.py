@@ -4,6 +4,8 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Callable, Dict, Optional
 
 import Adyen
+import opentracing
+import opentracing.tags
 from babel.numbers import get_currency_precision
 from django.conf import settings
 from django_countries.fields import Country
@@ -13,8 +15,9 @@ from .....checkout.calculations import (
     checkout_shipping_price,
     checkout_total,
 )
+from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from .....checkout.models import Checkout
-from .....checkout.utils import fetch_checkout_lines
+from .....checkout.utils import is_shipping_required
 from .....core.prices import quantize_price
 from .....discount.utils import fetch_active_discounts
 from .....payment.models import Payment
@@ -145,10 +148,12 @@ def request_data_for_payment(
     return request_data
 
 
-def get_shipping_data(manager, checkout, lines, address, discounts):
+def get_shipping_data(manager, checkout_info, lines, discounts):
+    address = checkout_info.shipping_address or checkout_info.billing_address
+    currency = checkout_info.checkout.currency
     shipping_total = checkout_shipping_price(
         manager=manager,
-        checkout=checkout,
+        checkout_info=checkout_info,
         lines=lines,
         address=address,
         discounts=discounts,
@@ -161,12 +166,12 @@ def get_shipping_data(manager, checkout, lines, address, discounts):
     )
     return {
         "quantity": 1,
-        "amountExcludingTax": to_adyen_price(total_net, checkout.currency),
+        "amountExcludingTax": to_adyen_price(total_net, currency),
         "taxPercentage": tax_percentage_in_adyen_format,
-        "description": f"Shipping - {checkout.shipping_method.name}",
-        "id": f"Shipping:{checkout.shipping_method.id}",
-        "taxAmount": to_adyen_price(tax_amount, checkout.currency),
-        "amountIncludingTax": to_adyen_price(total_gross, checkout.currency),
+        "description": f"Shipping - {checkout_info.shipping_method.name}",
+        "id": f"Shipping:{checkout_info.shipping_method.id}",
+        "taxAmount": to_adyen_price(tax_amount, currency),
+        "amountIncludingTax": to_adyen_price(total_gross, currency),
     }
 
 
@@ -185,9 +190,7 @@ def append_klarna_data(payment_information: "PaymentData", payment_data: dict):
     manager = get_plugins_manager()
     lines = fetch_checkout_lines(checkout)
     discounts = fetch_active_discounts()
-    address = (
-        checkout.shipping_address or checkout.billing_address
-    )  # FIXME: check which address we need here
+    checkout_info = fetch_checkout_info(checkout, lines, discounts, manager)
     currency = payment_information.currency
     country_code = checkout.get_country()
 
@@ -198,40 +201,43 @@ def append_klarna_data(payment_information: "PaymentData", payment_data: dict):
     for line_info in lines:
         total = checkout_line_total(
             manager=manager,
-            checkout=checkout,
-            line=line_info.line,
-            variant=line_info.variant,
-            product=line_info.product,
-            collections=line_info.collections,
-            address=address,
-            channel=checkout.channel,
-            channel_listing=line_info.channel_listing,
+            checkout_info=checkout_info,
+            lines=lines,
+            checkout_line_info=line_info,
             discounts=discounts,
         )
-        total_gross = total.gross.amount
-        total_net = total.net.amount
-        tax_amount = total.tax.amount
+        address = checkout_info.shipping_address or checkout_info.billing_address
+        unit_price = manager.calculate_checkout_line_unit_price(
+            total,
+            line_info.line.quantity,
+            checkout_info,
+            lines,
+            line_info,
+            address,
+            discounts,
+        )
+        unit_gross = unit_price.gross.amount
+        unit_net = unit_price.net.amount
+        tax_amount = unit_price.tax.amount
         tax_percentage_in_adyen_format = get_tax_percentage_in_adyen_format(
-            total_gross, total_net
+            unit_gross, unit_net
         )
 
         line_data = {
             "quantity": line_info.line.quantity,
-            "amountExcludingTax": to_adyen_price(total_net, currency),
+            "amountExcludingTax": to_adyen_price(unit_net, currency),
             "taxPercentage": tax_percentage_in_adyen_format,
             "description": (
                 f"{line_info.variant.product.name}, {line_info.variant.name}"
             ),
             "id": line_info.variant.sku,
             "taxAmount": to_adyen_price(tax_amount, currency),
-            "amountIncludingTax": to_adyen_price(total_gross, currency),
+            "amountIncludingTax": to_adyen_price(unit_gross, currency),
         }
         line_items.append(line_data)
 
-    if checkout.shipping_method and checkout.is_shipping_required():
-        line_items.append(
-            get_shipping_data(manager, checkout, lines, address, discounts)
-        )
+    if checkout_info.shipping_method and is_shipping_required(lines):
+        line_items.append(get_shipping_data(manager, checkout_info, lines, discounts))
 
     payment_data["lineItems"] = line_items
     return payment_data
@@ -269,9 +275,10 @@ def request_data_for_gateway_config(
     address = checkout.billing_address or checkout.shipping_address
     discounts = fetch_active_discounts()
     lines = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, discounts, manager)
     total = checkout_total(
         manager=manager,
-        checkout=checkout,
+        checkout_info=checkout_info,
         lines=lines,
         address=address,
         discounts=discounts,
@@ -360,7 +367,13 @@ def call_capture(
         merchant_account=merchant_account,
         token=token,
     )
-    return api_call(request, adyen_client.payment.capture)
+    with opentracing.global_tracer().start_active_span(
+        "adyen.payment.capture"
+    ) as scope:
+        span = scope.span
+        span.set_tag(opentracing.tags.COMPONENT, "payment")
+        span.set_tag("service.name", "adyen")
+        return api_call(request, adyen_client.payment.capture)
 
 
 def request_for_payment_cancel(

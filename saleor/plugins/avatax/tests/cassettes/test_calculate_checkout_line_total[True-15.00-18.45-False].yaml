@@ -1,13 +1,15 @@
 interactions:
 - request:
     body: '{"createTransactionModel": {"companyCode": "DEFAULT", "type": "SalesOrder",
-      "lines": [{"quantity": 3, "amount": "15.00", "taxCode": "PC040156", "taxIncluded":
-      false, "itemCode": "123", "description": ""}], "code": "fed24153-887c-4470-a139-db35f86b0e5c",
-      "date": "2019-06-26", "customerCode": 0, "addresses": {"shipFrom": {"line1":
-      "4371 Lucas Knoll Apt. 791", "line2": "", "city": "BENNETTMOUTH", "region":
-      "", "country": "US", "postalCode": "92614"}, "shipTo": {"line1": "T\u0119czowa
+      "lines": [{"quantity": 3, "amount": "15.00", "taxCode": "O9999999", "taxIncluded":
+      false, "itemCode": "123", "description": "Test product"}, {"quantity": 1, "amount":
+      "10.000", "taxCode": "FR020100", "taxIncluded": false, "itemCode": "Shipping",
+      "description": null}], "code": "50ac96cf-063e-45cb-bcf6-60e05735bd87", "date":
+      "2021-03-02", "customerCode": 0, "addresses": {"shipFrom": {"line1": "T\u0119czowa
       7", "line2": "", "city": "WROC\u0141AW", "region": "", "country": "PL", "postalCode":
-      "53-601"}}, "commit": false, "currencyCode": "USD", "email": ""}}'
+      "53-601"}, "shipTo": {"line1": "O\u0142awska 10", "line2": "", "city": "WROC\u0141AW",
+      "region": "", "country": "PL", "postalCode": "53-105"}}, "commit": false, "currencyCode":
+      "USD", "email": ""}}'
     headers:
       Accept:
       - '*/*'
@@ -18,67 +20,56 @@ interactions:
       Connection:
       - keep-alive
       Content-Length:
-      - '637'
+      - '767'
       User-Agent:
-      - python-requests/2.22.0
+      - python-requests/2.25.1
     method: POST
-    uri: https://sandbox-rest.avatax.com/api/v2/transactions/createoradjust
+    uri: https://rest.avatax.com/api/v2/transactions/createoradjust
   response:
     body:
-      string: "{\"id\":0,\"code\":\"fed24153-887c-4470-a139-db35f86b0e5c\",\"companyId\"\
-        :242975,\"date\":\"2019-06-26\",\"paymentDate\":\"2019-06-26\",\"status\"\
-        :\"Temporary\",\"type\":\"SalesOrder\",\"currencyCode\":\"USD\",\"customerVendorCode\"\
-        :\"0\",\"customerCode\":\"0\",\"reconciled\":false,\"totalAmount\":15.0,\"\
-        totalExempt\":0.0,\"totalDiscount\":0.0,\"totalTax\":3.45,\"totalTaxable\"\
-        :15.0,\"totalTaxCalculated\":3.45,\"adjustmentReason\":\"NotAdjusted\",\"\
-        locked\":false,\"version\":1,\"exchangeRateEffectiveDate\":\"2019-06-26\"\
-        ,\"exchangeRate\":1.0,\"email\":\"\",\"modifiedDate\":\"2019-06-26T09:22:52.9171529Z\"\
-        ,\"modifiedUserId\":283192,\"taxDate\":\"2019-06-26T00:00:00\",\"lines\":[{\"\
-        id\":0,\"transactionId\":0,\"lineNumber\":\"1\",\"description\":\"\",\"discountAmount\"\
-        :0.0,\"exemptAmount\":0.0,\"exemptCertId\":0,\"isItemTaxable\":true,\"itemCode\"\
-        :\"123\",\"lineAmount\":15.0,\"quantity\":3.0,\"reportingDate\":\"2019-06-26\"\
-        ,\"tax\":3.45,\"taxableAmount\":15.0,\"taxCalculated\":3.45,\"taxCode\":\"\
-        PC040156\",\"taxCodeId\":6622,\"taxDate\":\"2019-06-26\",\"taxIncluded\":false,\"\
-        details\":[{\"id\":0,\"transactionLineId\":0,\"transactionId\":0,\"country\"\
-        :\"PL\",\"region\":\"PL\",\"exemptAmount\":0.0,\"jurisCode\":\"PL\",\"jurisName\"\
-        :\"POLAND\",\"stateAssignedNo\":\"\",\"jurisType\":\"CNT\",\"jurisdictionType\"\
-        :\"Country\",\"nonTaxableAmount\":0.0,\"rate\":0.230000,\"tax\":3.45,\"taxableAmount\"\
-        :15.0,\"taxType\":\"Output\",\"taxSubTypeId\":\"O\",\"taxName\":\"Standard\
-        \ Rate\",\"taxAuthorityTypeId\":45,\"taxCalculated\":3.45,\"rateType\":\"\
-        Standard\",\"rateTypeCode\":\"S\",\"isNonPassThru\":false}],\"nonPassthroughDetails\"\
-        :[],\"hsCode\":\"\",\"costInsuranceFreight\":0.0,\"vatCode\":\"PLS-2300P--US\"\
-        ,\"vatNumberTypeId\":0}],\"addresses\":[{\"id\":0,\"transactionId\":0,\"boundaryLevel\"\
-        :\"Zip5\",\"line1\":\"T\u0119czowa 7\",\"line2\":\"\",\"line3\":\"\",\"city\"\
-        :\"WROCLAW\",\"region\":\"\",\"postalCode\":\"53-601\",\"country\":\"PL\"\
-        ,\"taxRegionId\":205102,\"latitude\":\"0\",\"longitude\":\"0\"},{\"id\":0,\"\
-        transactionId\":0,\"boundaryLevel\":\"Zip5\",\"line1\":\"4371 Lucas Knoll\
-        \ Apt. 791\",\"line2\":\"\",\"line3\":\"\",\"city\":\"BENNETTMOUTH\",\"region\"\
-        :\"CA\",\"postalCode\":\"92614\",\"country\":\"US\",\"taxRegionId\":4017409,\"\
-        latitude\":\"0\",\"longitude\":\"0\"}],\"summary\":[{\"country\":\"PL\",\"\
-        region\":\"PL\",\"jurisType\":\"Country\",\"jurisCode\":\"PL\",\"jurisName\"\
-        :\"POLAND\",\"taxAuthorityType\":45,\"stateAssignedNo\":\"\",\"taxType\":\"\
-        Output\",\"taxSubType\":\"O\",\"taxName\":\"Standard Rate\",\"rateType\":\"\
-        Standard\",\"taxable\":15.0,\"rate\":0.230000,\"tax\":3.45,\"taxCalculated\"\
-        :3.45,\"nonTaxable\":0.0,\"exemption\":0.0}]}"
+      string: !!binary |
+        H4sIAAAAAAAEA+1X207jSBD9FeRngmwnJuC3bBgkpChBJOxIs5qHjt1Jesa37W4zZEf8+57qS3BI
+        2GH2wtMiHuzq6nJVndOnK98DkQdpeBpkdc6DNEhCll2eZ6teeN7nvUGSLXvLbHXeOw95mAz7yTK/
+        GAbkXTas2t5gbzyIL4fJaZAzTQHiMI56Yb8XxnBr2Lbklb46sqQ0063ChgUvm1oyuYW/3jYUY84K
+        rmYy5xK2JdPZZmyzoy+3UvIq2zrL/fwKRv6YbVi15nf40PiYQ9YqXZdc3iu25gv7FdpXaaG394p3
+        41vPX3mV19LZQ/Nhu9Ax8Ufkrqc1UoaD5FldZaLgaMqKFYqfBkWdMS3q6jm85ChWi2o9OVhqWokq
+        FDeFPwddcaq3k6Gi7jRcqm5cXWtWjMq6rTQgSc6AqDF9MCkC4Z3lSqjMuj3bFuwxSJMzgtHswjtb
+        FoCiEwm2MSuytkCPUaH1ZvkXdJYwvuMMCaET01qPjBVepgNfOw15QNroR5BG+6B9WK14psUDP0aV
+        LrrYSZXwkonCtr2sc7ESPD/YuQiH6WCQxuHZMIriJI4/IR/vDcylYe9FP7qMUTZ7PBIgTEP6p42F
+        qDjo+tt3f2C0ZJViSLquKBCSIpdpWy5B2zSIsOftrMu5yqRoKBj2LrjSJ42s8zbTCJM7xDy8BjfL
+        vSOmMZfaJbTPT6FuNC930GrZgqECJsfOKO67On3UCDxCXb+3zJyTIO1T7yVfRbb1eIr9k6P1QRMR
+        Er2lrQNilyVW9wPG2GXWztPlNbu0fzYSGam8pD9ALsdgs343VVa0eYd6OdfgzGsQToCd69ohsOa8
+        QKDS4HaC6JKvLU7m7QgQX1oplMve+BjDlJUkbrezyWhKokUKyEdKiXXFc3/ejacTqPF0ATdjyYUh
+        ml+g82sEs6orB6hvqSGHNIIbnsX9EH9vQsCFnrW6aYl06Oy8XZKV2hLMrMnVMNesypnMT0hw7cqo
+        1ZtaQk39Fgf3IbKUnPuaj4MQ3uraNoeprYSerX5hStA9ccull/Z7LGBdqGld3TKlFhvZ7jRXqGuO
+        PjsF3umtaxNtRTRiNgHpWIs4++u2i37Ziqjbur+EbZ7bu2iwHVZdCLYUhesPypnzooBQPH0+DQAi
+        VaE3sm7Xm6sdT7G08TRCuVmt9E2lWuhOxq8lF+sNtN6k88D0jm7zHlCf9XqGeFiwiuRRCZ9O36pg
+        dIH/hIK9j0jNN6JpcH0iN5Jbz/oIbdiXKnNN/D2pis/6hv90BXY/YIxdZL2j6/31XRiHUUjDggYF
+        nFANhhcDY3hFGv8XKnB4T6h8W4/23ynHf6pTJgEvSHRWndwBWG99J5naF5t/KFO2LC9qL1TKLL6v
+        SF2/LlKQPpbnkiv1o6FribsQV9F2wh84TYSfRJM4caApZVawb+orO4noVJJiuIGFHvtYhzWDKOPp
+        491sPBl9JIz9/Y7nBqLLCod20u9FIUV/MRDgtN+ZPXRVxmEShZgoMScLjQnEfqSoq/Xu9S81+AcF
+        LXj2R/2NndCvsH+hnvPQDKpuoHADzk/XA7hUW5b0I44m5Bft2fXzeRZyp3i8G2TeNjIhsb05I0hp
+        ygBCh4MUXF+XCiIG+gefVwYaf8zh2Dn88O/+LCInuoD3xMv9itofAawR9/zCRzAH246OZpbE+9Pn
+        pz8B5P6Cuo4PAAA=
     headers:
       Connection:
       - keep-alive
+      Content-Encoding:
+      - gzip
       Content-Type:
       - application/json; charset=utf-8
       Date:
-      - Wed, 26 Jun 2019 09:22:42 GMT
+      - Tue, 02 Mar 2021 07:44:20 GMT
       Location:
       - /api/v2/companies/242975/transactions/0
       Server:
       - Kestrel
       ServerDuration:
-      - '00:00:00.0664731'
+      - '00:00:00.0193913'
       Transfer-Encoding:
       - chunked
-      X-Content-Type-Options:
-      - nosniff
-      X-Powered-By:
-      - ASP.NET
+      Vary:
+      - Accept-Encoding
     status:
       code: 201
       message: Created

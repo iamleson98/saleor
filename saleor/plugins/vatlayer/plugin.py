@@ -2,7 +2,9 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Iterable, List, Optional, Union
 
 from django.conf import settings
+from django.contrib.sites.models import Site
 from django.core.exceptions import ValidationError
+from django_countries import countries
 from django_countries.fields import Country
 from django_prices_vatlayer.utils import (
     fetch_rate_types,
@@ -30,8 +32,8 @@ if TYPE_CHECKING:
     # flake8: noqa
     from ...account.models import Address
     from ...channel.models import Channel
-    from ...checkout import CheckoutLineInfo
-    from ...checkout.models import Checkout, CheckoutLine
+    from ...checkout.fetch import CheckoutInfo, CheckoutLineInfo
+    from ...checkout.models import Checkout
     from ...discount import DiscountInfo
     from ...order.models import Order, OrderLine
     from ...product.models import (
@@ -48,8 +50,40 @@ class VatlayerPlugin(BasePlugin):
     PLUGIN_NAME = "Vatlayer"
     META_CODE_KEY = "vatlayer.code"
     META_DESCRIPTION_KEY = "vatlayer.description"
-    DEFAULT_CONFIGURATION = [{"name": "Access key", "value": None}]
+
+    DEFAULT_CONFIGURATION = [
+        {"name": "Access key", "value": None},
+        {"name": "origin_country", "value": None},
+        {"name": "countries_to_calculate_taxes_from_origin", "value": None},
+        {"name": "excluded_countries", "value": None},
+    ]
+
     CONFIG_STRUCTURE = {
+        "origin_country": {
+            "type": ConfigurationTypeField.STRING,
+            "help_test": (
+                "Country code in ISO format, required to calculate taxes for countries "
+                "from `Countries for which taxes will be calculated from origin "
+                "country`."
+            ),
+            "label": "Origin country",
+        },
+        "countries_to_calculate_taxes_from_origin": {
+            "type": ConfigurationTypeField.STRING,
+            "help_text": (
+                "List of destination countries (separated by comma), in ISO format "
+                "which will use origin country to calculate taxes."
+            ),
+            "label": "Countries for which taxes will be calculated from origin country",
+        },
+        "excluded_countries": {
+            "type": ConfigurationTypeField.STRING,
+            "help_text": (
+                "List of countries (separated by comma), in ISO format for which no "
+                "VAT should be added."
+            ),
+            "label": "Countries for which no VAT will be added.",
+        },
         "Access key": {
             "type": ConfigurationTypeField.PASSWORD,
             "help_text": "Required to authenticate to Vatlayer API.",
@@ -61,7 +95,31 @@ class VatlayerPlugin(BasePlugin):
         super().__init__(*args, **kwargs)
         # Convert to dict to easier take config elements
         configuration = {item["name"]: item["value"] for item in self.configuration}
-        self.config = VatlayerConfiguration(access_key=configuration["Access key"])
+
+        origin_country = configuration["origin_country"] or ""
+        origin_country = countries.alpha2(origin_country.strip())
+
+        countries_from_origin = configuration[
+            "countries_to_calculate_taxes_from_origin"
+        ]
+        countries_from_origin = countries_from_origin or ""
+        countries_from_origin = [
+            countries.alpha2(c.strip()) for c in countries_from_origin.split(",")
+        ]
+        countries_from_origin = list(filter(None, countries_from_origin))
+
+        excluded_countries = configuration["excluded_countries"] or ""
+        excluded_countries = [
+            countries.alpha2(c.strip()) for c in excluded_countries.split(",")
+        ]
+        excluded_countries = list(filter(None, excluded_countries))
+
+        self.config = VatlayerConfiguration(
+            access_key=configuration["Access key"],
+            origin_country=origin_country,
+            excluded_countries=excluded_countries,
+            countries_from_origin=countries_from_origin,
+        )
         self._cached_taxes = {}
 
     def _skip_plugin(
@@ -83,7 +141,7 @@ class VatlayerPlugin(BasePlugin):
 
     def calculate_checkout_total(
         self,
-        checkout: "Checkout",
+        checkout_info: "CheckoutInfo",
         lines: List["CheckoutLineInfo"],
         address: Optional["Address"],
         discounts: List["DiscountInfo"],
@@ -96,19 +154,19 @@ class VatlayerPlugin(BasePlugin):
         return (
             calculations.checkout_subtotal(
                 manager=manager,
-                checkout=checkout,
+                checkout_info=checkout_info,
                 lines=lines,
                 address=address,
                 discounts=discounts,
             )
             + calculations.checkout_shipping_price(
                 manager=manager,
-                checkout=checkout,
+                checkout_info=checkout_info,
                 lines=lines,
                 address=address,
                 discounts=discounts,
             )
-            - checkout.discount
+            - checkout_info.checkout.discount
         )
 
     def _get_taxes_for_country(self, country: Country):
@@ -118,17 +176,35 @@ class VatlayerPlugin(BasePlugin):
         from cache or db.
         """
         if not country:
-            country = Country(settings.DEFAULT_COUNTRY)
+            origin_country_code = self.config.origin_country
+            if not origin_country_code:
+                company_address = Site.objects.get_current().settings.company_address
+                origin_country_code = (
+                    company_address.country
+                    if company_address
+                    else settings.DEFAULT_COUNTRY
+                )
+
+            country = Country(origin_country_code)
         country_code = country.code
+
+        if country_code in self.config.countries_from_origin:
+            country_code = self.config.origin_country
+
+        if country_code in self.config.excluded_countries:
+            return None
+
         if country_code in self._cached_taxes:
             return self._cached_taxes[country_code]
+
+        country = Country(country_code)
         taxes = get_taxes_for_country(country)
         self._cached_taxes[country_code] = taxes
         return taxes
 
     def calculate_checkout_shipping(
         self,
-        checkout: "Checkout",
+        checkout_info: "CheckoutInfo",
         lines: List["CheckoutLineInfo"],
         address: Optional["Address"],
         discounts: List["DiscountInfo"],
@@ -141,11 +217,12 @@ class VatlayerPlugin(BasePlugin):
         taxes = None
         if address:
             taxes = self._get_taxes_for_country(address.country)
-        if not checkout.shipping_method:
+        if (
+            not checkout_info.shipping_method
+            or not checkout_info.shipping_method_channel_listings
+        ):
             return previous_value
-        shipping_price = checkout.shipping_method.channel_listings.get(
-            channel_id=checkout.channel_id
-        ).price
+        shipping_price = checkout_info.shipping_method_channel_listings.price
         return get_taxed_shipping_price(shipping_price, taxes)
 
     def calculate_order_shipping(
@@ -167,47 +244,91 @@ class VatlayerPlugin(BasePlugin):
 
     def calculate_checkout_line_total(
         self,
-        checkout: "Checkout",
-        checkout_line: "CheckoutLine",
+        checkout_info: "CheckoutInfo",
+        lines: List["CheckoutLineInfo"],
+        checkout_line_info: "CheckoutLineInfo",
+        address: Optional["Address"],
+        discounts: Iterable["DiscountInfo"],
+        previous_value: TaxedMoney,
+    ) -> TaxedMoney:
+        unit_price = self.__calculate_checkout_line_unit_price(
+            address,
+            discounts,
+            checkout_line_info.variant,
+            checkout_line_info.product,
+            checkout_line_info.collections,
+            checkout_info.channel,
+            checkout_line_info.channel_listing,
+            previous_value,
+        )
+        return (
+            unit_price * checkout_line_info.line.quantity
+            if unit_price is not None
+            else previous_value
+        )
+
+    def calculate_checkout_line_unit_price(
+        self,
+        checkout_info: "CheckoutInfo",
+        lines: Iterable["CheckoutLineInfo"],
+        checkout_line_info: "CheckoutLineInfo",
+        address: Optional["Address"],
+        discounts: Iterable["DiscountInfo"],
+        previous_value: TaxedMoney,
+    ) -> TaxedMoney:
+        unit_price = self.__calculate_checkout_line_unit_price(
+            address,
+            discounts,
+            checkout_line_info.variant,
+            checkout_line_info.product,
+            checkout_line_info.collections,
+            checkout_info.channel,
+            checkout_line_info.channel_listing,
+            previous_value,
+        )
+        return unit_price if unit_price is not None else previous_value
+
+    def __calculate_checkout_line_unit_price(
+        self,
+        address: Optional["Address"],
+        discounts: Iterable["DiscountInfo"],
         variant: "ProductVariant",
         product: "Product",
         collections: List["Collection"],
-        address: Optional["Address"],
         channel: "Channel",
         channel_listing: "ProductVariantChannelListing",
-        discounts: List["DiscountInfo"],
         previous_value: TaxedMoney,
-    ) -> TaxedMoney:
+    ):
         if self._skip_plugin(previous_value):
-            return previous_value
+            return
 
         price = variant.get_price(
             product, collections, channel, channel_listing, discounts
         )
         country = address.country if address else None
-        return (
-            self.__apply_taxes_to_product(product, price, country)
-            * checkout_line.quantity
-        )
+        return self.__apply_taxes_to_product(product, price, country)
 
     def calculate_order_line_unit(
-        self, order_line: "OrderLine", previous_value: TaxedMoney
+        self,
+        order: "Order",
+        order_line: "OrderLine",
+        variant: "ProductVariant",
+        product: "Product",
+        previous_value: TaxedMoney,
     ) -> TaxedMoney:
         if self._skip_plugin(previous_value):
             return previous_value
 
-        address = order_line.order.shipping_address or order_line.order.billing_address
+        address = order.shipping_address or order.billing_address
         country = address.country if address else None
-        variant = order_line.variant
         if not variant:
             return previous_value
-        return self.__apply_taxes_to_product(
-            variant.product, order_line.unit_price, country
-        )
+        return self.__apply_taxes_to_product(product, order_line.unit_price, country)
 
     def get_checkout_line_tax_rate(
         self,
-        checkout: "Checkout",
+        checkout_info: "CheckoutInfo",
+        lines: Iterable["CheckoutLineInfo"],
         checkout_line_info: "CheckoutLineInfo",
         address: Optional["Address"],
         discounts: Iterable["DiscountInfo"],
@@ -219,6 +340,7 @@ class VatlayerPlugin(BasePlugin):
         self,
         order: "Order",
         product: "Product",
+        variant: "ProductVariant",
         address: Optional["Address"],
         previous_value: Decimal,
     ) -> Decimal:
@@ -239,7 +361,7 @@ class VatlayerPlugin(BasePlugin):
 
     def get_checkout_shipping_tax_rate(
         self,
-        checkout: "Checkout",
+        checkout_info: "CheckoutInfo",
         lines: Iterable["CheckoutLineInfo"],
         address: Optional["Address"],
         discounts: Iterable["DiscountInfo"],
@@ -412,3 +534,17 @@ class VatlayerPlugin(BasePlugin):
                         )
                     }
                 )
+        countries_from_origin = configuration.get(
+            "countries_to_calculate_taxes_from_origin"
+        )
+        origin_country = configuration.get("origin_country")
+        if countries_from_origin and not origin_country:
+            raise ValidationError(
+                {
+                    "origin_country": ValidationError(
+                        "Source country required when `Countries for which taxes will "
+                        "be calculated from origin country` provided.",
+                        code=PluginErrorCode.INVALID.value,
+                    )
+                }
+            )

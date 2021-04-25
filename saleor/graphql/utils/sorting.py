@@ -2,10 +2,10 @@ from typing import Tuple
 
 from django.db.models import QuerySet
 from graphql.error import GraphQLError
-from graphql_relay import from_global_id
 
 from ..core.enums import OrderDirection
 from ..core.types import SortInputObjectType
+from ..core.utils import from_global_id_or_error
 
 REVERSED_DIRECTION = {
     "-": "",
@@ -15,7 +15,7 @@ REVERSED_DIRECTION = {
 
 def _sort_queryset_by_attribute(queryset, sorting_attribute, sorting_direction):
     if sorting_attribute != "":
-        graphene_type, sorting_attribute = from_global_id(sorting_attribute)
+        graphene_type, sorting_attribute = from_global_id_or_error(sorting_attribute)
     descending = sorting_direction == OrderDirection.DESC
     queryset = queryset.sort_by_attribute(sorting_attribute, descending=descending)
     return queryset
@@ -24,8 +24,11 @@ def _sort_queryset_by_attribute(queryset, sorting_attribute, sorting_direction):
 def sort_queryset_for_connection(iterable, args):
     sort_by = args.get("sort_by")
     reversed = True if "last" in args else False
+    query = getattr(iterable, "query", None)
     if sort_by:
         iterable = sort_queryset(queryset=iterable, sort_by=sort_by, reversed=reversed)
+    elif query and "-rank" in query.order_by:
+        return iterable, {"field": "rank", "direction": "-"}
     else:
         iterable, sort_by = sort_queryset_by_default(
             queryset=iterable, reversed=reversed

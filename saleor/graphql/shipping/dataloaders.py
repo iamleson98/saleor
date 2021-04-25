@@ -2,10 +2,12 @@ from collections import defaultdict
 
 from django.db.models import F
 
+from ...channel.models import Channel
 from ...shipping.models import (
     ShippingMethod,
     ShippingMethodChannelListing,
-    ShippingMethodZipCodeRule,
+    ShippingMethodPostalCodeRule,
+    ShippingZone,
 )
 from ..core.dataloaders import DataLoader
 
@@ -16,6 +18,14 @@ class ShippingMethodByIdLoader(DataLoader):
     def batch_load(self, keys):
         shipping_methods = ShippingMethod.objects.in_bulk(keys)
         return [shipping_methods.get(shipping_method_id) for shipping_method_id in keys]
+
+
+class ShippingZoneByIdLoader(DataLoader):
+    context_key = "shippingzone_by_id"
+
+    def batch_load(self, keys):
+        shipping_zones = ShippingZone.objects.in_bulk(keys)
+        return [shipping_zones.get(shipping_zone_id) for shipping_zone_id in keys]
 
 
 class ShippingMethodsByShippingZoneIdLoader(DataLoader):
@@ -29,23 +39,26 @@ class ShippingMethodsByShippingZoneIdLoader(DataLoader):
                 shipping_method.shipping_zone_id
             ].append(shipping_method)
         return [
-            shipping_methods_by_shipping_zone_map[shipping_zone_id]
+            shipping_methods_by_shipping_zone_map.get(shipping_zone_id, [])
             for shipping_zone_id in keys
         ]
 
 
-class ZipCodeRulesByShippingMethodIdLoader(DataLoader):
-    context_key = "zip_code_rules_by_shipping_method"
+class PostalCodeRulesByShippingMethodIdLoader(DataLoader):
+    context_key = "postal_code_rules_by_shipping_method"
 
     def batch_load(self, keys):
-        zip_code_rules = ShippingMethodZipCodeRule.objects.filter(
+        postal_code_rules = ShippingMethodPostalCodeRule.objects.filter(
             shipping_method_id__in=keys
-        )
+        ).order_by("id")
 
-        zip_code_rules_map = defaultdict(list)
-        for zip_code in zip_code_rules:
-            zip_code_rules_map[zip_code.shipping_method_id].append(zip_code)
-        return [zip_code_rules_map[shipping_method_id] for shipping_method_id in keys]
+        postal_code_rules_map = defaultdict(list)
+        for postal_code in postal_code_rules:
+            postal_code_rules_map[postal_code.shipping_method_id].append(postal_code)
+        return [
+            postal_code_rules_map.get(shipping_method_id, [])
+            for shipping_method_id in keys
+        ]
 
 
 class ShippingMethodsByShippingZoneIdAndChannelSlugLoader(DataLoader):
@@ -62,7 +75,10 @@ class ShippingMethodsByShippingZoneIdAndChannelSlugLoader(DataLoader):
             shipping_methods_by_shipping_zone_and_channel_map[key].append(
                 shipping_method
             )
-        return [shipping_methods_by_shipping_zone_and_channel_map[key] for key in keys]
+        return [
+            shipping_methods_by_shipping_zone_and_channel_map.get(key, [])
+            for key in keys
+        ]
 
 
 class ShippingMethodChannelListingByShippingMethodIdLoader(DataLoader):
@@ -78,7 +94,9 @@ class ShippingMethodChannelListingByShippingMethodIdLoader(DataLoader):
                 shipping_method_channel_listing.shipping_method_id
             ].append(shipping_method_channel_listing)
         return [
-            shipping_method_channel_listings_by_shipping_method_map[shipping_method_id]
+            shipping_method_channel_listings_by_shipping_method_map.get(
+                shipping_method_id, []
+            )
             for shipping_method_id in keys
         ]
 
@@ -102,6 +120,36 @@ class ShippingMethodChannelListingByShippingMethodIdAndChannelSlugLoader(DataLoa
                 key
             ] = shipping_method_channel_listing
         return [
-            shipping_method_channel_listings_by_shipping_method_and_channel_map[key]
+            shipping_method_channel_listings_by_shipping_method_and_channel_map.get(key)
             for key in keys
         ]
+
+
+class ChannelsByShippingZoneIdLoader(DataLoader):
+    context_key = "channels_by_shippingzone"
+
+    def batch_load(self, keys):
+        from ..channel.dataloaders import ChannelByIdLoader
+
+        channel_and_zone_is_pairs = Channel.objects.filter(
+            shipping_zones__id__in=keys
+        ).values_list("pk", "shipping_zones__id")
+        shipping_zone_channel_map = defaultdict(list)
+        for channel_id, zone_id in channel_and_zone_is_pairs:
+            shipping_zone_channel_map[zone_id].append(channel_id)
+
+        def map_channels(channels):
+            channel_map = {channel.pk: channel for channel in channels}
+            return [
+                [
+                    channel_map[channel_id]
+                    for channel_id in shipping_zone_channel_map.get(zone_id, [])
+                ]
+                for zone_id in keys
+            ]
+
+        return (
+            ChannelByIdLoader(self.context)
+            .load_many({pk for pk, _ in channel_and_zone_is_pairs})
+            .then(map_channels)
+        )

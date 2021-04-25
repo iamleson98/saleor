@@ -6,10 +6,11 @@ from django.conf import settings
 from django.db.models import Case, CharField
 from django.db.models import Value as V
 from django.db.models import When
-from django.db.models.functions import Concat
+from django.db.models.functions import Cast, Concat
 
 from ...attribute import AttributeInputType
 from ...core.utils import build_absolute_uri
+from ...core.utils.editorjs import clean_editor_js
 from . import ProductExportFields
 
 if TYPE_CHECKING:
@@ -52,6 +53,7 @@ def get_products_data(
                 default=V(""),
                 output_field=CharField(),
             ),
+            description_as_str=Cast("description", CharField()),
         )
         .order_by("pk", "variants__pk")
         .values(*product_export_fields)
@@ -130,13 +132,12 @@ def prepare_products_relations_data(
 
     channel_pk_lookup = channel_fields.pop("channel_pk")
     channel_slug_lookup = channel_fields.pop("slug")
-
     for data in relations_data.iterator():
         pk = data.get("pk")
         collection = data.get("collections__slug")
-        image = data.pop("images__image", None)
+        image = data.pop("media__image", None)
 
-        result_data = add_image_uris_to_data(pk, image, "images__image", result_data)
+        result_data = add_image_uris_to_data(pk, image, "media__image", result_data)
         result_data = add_collection_info_to_data(pk, collection, result_data)
 
         result_data, data = handle_attribute_data(
@@ -219,10 +220,10 @@ def prepare_variants_relations_data(
 
     for data in relations_data.iterator():
         pk = data.get("variants__pk")
-        image = data.pop("variants__images__image", None)
+        image = data.pop("variants__media__image", None)
 
         result_data = add_image_uris_to_data(
-            pk, image, "variants__images__image", result_data
+            pk, image, "variants__media__image", result_data
         )
         result_data, data = handle_attribute_data(
             pk, data, attribute_ids, result_data, attribute_fields, "variant attribute"
@@ -289,7 +290,8 @@ def add_image_uris_to_data(
 
 
 AttributeData = namedtuple(
-    "AttributeData", ["slug", "file_url", "value", "input_type", "entity_type"]
+    "AttributeData",
+    ["slug", "file_url", "value", "input_type", "entity_type", "rich_text"],
 )
 
 
@@ -308,6 +310,7 @@ def handle_attribute_data(
         file_url=data.pop(attribute_fields["file_url"], None),
         value=data.pop(attribute_fields["value"], None),
         entity_type=data.pop(attribute_fields["entity_type"], None),
+        rich_text=data.pop(attribute_fields["rich_text"], None),
     )
 
     if attribute_ids and attribute_pk in attribute_ids:
@@ -384,14 +387,19 @@ def add_attribute_info_to_data(
         header = f"{slug} ({attribute_owner})"
         input_type = attribute_data.input_type
         if input_type == AttributeInputType.FILE:
-            value = build_absolute_uri(
-                urljoin(settings.MEDIA_URL, attribute_data.file_url)
+            file_url = attribute_data.file_url
+            value = (
+                build_absolute_uri(urljoin(settings.MEDIA_URL, file_url))
+                if file_url
+                else ""
             )
-        elif input_type == AttributeInputType.REFERENCE:
+        elif input_type == AttributeInputType.REFERENCE and attribute_data.value:
             reference_id = attribute_data.value.split("_")[1]
             value = f"{attribute_data.entity_type}_{reference_id}"
+        elif input_type == AttributeInputType.RICH_TEXT:
+            value = clean_editor_js(attribute_data.rich_text, to_string=True)
         else:
-            value = attribute_data.value
+            value = attribute_data.value if attribute_data.value else ""
         if header in result_data[pk]:
             result_data[pk][header].add(value)  # type: ignore
         else:

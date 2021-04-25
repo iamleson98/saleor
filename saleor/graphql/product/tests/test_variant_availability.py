@@ -1,6 +1,8 @@
 import graphene
 from django.test import override_settings
+from django_countries import countries
 
+from ....shipping.models import ShippingZone
 from ...tests.utils import get_graphql_content
 
 COUNTRY_CODE = "US"
@@ -26,10 +28,34 @@ def test_variant_quantity_available_without_country_code(
     assert variant_data["quantityAvailable"] == 7
 
 
-QUERY_VARIANT_AVAILABILITY = """
-    query variantAvailability($id: ID!, $country: CountryCode, $channel: String) {
+def test_variant_quantity_available_without_country_code_and_no_channel_shipping_zones(
+    api_client, variant_with_many_stocks, channel_USD
+):
+    query = """
+    query variantAvailability($id: ID!, $channel: String) {
         productVariant(id: $id, channel: $channel) {
-            quantityAvailable(countryCode: $country)
+            quantityAvailable
+        }
+    }
+    """
+    channel_USD.shipping_zones.clear()
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(query, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["quantityAvailable"] == 0
+
+
+QUERY_VARIANT_AVAILABILITY = """
+    query variantAvailability(
+        $id: ID!, $country: CountryCode, $address: AddressInput, $channel: String
+    ) {
+        productVariant(id: $id, channel: $channel) {
+            deprecatedByCountry: quantityAvailable(countryCode: $country)
+            byAddress: quantityAvailable(address: $address)
         }
     }
 """
@@ -40,13 +66,49 @@ def test_variant_quantity_available_with_country_code(
 ):
     variables = {
         "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
-        "country": COUNTRY_CODE,
+        "address": {"country": COUNTRY_CODE},
         "channel": channel_USD.slug,
     }
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == 7
+    assert variant_data["deprecatedByCountry"] == 7
+    assert variant_data["byAddress"] == 7
+
+
+def test_variant_quantity_available_with_country_code_no_channel_shipping_zones(
+    api_client, variant_with_many_stocks, channel_USD
+):
+    channel_USD.shipping_zones.clear()
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
+        "address": {"country": COUNTRY_CODE},
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["deprecatedByCountry"] == 0
+    assert variant_data["byAddress"] == 0
+
+
+def test_variant_quantity_available_with_country_code_only_one_available_warehouse(
+    api_client, variant_with_many_stocks, channel_USD, warehouses_with_shipping_zone
+):
+    shipping_zone = ShippingZone.objects.create(
+        name="Test", countries=[code for code, name in countries]
+    )
+    warehouses_with_shipping_zone[0].shipping_zones.set([shipping_zone])
+    variables = {
+        "id": graphene.Node.to_global_id("ProductVariant", variant_with_many_stocks.pk),
+        "address": {"country": COUNTRY_CODE},
+        "channel": channel_USD.slug,
+    }
+    response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
+    content = get_graphql_content(response)
+    variant_data = content["data"]["productVariant"]
+    assert variant_data["deprecatedByCountry"] == 3
+    assert variant_data["byAddress"] == 3
 
 
 def test_variant_quantity_available_with_null_as_country_code(
@@ -60,7 +122,8 @@ def test_variant_quantity_available_with_null_as_country_code(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == 7
+    assert variant_data["deprecatedByCountry"] == 7
+    assert variant_data["byAddress"] == 7
 
 
 @override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
@@ -78,7 +141,8 @@ def test_variant_quantity_available_with_max(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["deprecatedByCountry"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["byAddress"] == settings.MAX_CHECKOUT_LINE_QUANTITY
 
 
 def test_variant_quantity_available_without_stocks(
@@ -93,7 +157,8 @@ def test_variant_quantity_available_without_stocks(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == 0
+    assert variant_data["deprecatedByCountry"] == 0
+    assert variant_data["byAddress"] == 0
 
 
 def test_variant_quantity_available_with_allocations(
@@ -111,7 +176,8 @@ def test_variant_quantity_available_with_allocations(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == 3
+    assert variant_data["deprecatedByCountry"] == 3
+    assert variant_data["byAddress"] == 3
 
 
 @override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
@@ -128,7 +194,8 @@ def test_variant_quantity_available_without_inventory_tracking(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["deprecatedByCountry"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["byAddress"] == settings.MAX_CHECKOUT_LINE_QUANTITY
 
 
 @override_settings(MAX_CHECKOUT_LINE_QUANTITY=15)
@@ -145,4 +212,5 @@ def test_variant_quantity_available_without_inventory_tracking_and_stocks(
     response = api_client.post_graphql(QUERY_VARIANT_AVAILABILITY, variables)
     content = get_graphql_content(response)
     variant_data = content["data"]["productVariant"]
-    assert variant_data["quantityAvailable"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["deprecatedByCountry"] == settings.MAX_CHECKOUT_LINE_QUANTITY
+    assert variant_data["byAddress"] == settings.MAX_CHECKOUT_LINE_QUANTITY

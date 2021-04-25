@@ -6,6 +6,7 @@ from ...webhook import models
 from ...webhook.error_codes import WebhookErrorCode
 from ..core.mutations import ModelDeleteMutation, ModelMutation
 from ..core.types.common import WebhookError
+from ..core.utils import from_global_id_or_error
 from .enums import WebhookEventTypeEnum
 
 
@@ -14,10 +15,7 @@ class WebhookCreateInput(graphene.InputObjectType):
     target_url = graphene.String(description="The url to receive the payload.")
     events = graphene.List(
         WebhookEventTypeEnum,
-        description=(
-            "The events that webhook wants to subscribe. The CHECKOUT_QUANTITY_CHANGED"
-            " is deprecated. It will be removed in Saleor 3.0"
-        ),
+        description=("The events that webhook wants to subscribe."),
     )
     app = graphene.ID(
         required=False,
@@ -101,10 +99,7 @@ class WebhookUpdateInput(graphene.InputObjectType):
     )
     events = graphene.List(
         WebhookEventTypeEnum,
-        description=(
-            "The events that webhook wants to subscribe. The CHECKOUT_QUANTITY_CHANGED"
-            " is deprecated. It will be removed in Saleor 3.0"
-        ),
+        description=("The events that webhook wants to subscribe."),
         required=False,
     )
     app = graphene.ID(
@@ -188,7 +183,7 @@ class WebhookDelete(ModelDeleteMutation):
     @classmethod
     def perform_mutation(cls, _root, info, **data):
         node_id = data["id"]
-        _, object_id = graphene.Node.from_global_id(node_id)
+        _, object_id = from_global_id_or_error(node_id)
 
         app = info.context.app
         if app:
