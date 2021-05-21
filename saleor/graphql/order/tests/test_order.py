@@ -14,12 +14,13 @@ from measurement.measures import Weight
 from prices import Money, TaxedMoney
 
 from ....account.models import CustomerEvent
+from ....checkout import AddressType
 from ....core.anonymize import obfuscate_email
 from ....core.notify_events import NotifyEventType
 from ....core.prices import quantize_price
 from ....core.taxes import TaxError, zero_taxed_money
 from ....discount.models import OrderDiscount
-from ....order import FulfillmentStatus, OrderStatus
+from ....order import FulfillmentStatus, OrderOrigin, OrderStatus
 from ....order import events as order_events
 from ....order.error_codes import OrderErrorCode
 from ....order.events import order_replacement_created
@@ -758,7 +759,9 @@ def test_order_available_shipping_methods_query(
     order_data = content["data"]["orders"]["edges"][0]["node"]
     method = order_data["availableShippingMethods"][0]
 
-    apply_taxes_to_shipping_mock.assert_called_once_with(shipping_price, ANY)
+    apply_taxes_to_shipping_mock.assert_called_once_with(
+        shipping_price, ANY, fulfilled_order.channel.slug
+    )
     assert expected_price == method["price"]["amount"]
 
 
@@ -884,7 +887,9 @@ def test_order_confirm(
         parameters__amount=payment_txn_preauth.get_total().amount,
     ).exists()
 
-    capture_mock.assert_called_once_with(payment_txn_preauth, ANY)
+    capture_mock.assert_called_once_with(
+        payment_txn_preauth, ANY, channel_slug=order_unconfirmed.channel.slug
+    )
     expected_payload = {
         "order": get_default_order_payload(order_unconfirmed, ""),
         "recipient_email": order_unconfirmed.user.email,
@@ -893,7 +898,9 @@ def test_order_confirm(
         "domain": "mirumee.com",
     }
     mocked_notify.assert_called_once_with(
-        NotifyEventType.ORDER_CONFIRMED, expected_payload
+        NotifyEventType.ORDER_CONFIRMED,
+        expected_payload,
+        channel_slug=order_unconfirmed.channel.slug,
     )
 
 
@@ -1250,12 +1257,14 @@ def test_query_order_as_app(app_api_client, permission_manage_orders, order):
 DRAFT_ORDER_CREATE_MUTATION = """
     mutation draftCreate(
         $user: ID, $discount: PositiveDecimal, $lines: [OrderLineCreateInput],
-        $shippingAddress: AddressInput, $shippingMethod: ID, $voucher: ID,
-        $customerNote: String, $channel: ID, $redirectUrl: String
+        $shippingAddress: AddressInput, $billingAddress: AddressInput,
+        $shippingMethod: ID, $voucher: ID, $customerNote: String, $channel: ID,
+        $redirectUrl: String
         ) {
             draftOrderCreate(
                 input: {user: $user, discount: $discount,
                 lines: $lines, shippingAddress: $shippingAddress,
+                billingAddress: $billingAddress,
                 shippingMethod: $shippingMethod, voucher: $voucher,
                 channel: $channel,
                 redirectUrl: $redirectUrl,
@@ -1265,6 +1274,7 @@ DRAFT_ORDER_CREATE_MUTATION = """
                         code
                         variants
                         message
+                        addressType
                     }
                     order {
                         discount {
@@ -1276,6 +1286,16 @@ DRAFT_ORDER_CREATE_MUTATION = """
                             productName
                             productSku
                             quantity
+                        }
+                        billingAddress{
+                            city
+                            streetAddress1
+                            postalCode
+                        }
+                        shippingAddress{
+                            city
+                            streetAddress1
+                            postalCode
                         }
                         status
                         voucher {
@@ -1328,6 +1348,7 @@ def test_draft_order_create(
         "user": user_id,
         "discount": discount,
         "lines": variant_list,
+        "billingAddress": shipping_address,
         "shippingAddress": shipping_address,
         "shippingMethod": shipping_id,
         "voucher": voucher_id,
@@ -1345,17 +1366,20 @@ def test_draft_order_create(
     assert data["voucher"]["code"] == voucher.code
     assert data["customerNote"] == customer_note
     assert data["redirectUrl"] == redirect_url
+    assert (
+        data["billingAddress"]["streetAddress1"]
+        == graphql_address_data["streetAddress1"]
+    )
+    assert (
+        data["shippingAddress"]["streetAddress1"]
+        == graphql_address_data["streetAddress1"]
+    )
 
     order = Order.objects.first()
     assert order.user == customer_user
-    # billing address should be copied
-    assert order.billing_address.pk != customer_user.default_billing_address.pk
-    assert (
-        order.billing_address.as_data()
-        == customer_user.default_billing_address.as_data()
-    )
     assert order.shipping_method == shipping_method
-    assert order.shipping_address.first_name == graphql_address_data["firstName"]
+    assert order.billing_address
+    assert order.shipping_address
 
     # Ensure the correct event was created
     created_draft_event = OrderEvent.objects.get(
@@ -1423,12 +1447,8 @@ def test_draft_order_create_with_inactive_channel(
 
     order = Order.objects.first()
     assert order.user == customer_user
-    # billing address should be copied
-    assert order.billing_address.pk != customer_user.default_billing_address.pk
-    assert (
-        order.billing_address.as_data()
-        == customer_user.default_billing_address.as_data()
-    )
+    # billing address shouldn't be set
+    assert not order.billing_address
     assert order.shipping_method == shipping_method
     assert order.shipping_address.first_name == graphql_address_data["firstName"]
 
@@ -1488,12 +1508,8 @@ def test_draft_order_create_variant_with_0_price(
 
     order = Order.objects.first()
     assert order.user == customer_user
-    # billing address should be copied
-    assert order.billing_address.pk != customer_user.default_billing_address.pk
-    assert (
-        order.billing_address.as_data()
-        == customer_user.default_billing_address.as_data()
-    )
+    # billing address shouldn't be copied from user
+    assert not order.billing_address
     assert order.shipping_method == shipping_method
     assert order.shipping_address.first_name == graphql_address_data["firstName"]
 
@@ -1951,11 +1967,7 @@ def test_draft_order_create_with_channel(
     assert order.user == customer_user
     assert order.channel.id == channel_USD.id
     # billing address should be copied
-    assert order.billing_address.pk != customer_user.default_billing_address.pk
-    assert (
-        order.billing_address.as_data()
-        == customer_user.default_billing_address.as_data()
-    )
+    assert not order.billing_address
     assert order.shipping_method == shipping_method
     assert order.shipping_address.first_name == graphql_address_data["firstName"]
 
@@ -1965,6 +1977,126 @@ def test_draft_order_create_with_channel(
     )
     assert created_draft_event.user == staff_user
     assert created_draft_event.parameters == {}
+
+
+def test_draft_order_create_invalid_billing_address(
+    staff_api_client,
+    permission_manage_orders,
+    staff_user,
+    customer_user,
+    product_without_shipping,
+    shipping_method,
+    variant,
+    voucher,
+    channel_USD,
+    graphql_address_data,
+):
+    variant_0 = variant
+    query = DRAFT_ORDER_CREATE_MUTATION
+
+    # Ensure no events were created yet
+    assert not OrderEvent.objects.exists()
+
+    user_id = graphene.Node.to_global_id("User", customer_user.id)
+    variant_0_id = graphene.Node.to_global_id("ProductVariant", variant_0.id)
+    variant_1 = product_without_shipping.variants.first()
+    variant_1.quantity = 2
+    variant_1.save()
+    variant_1_id = graphene.Node.to_global_id("ProductVariant", variant_1.id)
+    discount = "10"
+    customer_note = "Test note"
+    variant_list = [
+        {"variantId": variant_0_id, "quantity": 2},
+        {"variantId": variant_1_id, "quantity": 1},
+    ]
+    billing_address = graphql_address_data.copy()
+    del billing_address["country"]
+    shipping_id = graphene.Node.to_global_id("ShippingMethod", shipping_method.id)
+    voucher_id = graphene.Node.to_global_id("Voucher", voucher.id)
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    redirect_url = "https://www.example.com"
+
+    variables = {
+        "user": user_id,
+        "discount": discount,
+        "lines": variant_list,
+        "billingAddress": billing_address,
+        "shippingAddress": graphql_address_data,
+        "shippingMethod": shipping_id,
+        "voucher": voucher_id,
+        "customerNote": customer_note,
+        "channel": channel_id,
+        "redirectUrl": redirect_url,
+    }
+    response = staff_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_orders]
+    )
+    content = get_graphql_content(response)
+    errors = content["data"]["draftOrderCreate"]["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] == "country"
+    assert errors[0]["code"] == OrderErrorCode.REQUIRED.name
+    assert errors[0]["addressType"] == AddressType.BILLING.upper()
+
+
+def test_draft_order_create_invalid_shipping_address(
+    staff_api_client,
+    permission_manage_orders,
+    staff_user,
+    customer_user,
+    product_without_shipping,
+    shipping_method,
+    variant,
+    voucher,
+    channel_USD,
+    graphql_address_data,
+):
+    variant_0 = variant
+    query = DRAFT_ORDER_CREATE_MUTATION
+
+    # Ensure no events were created yet
+    assert not OrderEvent.objects.exists()
+
+    user_id = graphene.Node.to_global_id("User", customer_user.id)
+    variant_0_id = graphene.Node.to_global_id("ProductVariant", variant_0.id)
+    variant_1 = product_without_shipping.variants.first()
+    variant_1.quantity = 2
+    variant_1.save()
+    variant_1_id = graphene.Node.to_global_id("ProductVariant", variant_1.id)
+    discount = "10"
+    customer_note = "Test note"
+    variant_list = [
+        {"variantId": variant_0_id, "quantity": 2},
+        {"variantId": variant_1_id, "quantity": 1},
+    ]
+    shipping_address = graphql_address_data.copy()
+    del shipping_address["country"]
+    shipping_id = graphene.Node.to_global_id("ShippingMethod", shipping_method.id)
+    voucher_id = graphene.Node.to_global_id("Voucher", voucher.id)
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    redirect_url = "https://www.example.com"
+
+    variables = {
+        "user": user_id,
+        "discount": discount,
+        "lines": variant_list,
+        "billingAddress": graphql_address_data,
+        "shippingAddress": shipping_address,
+        "shippingMethod": shipping_id,
+        "voucher": voucher_id,
+        "customerNote": customer_note,
+        "channel": channel_id,
+        "redirectUrl": redirect_url,
+    }
+    response = staff_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_orders]
+    )
+    content = get_graphql_content(response)
+    errors = content["data"]["draftOrderCreate"]["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] == "country"
+    assert errors[0]["code"] == OrderErrorCode.REQUIRED.name
+    assert errors[0]["addressType"] == AddressType.SHIPPING.upper()
 
 
 DRAFT_UPDATE_QUERY = """
@@ -2466,6 +2598,7 @@ DRAFT_ORDER_COMPLETE_MUTATION = """
             }
             order {
                 status
+                origin
             }
         }
     }
@@ -2495,6 +2628,53 @@ def test_draft_order_complete(
     data = content["data"]["draftOrderComplete"]["order"]
     order.refresh_from_db()
     assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.DRAFT.upper()
+
+    for line in order.lines.all():
+        allocation = line.allocations.get()
+        assert allocation.quantity_allocated == line.quantity_unfulfilled
+
+    # ensure there are only 2 events with correct types
+    event_params = {
+        "user": staff_user,
+        "type__in": [
+            order_events.OrderEvents.PLACED_FROM_DRAFT,
+            order_events.OrderEvents.CONFIRMED,
+        ],
+        "parameters": {},
+    }
+    matching_events = OrderEvent.objects.filter(**event_params)
+    assert matching_events.count() == 2
+    assert matching_events[0].type != matching_events[1].type
+    assert not OrderEvent.objects.exclude(**event_params).exists()
+
+
+def test_draft_order_from_reissue_complete(
+    staff_api_client,
+    permission_manage_orders,
+    staff_user,
+    draft_order,
+):
+    order = draft_order
+    order.origin = OrderOrigin.REISSUE
+    order.save(update_fields=["origin"])
+
+    # Ensure no events were created
+    assert not OrderEvent.objects.exists()
+
+    # Ensure no allocation were created
+    assert not Allocation.objects.filter(order_line__order=order).exists()
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+    response = staff_api_client.post_graphql(
+        DRAFT_ORDER_COMPLETE_MUTATION, variables, permissions=[permission_manage_orders]
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["draftOrderComplete"]["order"]
+    order.refresh_from_db()
+    assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.REISSUE.upper()
 
     for line in order.lines.all():
         allocation = line.allocations.get()
@@ -2619,6 +2799,7 @@ def test_draft_order_complete_product_without_inventory_tracking(
 
     order.refresh_from_db()
     assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.DRAFT.upper()
 
     assert not Allocation.objects.filter(order_line__order=order).exists()
 
@@ -2695,6 +2876,7 @@ def test_draft_order_complete_out_of_stock_variant(
     error = content["data"]["draftOrderComplete"]["errors"][0]
     order.refresh_from_db()
     assert order.status == OrderStatus.DRAFT
+    assert order.origin == OrderOrigin.DRAFT
 
     assert error["field"] == "lines"
     assert error["code"] == OrderErrorCode.INSUFFICIENT_STOCK.name
@@ -2776,6 +2958,7 @@ def test_draft_order_complete_drops_shipping_address(
     order.refresh_from_db()
 
     assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.DRAFT.upper()
     assert order.shipping_address is None
 
 
@@ -2806,6 +2989,7 @@ def test_draft_order_complete_unavailable_for_purchase(
     error = content["data"]["draftOrderComplete"]["errors"][0]
     order.refresh_from_db()
     assert order.status == OrderStatus.DRAFT
+    assert order.origin == OrderOrigin.DRAFT
 
     assert error["field"] == "lines"
     assert error["code"] == OrderErrorCode.PRODUCT_UNAVAILABLE_FOR_PURCHASE.name
@@ -3564,6 +3748,7 @@ def test_order_cancel_as_app(
 @mock.patch("saleor.plugins.manager.PluginsManager.notify")
 def test_order_capture(
     mocked_notify,
+    channel_USD,
     staff_api_client,
     permission_manage_orders,
     payment_txn_preauth,
@@ -3629,7 +3814,9 @@ def test_order_capture(
     }
 
     mocked_notify.assert_called_once_with(
-        NotifyEventType.ORDER_PAYMENT_CONFIRMATION, expected_payment_payload
+        NotifyEventType.ORDER_PAYMENT_CONFIRMATION,
+        expected_payment_payload,
+        channel_slug=order.channel.slug,
     )
 
 
@@ -3701,9 +3888,7 @@ def test_order_mark_as_paid_with_external_reference(
     assert event_order_paid.user == staff_user
     event_reference = event_order_paid.parameters.get("transaction_reference")
     assert event_reference == transaction_reference
-    order_payments = order.payments.filter(
-        transactions__searchable_key=transaction_reference
-    )
+    order_payments = order.payments.filter(psp_reference=transaction_reference)
     assert order_payments.count() == 1
 
 
@@ -3842,6 +4027,13 @@ def test_order_refund(staff_api_client, permission_manage_orders, payment_txn_ca
         type=order_events.OrderEvents.PAYMENT_REFUNDED
     ).first()
     assert refund_order_event.parameters["amount"] == str(amount)
+
+    refunded_fulfillment = order.fulfillments.filter(
+        status=FulfillmentStatus.REFUNDED
+    ).first()
+    assert refunded_fulfillment
+    assert refunded_fulfillment.total_refund_amount == payment_txn_captured.total
+    assert refunded_fulfillment.shipping_refund_amount is None
 
 
 @pytest.mark.parametrize(
@@ -5362,12 +5554,11 @@ def test_query_draft_orders_with_sort(
 @pytest.mark.parametrize(
     "orders_filter, count",
     [
-        ({"search": "test_discount"}, 2),
-        ({"search": "test_discount1"}, 1),
-        ({"search": "translated_discount1_name"}, 1),
-        ({"search": "user"}, 2),
-        ({"search": "user1@example.com"}, 1),
-        ({"search": "test@example.com"}, 1),
+        ({"search": "discount name"}, 2),
+        ({"search": "Some other"}, 1),
+        ({"search": "translated"}, 1),
+        ({"search": "user_email"}, 2),
+        ({"search": "test@mirumee.com"}, 1),
         ({"search": "Leslie"}, 1),
         ({"search": "Wade"}, 1),
         ({"search": ""}, 3),
@@ -5388,17 +5579,17 @@ def test_orders_query_with_filter_search(
             Order(
                 user=customer_user,
                 token=str(uuid.uuid4()),
-                user_email="test@example.com",
+                user_email="test@mirumee.com",
                 channel=channel_USD,
             ),
             Order(
                 token=str(uuid.uuid4()),
-                user_email="user1@example.com",
+                user_email="user_email1@example.com",
                 channel=channel_USD,
             ),
             Order(
                 token=str(uuid.uuid4()),
-                user_email="user2@example.com",
+                user_email="user_email2@example.com",
                 channel=channel_USD,
             ),
         ]
@@ -5408,25 +5599,25 @@ def test_orders_query_with_filter_search(
         [
             OrderDiscount(
                 order=orders[0],
-                name="test_discount1",
+                name="Some discount name",
                 value=Decimal("1"),
                 amount_value=Decimal("1"),
-                translated_name="translated_discount1_name",
+                translated_name="translated",
             ),
             OrderDiscount(
                 order=orders[2],
-                name="test_discount2",
+                name="Some other discount name",
                 value=Decimal("10"),
                 amount_value=Decimal("10"),
-                translated_name="translated_discount2_name",
+                translated_name="PL_name",
             ),
         ]
     )
     order_with_payment = orders[1]
-    payment = Payment.objects.create(order=order_with_payment)
-    payment.transactions.create(
-        gateway_response={}, is_success=True, searchable_key="ExternalID"
+    payment = Payment.objects.create(
+        order=order_with_payment, psp_reference="ExternalID"
     )
+    payment.transactions.create(gateway_response={}, is_success=True)
     variables = {"filter": orders_filter}
     staff_api_client.user.user_permissions.add(permission_manage_orders)
     response = staff_api_client.post_graphql(orders_query_with_filter, variables)
@@ -5486,15 +5677,24 @@ def test_orders_query_with_filter_search_by_id(
     assert content["data"]["orders"]["totalCount"] == 1
 
 
+def test_orders_query_with_filter_search_by_id_with_hash(
+    orders_query_with_filter, order, staff_api_client, permission_manage_orders
+):
+    variables = {"filter": {"search": f"#{order.pk}"}}
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(orders_query_with_filter, variables)
+    content = get_graphql_content(response)
+    assert content["data"]["orders"]["totalCount"] == 1
+
+
 @pytest.mark.parametrize(
     "draft_orders_filter, count",
     [
-        ({"search": "test_discount"}, 2),
-        ({"search": "test_discount1"}, 1),
-        ({"search": "translated_discount1_name"}, 1),
-        ({"search": "user"}, 2),
-        ({"search": "user1@example.com"}, 1),
-        ({"search": "test@example.com"}, 1),
+        ({"search": "discount name"}, 2),
+        ({"search": "Some other"}, 1),
+        ({"search": "translated"}, 1),
+        ({"search": "user_email"}, 2),
+        ({"search": "test@mirumee.com"}, 1),
         ({"search": "Leslie"}, 1),
         ({"search": "Wade"}, 1),
         ({"search": ""}, 3),
@@ -5514,19 +5714,19 @@ def test_draft_orders_query_with_filter_search(
             Order(
                 user=customer_user,
                 token=str(uuid.uuid4()),
-                user_email="test@example.com",
+                user_email="test@mirumee.com",
                 status=OrderStatus.DRAFT,
                 channel=channel_USD,
             ),
             Order(
                 token=str(uuid.uuid4()),
-                user_email="user1@example.com",
+                user_email="user_email1@example.com",
                 status=OrderStatus.DRAFT,
                 channel=channel_USD,
             ),
             Order(
                 token=str(uuid.uuid4()),
-                user_email="user2@example.com",
+                user_email="user_email2@example.com",
                 status=OrderStatus.DRAFT,
                 channel=channel_USD,
             ),
@@ -5536,17 +5736,17 @@ def test_draft_orders_query_with_filter_search(
         [
             OrderDiscount(
                 order=orders[0],
-                name="test_discount1",
+                name="Some discount name",
                 value=Decimal("1"),
                 amount_value=Decimal("1"),
-                translated_name="translated_discount1_name",
+                translated_name="translated",
             ),
             OrderDiscount(
                 order=orders[2],
-                name="test_discount2",
+                name="Some other discount name",
                 value=Decimal("10"),
                 amount_value=Decimal("10"),
-                translated_name="translated_discount2_name",
+                translated_name="PL_name",
             ),
         ]
     )
@@ -5564,6 +5764,19 @@ def test_draft_orders_query_with_filter_search_by_id(
     permission_manage_orders,
 ):
     variables = {"filter": {"search": draft_order.pk}}
+    staff_api_client.user.user_permissions.add(permission_manage_orders)
+    response = staff_api_client.post_graphql(draft_orders_query_with_filter, variables)
+    content = get_graphql_content(response)
+    assert content["data"]["draftOrders"]["totalCount"] == 1
+
+
+def test_draft_orders_query_with_filter_search_by_id_with_hash(
+    draft_orders_query_with_filter,
+    draft_order,
+    staff_api_client,
+    permission_manage_orders,
+):
+    variables = {"filter": {"search": f"#{draft_order.pk}"}}
     staff_api_client.user.user_permissions.add(permission_manage_orders)
     response = staff_api_client.post_graphql(draft_orders_query_with_filter, variables)
     content = get_graphql_content(response)
