@@ -1,4 +1,5 @@
 import json
+import os
 from datetime import datetime, timedelta
 from decimal import Decimal
 from unittest.mock import ANY, Mock, patch
@@ -343,11 +344,11 @@ def test_product_query_by_id_available_as_app(
 
 
 def test_product_query_by_id_as_user(
-    user_api_client, permission_manage_products, product
+    user_api_client, permission_manage_products, product, channel_USD
 ):
     query = """
-        query ($id: ID){
-            product(id: $id) {
+        query ($id: ID, $channel: String){
+            product(id: $id, channel: $channel) {
                 id
                 variants {
                     id
@@ -357,6 +358,7 @@ def test_product_query_by_id_as_user(
     """
     variables = {
         "id": graphene.Node.to_global_id("Product", product.pk),
+        "channel": channel_USD.slug,
     }
 
     response = user_api_client.post_graphql(
@@ -3371,7 +3373,10 @@ def test_create_product_with_file_attribute(
                 {
                     "name": existing_value.name,
                     "slug": f"{existing_value.slug}-2",
-                    "file": {"url": existing_value.file_url, "contentType": None},
+                    "file": {
+                        "url": f"http://testserver/media/{existing_value.file_url}",
+                        "contentType": None,
+                    },
                     "reference": None,
                     "richText": None,
                 }
@@ -4969,7 +4974,7 @@ def test_update_product_with_file_attribute_value_new_value_is_not_created(
                 "slug": existing_value.slug,
                 "reference": None,
                 "file": {
-                    "url": existing_value.file_url,
+                    "url": f"http://testserver/media/{existing_value.file_url}",
                     "contentType": existing_value.content_type,
                 },
             }
@@ -6186,6 +6191,39 @@ def test_delete_product_trigger_webhook(
     mocked_recalculate_orders_task.assert_not_called()
 
 
+@patch("saleor.attribute.signals.delete_from_storage_task.delay")
+@patch("saleor.order.tasks.recalculate_orders_task.delay")
+def test_delete_product_with_file_attribute(
+    mocked_recalculate_orders_task,
+    delete_from_storage_task_mock,
+    staff_api_client,
+    product,
+    permission_manage_products,
+    file_attribute,
+):
+    query = DELETE_PRODUCT_MUTATION
+    product_type = product.product_type
+    product_type.product_attributes.add(file_attribute)
+    existing_value = file_attribute.values.first()
+    associate_attribute_values_to_instance(product, file_attribute, existing_value)
+
+    node_id = graphene.Node.to_global_id("Product", product.id)
+    variables = {"id": node_id}
+    response = staff_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_products]
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productDelete"]
+    assert data["product"]["name"] == product.name
+    with pytest.raises(product._meta.model.DoesNotExist):
+        product.refresh_from_db()
+    assert node_id == data["product"]["id"]
+    mocked_recalculate_orders_task.assert_not_called()
+    with pytest.raises(existing_value._meta.model.DoesNotExist):
+        existing_value.refresh_from_db()
+    delete_from_storage_task_mock.assert_called_once_with(existing_value.file_url)
+
+
 def test_delete_product_removes_checkout_lines(
     staff_api_client,
     checkout_with_items,
@@ -6497,15 +6535,24 @@ PRODUCT_TYPE_CREATE_MUTATION = """
                 hasVariants
                 variantAttributes {
                     name
-                    values {
-                        name
+                    choices(first: 10) {
+                        edges {
+                            node {
+                                name
+                            }
+                        }
                     }
                 }
                 productAttributes {
                     name
-                    values {
-                        name
-                        richText
+                    choices(first: 10) {
+                        edges {
+                            node {
+                                name
+                                richText
+                            }
+                        }
+
                     }
                 }
             }
@@ -6567,15 +6614,15 @@ def test_product_type_create_mutation(
 
     pa = product_attributes[0]
     assert data["productAttributes"][0]["name"] == pa.name
-    pa_values = data["productAttributes"][0]["values"]
-    assert sorted([value["name"] for value in pa_values]) == sorted(
+    pa_values = data["productAttributes"][0]["choices"]["edges"]
+    assert sorted([value["node"]["name"] for value in pa_values]) == sorted(
         [value.name for value in pa.values.all()]
     )
 
     va = variant_attributes[0]
     assert data["variantAttributes"][0]["name"] == va.name
-    va_values = data["variantAttributes"][0]["values"]
-    assert sorted([value["name"] for value in va_values]) == sorted(
+    va_values = data["variantAttributes"][0]["choices"]["edges"]
+    assert sorted([value["node"]["name"] for value in va_values]) == sorted(
         [value.name for value in va.values.all()]
     )
 
@@ -6619,21 +6666,16 @@ def test_create_product_type_with_rich_text_attribute(
     expected_attributes = [
         {
             "name": "Color",
-            "values": [
-                {"name": "Red", "richText": None},
-                {"name": "Blue", "richText": None},
-            ],
+            "choices": {
+                "edges": [
+                    {"node": {"name": "Red", "richText": None}},
+                    {"node": {"name": "Blue", "richText": None}},
+                ]
+            },
         },
         {
             "name": "Text",
-            "values": [
-                {
-                    "name": "Rich text attribute content.",
-                    "richText": json.dumps(
-                        rich_text_attribute.values.first().rich_text
-                    ),
-                }
-            ],
+            "choices": {"edges": []},
         },
     ]
     for attribute in data["productAttributes"]:
@@ -7139,6 +7181,43 @@ def test_product_type_delete_mutation_deletes_also_images(
     delete_versatile_image_mock.assert_called_once_with(media_obj.image.name)
 
 
+@patch("saleor.attribute.signals.delete_from_storage_task.delay")
+def test_product_type_delete_with_file_attributes(
+    delete_from_storage_task_mock,
+    staff_api_client,
+    product_with_variant_with_file_attribute,
+    file_attribute,
+    permission_manage_product_types_and_attributes,
+):
+    query = PRODUCT_TYPE_DELETE_MUTATION
+    product_type = product_with_variant_with_file_attribute.product_type
+
+    product_type.product_attributes.add(file_attribute)
+    associate_attribute_values_to_instance(
+        product_with_variant_with_file_attribute,
+        file_attribute,
+        file_attribute.values.last(),
+    )
+    values = list(file_attribute.values.all())
+
+    variables = {"id": graphene.Node.to_global_id("ProductType", product_type.id)}
+    response = staff_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_product_types_and_attributes]
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productTypeDelete"]
+    assert data["productType"]["name"] == product_type.name
+    with pytest.raises(product_type._meta.model.DoesNotExist):
+        product_type.refresh_from_db()
+    for value in values:
+        with pytest.raises(value._meta.model.DoesNotExist):
+            value.refresh_from_db()
+    assert delete_from_storage_task_mock.call_count == len(values)
+    assert set(
+        data.args[0] for data in delete_from_storage_task_mock.call_args_list
+    ) == {v.file_url for v in values}
+
+
 def test_product_type_delete_mutation_variants_in_draft_order(
     staff_api_client,
     permission_manage_product_types_and_attributes,
@@ -7267,6 +7346,11 @@ def test_product_media_create_mutation(
     product.refresh_from_db()
     product_image = product.media.last()
     assert product_image.image.file
+    img_name, format = os.path.splitext(image_file._name)
+    file_name = product_image.image.name
+    assert file_name != image_file._name
+    assert file_name.startswith(f"products/{img_name}")
+    assert file_name.endswith(format)
 
     # The image creation should have triggered a warm-up
     mock_create_thumbnails.assert_called_once_with(product_image.pk)
@@ -7426,7 +7510,7 @@ def test_invalid_product_media_create_mutation(
 
     content = get_graphql_content(response)
     assert content["data"]["productMediaCreate"]["errors"] == [
-        {"field": "image", "message": "Invalid file type"}
+        {"field": "image", "message": "Invalid file type."}
     ]
     product.refresh_from_db()
     assert product.media.count() == 0
