@@ -73,10 +73,14 @@ def get_product_queryset(scope: Dict[str, Union[str, dict]]) -> "QuerySet":
 
     queryset = queryset.order_by("pk")
 
+    print("-------------------------")
+    print(queryset.query.sql_with_params())
+    print("-------------------------")
+
     return queryset
 
 
-def queryset_in_batches(queryset):
+def queryset_in_batches(queryset: "QuerySet"):
     """Slice a queryset into batches.
 
     Input queryset should be sorted be pk.

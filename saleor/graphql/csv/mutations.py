@@ -73,7 +73,7 @@ class ExportProducts(BaseMutation):
 
     class Meta:
         description = "Export products to csv file."
-        permissions = (ProductPermissions.MANAGE_PRODUCTS,)
+        # permissions = (ProductPermissions.MANAGE_PRODUCTS,)
         error_type_class = ExportError
         error_type_field = "export_errors"
 
@@ -87,7 +87,7 @@ class ExportProducts(BaseMutation):
         app = info.context.app
         kwargs = {"app": app} if app else {"user": info.context.user}
 
-        export_file = csv_models.ExportFile.objects.create(**kwargs)
+        export_file: csv_models.ExportFile = csv_models.ExportFile.objects.create(**kwargs)
         export_started_event(export_file=export_file, **kwargs)
         export_products_task.delay(export_file.pk, scope, export_info, file_type)
 
