@@ -43,7 +43,6 @@ from ..channel.utils import clean_channel
 from ..core.enums import LanguageCodeEnum
 from ..core.mutations import BaseMutation, ModelMutation
 from ..core.types.common import CheckoutError
-from ..core.utils import from_global_id_or_error
 from ..core.validators import validate_variants_available_in_channel
 from ..order.types import Order
 from ..product.types import ProductVariant
@@ -560,7 +559,8 @@ class CheckoutCustomerAttach(BaseMutation):
         )
 
         checkout.user = info.context.user
-        checkout.save(update_fields=["user", "last_change"])
+        checkout.email = info.context.user.email
+        checkout.save(update_fields=["email", "user", "last_change"])
 
         info.context.plugins.checkout_updated(checkout)
         return CheckoutCustomerAttach(checkout=checkout)
@@ -628,7 +628,7 @@ class CheckoutShippingAddressUpdate(BaseMutation, I18nMixin):
 
     @classmethod
     def perform_mutation(cls, _root, info, checkout_id, shipping_address):
-        _type, pk = from_global_id_or_error(
+        pk = cls.get_global_id_or_error(
             checkout_id, only_type=Checkout, field="checkout_id"
         )
 
@@ -902,7 +902,7 @@ class CheckoutComplete(BaseMutation):
                     field="checkout_id",
                 )
             except ValidationError as e:
-                _type, checkout_token = from_global_id_or_error(
+                checkout_token = cls.get_global_id_or_error(
                     checkout_id, only_type=Checkout, field="checkout_id"
                 )
 
