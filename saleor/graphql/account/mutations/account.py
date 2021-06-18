@@ -78,7 +78,7 @@ class AccountRegister(ModelMutation):
         return response
 
     @classmethod
-    def clean_input(cls, info, instance, data, input_cls=None):
+    def clean_input(cls, info, instance, data: dict, input_cls=None):
         data["metadata"] = {
             item["key"]: item["value"] for item in data.get("metadata") or []
         }

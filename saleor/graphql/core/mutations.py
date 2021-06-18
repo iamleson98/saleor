@@ -1,4 +1,5 @@
 import os
+from saleor.account import models
 import secrets
 from itertools import chain
 from typing import Tuple, Union
@@ -278,7 +279,8 @@ class BaseMutation(graphene.Mutation):
         permissions = permissions or cls._meta.permissions
         if not permissions:
             return True
-        if context.user.has_perms(permissions):
+        user: models.User = context.user
+        if user.has_perms(permissions):
             return True
         app = getattr(context, "app", None)
         if app:

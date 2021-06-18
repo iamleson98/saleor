@@ -1,3 +1,4 @@
+from saleor.order.models import Order
 import graphene
 from django.core.exceptions import ValidationError
 
@@ -8,7 +9,7 @@ from ...warehouse.availability import check_stock_quantity
 from ..core.validators import validate_variants_available_in_channel
 
 
-def validate_total_quantity(order):
+def validate_total_quantity(order: Order):
     if order.get_total_quantity() == 0:
         raise ValidationError(
             {
@@ -77,7 +78,7 @@ def validate_shipping_address(order):
         )
 
 
-def validate_order_lines(order, country):
+def validate_order_lines(order: Order, country: str):
     for line in order.lines.all():
         if line.variant is None:
             raise ValidationError(
@@ -203,7 +204,7 @@ def validate_channel_is_active(channel):
         )
 
 
-def validate_draft_order(order, country):
+def validate_draft_order(order: Order, country: str):
     """Check if the given order contains the proper data.
 
     - Has proper customer data,
