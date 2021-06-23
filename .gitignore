@@ -32,6 +32,15 @@ dist/
 /node_modules/
 /static/
 
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
 # Exported results file
 django-queries-results.html
 env
