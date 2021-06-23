@@ -750,6 +750,10 @@ ME_QUERY = """
             checkout {
                 token
             }
+            userPermissions {
+                code
+                name
+            }
         }
     }
 """
@@ -760,6 +764,20 @@ def test_me_query(user_api_client):
     content = get_graphql_content(response)
     data = content["data"]["me"]
     assert data["email"] == user_api_client.user.email
+
+
+def test_me_user_permissions_query(
+    user_api_client, permission_manage_users, permission_group_manage_users
+):
+    user = user_api_client.user
+    user.user_permissions.add(permission_manage_users)
+    user.groups.add(permission_group_manage_users)
+    response = user_api_client.post_graphql(ME_QUERY)
+    content = get_graphql_content(response)
+    user_permissions = content["data"]["me"]["userPermissions"]
+
+    assert len(user_permissions) == 1
+    assert user_permissions[0]["code"] == permission_manage_users.codename.upper()
 
 
 def test_me_query_anonymous_client(api_client):
@@ -3433,6 +3451,8 @@ def test_address_validation_rules(user_api_client):
             addressFormat
             addressLatinFormat
             postalCodeMatchers
+            cityType
+            cityAreaType
         }
     }
     """
@@ -3444,6 +3464,8 @@ def test_address_validation_rules(user_api_client):
     assert data["countryName"] == "POLAND"
     assert data["addressFormat"] is not None
     assert data["addressLatinFormat"] is not None
+    assert data["cityType"] == "city"
+    assert data["cityAreaType"] == "suburb"
     matcher = data["postalCodeMatchers"][0]
     matcher = re.compile(matcher)
     assert matcher.match("00-123")
@@ -3491,7 +3513,7 @@ def test_address_validation_rules_with_country_area(user_api_client):
     assert data["countryAreaChoices"]
     assert data["cityType"] == "city"
     assert data["cityChoices"]
-    assert data["cityAreaType"] == "city"
+    assert data["cityAreaType"] == "district"
     assert not data["cityAreaChoices"]
 
 
