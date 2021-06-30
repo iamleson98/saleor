@@ -72,6 +72,7 @@ All notable, unreleased changes to this project will be documented in this file.
 - Use GraphQL IDs instead of database IDs in export - #7240 by @IKarbowiak
 - Fix draft order tax mismatch - #7226 by @IKarbowiak
   - Introduce `calculate_order_line_total` plugin method
+- Update core logging for better Celery tasks handling - #7251 by @tomaszszymanski129
 - Raise ValidationError when refund cannot be performed - #7260 by @IKarbowiak
 - Extend order with origin and original order values - #7326 by @IKarbowiak
 - Fix customer addresses missing after customer creation - #7327 by @tomaszszymanski129
@@ -121,6 +122,7 @@ All notable, unreleased changes to this project will be documented in this file.
   - Extend Order type with errors: [OrderError!]! field
   - Create tasks for deleting order lines by deleting products or variants
 - Fix doubled checkout total price for one line and zero shipping price - #7532 by @IKarbowiak
+- Deprecate nested objects in TranslatableContent types - #7522 by @IKarbowiak
 
 ### Breaking
 - Multichannel MVP: Multicurrency - #6242 by @fowczarek @d-wysocki
