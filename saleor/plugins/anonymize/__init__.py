@@ -1,7 +1,8 @@
+from saleor.order.models import Order
 from ...core.anonymize import obfuscate_address, obfuscate_email
 
 
-def obfuscate_order(order):
+def obfuscate_order(order: Order):
     order.user_email = obfuscate_email(order.user_email)
     if order.shipping_address:
         order.shipping_address = obfuscate_address(order.shipping_address)

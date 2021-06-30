@@ -250,7 +250,7 @@ def validate_gateway_response(response: GatewayResponse):
 
 
 @traced_atomic_transaction()
-def gateway_postprocess(transaction, payment):
+def gateway_postprocess(transaction: Transaction, payment: Payment):
     changed_fields = []
 
     if not transaction.is_success or transaction.already_processed:

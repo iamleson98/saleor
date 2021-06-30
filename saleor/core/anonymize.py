@@ -1,3 +1,6 @@
+from saleor.account.models import Address
+
+
 def obfuscate_email(value):
     string_rep = str(value)
     if "@" not in str(string_rep):
@@ -16,7 +19,7 @@ def obfuscate_string(value, phone=False):
     return string_rep[:cutoff] + "." * (string_len - cutoff)
 
 
-def obfuscate_address(address):
+def obfuscate_address(address: Address):
     if not address:
         return address
     address.first_name = obfuscate_string(address.first_name)
