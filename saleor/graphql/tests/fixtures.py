@@ -1,5 +1,6 @@
 import json
 import logging
+from unittest import mock
 from unittest.mock import Mock
 
 import graphene
@@ -93,7 +94,8 @@ class ApiClient(Client):
 
         if permissions:
             if check_no_permissions:
-                response = super().post(API_PATH, data, **kwargs)
+                with mock.patch("saleor.graphql.views.handled_errors_logger"):
+                    response = super().post(API_PATH, data, **kwargs)
                 assert_no_permission(response)
             if self.app:
                 self.app.permissions.add(*permissions)
@@ -139,13 +141,18 @@ def user_api_client(customer_user):
 
 
 @pytest.fixture
+def user2_api_client(customer_user2):
+    return ApiClient(user=customer_user2)
+
+
+@pytest.fixture
 def api_client():
     return ApiClient(user=AnonymousUser())
 
 
 @pytest.fixture
 def schema_context():
-    params = {"user": AnonymousUser(), "plugins": get_plugins_manager()}
+    params = {"user": AnonymousUser(), "app": None, "plugins": get_plugins_manager()}
     return graphene.types.Context(**params)
 
 

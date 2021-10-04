@@ -1,5 +1,6 @@
 import graphene
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from graphene.types import InputObjectType
 
 from ....account.models import User
@@ -18,7 +19,7 @@ from ....order.utils import (
     recalculate_order,
     update_order_prices,
 )
-from ....warehouse.management import allocate_stocks
+from ....warehouse.management import allocate_preorders, allocate_stocks
 from ...account.i18n import I18nMixin
 from ...account.types import AddressInput
 from ...channel.types import Channel
@@ -50,7 +51,7 @@ class OrderLineCreateInput(OrderLineInput):
 class DraftOrderInput(InputObjectType):
     billing_address = AddressInput(description="Billing address of the customer.")
     user = graphene.ID(
-        descripton="Customer associated with the draft order.", name="user"
+        description="Customer associated with the draft order.", name="user"
     )
     user_email = graphene.String(description="Email address of the customer.")
     discount = PositiveDecimal(description="Discount amount for the order.")
@@ -237,12 +238,20 @@ class DraftOrderCreate(ModelMutation, I18nMixin):
             for variant, quantity in zip(variants, quantities):
                 lines.append((quantity, variant))
                 add_variant_to_order(
-                    instance, variant, quantity, info.context.user, info.context.plugins
+                    instance,
+                    variant,
+                    quantity,
+                    info.context.user,
+                    info.context.app,
+                    info.context.plugins,
                 )
 
             # New event
             events.order_added_products_event(
-                order=instance, user=info.context.user, order_lines=lines
+                order=instance,
+                user=info.context.user,
+                app=info.context.app,
+                order_lines=lines,
             )
 
     @classmethod
@@ -252,7 +261,9 @@ class DraftOrderCreate(ModelMutation, I18nMixin):
 
         # Create draft created event if the instance is from scratch
         if not created:
-            events.draft_order_created_event(order=instance, user=info.context.user)
+            events.draft_order_created_event(
+                order=instance, user=info.context.user, app=info.context.app
+            )
 
         instance.save(update_fields=["billing_address", "shipping_address"])
 
@@ -303,6 +314,16 @@ class DraftOrderCreate(ModelMutation, I18nMixin):
                 code=OrderErrorCode.TAX_ERROR.value,
             )
 
+        if new_instance:
+            transaction.on_commit(
+                lambda: info.context.plugins.draft_order_created(instance)
+            )
+
+        else:
+            transaction.on_commit(
+                lambda: info.context.plugins.draft_order_updated(instance)
+            )
+
         # Post-process the results
         recalculate_order(instance)
 
@@ -350,6 +371,26 @@ class DraftOrderDelete(ModelDeleteMutation):
         error_type_class = OrderError
         error_type_field = "order_errors"
 
+    @classmethod
+    def clean_instance(cls, info, instance):
+        if instance.status != OrderStatus.DRAFT:
+            raise ValidationError(
+                {
+                    "id": ValidationError(
+                        "Provided order id belongs to non-draft order.",
+                        code=OrderErrorCode.INVALID,
+                    )
+                }
+            )
+
+    @classmethod
+    @traced_atomic_transaction()
+    def perform_mutation(cls, _root, info, **data):
+        order = cls.get_instance(info, **data)
+        response = super().perform_mutation(_root, info, **data)
+        transaction.on_commit(lambda: info.context.plugins.draft_order_deleted(order))
+        return response
+
 
 class DraftOrderComplete(BaseMutation):
     order = graphene.Field(Order, description="Completed order.")
@@ -377,7 +418,13 @@ class DraftOrderComplete(BaseMutation):
 
     @classmethod
     def perform_mutation(cls, _root, info, id):
-        order = cls.get_node_or_error(info, id, only_type=Order)
+        manager = info.context.plugins
+        order = cls.get_node_or_error(
+            info,
+            id,
+            only_type=Order,
+            qs=models.Order.objects.prefetch_related("lines__variant"),
+        )
         country = get_order_country(order)
         validate_draft_order(order, country)
         cls.update_user_fields(order)
@@ -393,17 +440,24 @@ class DraftOrderComplete(BaseMutation):
         order.save()
 
         for line in order.lines.all():
-            if line.variant.track_inventory:
+            if line.variant.track_inventory or line.variant.is_preorder_active():
                 line_data = OrderLineData(
                     line=line, quantity=line.quantity, variant=line.variant
                 )
+                channel_slug = order.channel.slug
                 try:
-                    allocate_stocks([line_data], country, order.channel.slug)
+                    with traced_atomic_transaction():
+                        allocate_stocks([line_data], country, channel_slug, manager)
+                        allocate_preorders([line_data], channel_slug)
                 except InsufficientStock as exc:
                     errors = prepare_insufficient_stock_order_validation_errors(exc)
                     raise ValidationError({"lines": errors})
         order_created(
-            order, user=info.context.user, manager=info.context.plugins, from_draft=True
+            order,
+            user=info.context.user,
+            app=info.context.app,
+            manager=info.context.plugins,
+            from_draft=True,
         )
 
         return DraftOrderComplete(order=order)

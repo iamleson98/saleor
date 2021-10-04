@@ -1,11 +1,13 @@
 import graphene
 from django.core.exceptions import ValidationError
+from django.db import transaction
 
 from ....account.models import User
 from ....core.exceptions import InsufficientStock
 from ....core.permissions import OrderPermissions
 from ....core.taxes import TaxError, zero_taxed_money
 from ....core.tracing import traced_atomic_transaction
+from ....giftcard.utils import deactivate_order_gift_cards, order_has_gift_card_lines
 from ....order import FulfillmentStatus, OrderLineData, OrderStatus, events, models
 from ....order.actions import (
     cancel_order,
@@ -139,7 +141,7 @@ def clean_refund_payment(payment):
         )
 
 
-def try_payment_action(order, user, payment, func, *args, **kwargs):
+def try_payment_action(order, user, app, payment, func, *args, **kwargs):
     try:
         result = func(*args, **kwargs)
         # provided order might alter it's total_paid.
@@ -148,11 +150,30 @@ def try_payment_action(order, user, payment, func, *args, **kwargs):
     except (PaymentError, ValueError) as e:
         message = str(e)
         events.payment_failed_event(
-            order=order, user=user, message=message, payment=payment
+            order=order, user=user, app=app, message=message, payment=payment
         )
         raise ValidationError(
             {"payment": ValidationError(message, code=OrderErrorCode.PAYMENT_ERROR)}
         )
+
+
+def clean_order_refund(order):
+    if order_has_gift_card_lines(order):
+        raise ValidationError(
+            {
+                "id": ValidationError(
+                    "Cannot refund order with gift card lines.",
+                    code=OrderErrorCode.CANNOT_REFUND.value,
+                )
+            }
+        )
+
+
+def get_webhook_handler_by_order_status(status, info):
+    if status == OrderStatus.DRAFT:
+        return info.context.plugins.draft_order_updated
+    else:
+        return info.context.plugins.order_updated
 
 
 class OrderUpdateInput(graphene.InputObjectType):
@@ -215,12 +236,14 @@ class OrderUpdate(DraftOrderCreate):
             info.context.plugins,
             info.context.site.settings.include_taxes_in_prices,
         )
-        info.context.plugins.order_updated(instance)
+        transaction.on_commit(lambda: info.context.plugins.order_updated(instance))
 
 
 class OrderUpdateShippingInput(graphene.InputObjectType):
     shipping_method = graphene.ID(
-        description="ID of the selected shipping method.", name="shippingMethod"
+        description="ID of the selected shipping method,"
+        " pass null to remove currently assigned shipping method.",
+        name="shippingMethod",
     )
 
 
@@ -251,11 +274,16 @@ class OrderUpdateShipping(EditableOrderValidationMixin, BaseMutation):
             description="ID of the order to update a shipping method.",
         )
         input = OrderUpdateShippingInput(
-            description="Fields required to change shipping method of the order."
+            description="Fields required to change shipping method of the order.",
+            required=True,
         )
 
     class Meta:
-        description = "Updates a shipping method of the order."
+        description = (
+            "Updates a shipping method of the order."
+            " Requires shipping method ID to update, when null is passed "
+            "then currently assigned shipping method is removed."
+        )
         permissions = (OrderPermissions.MANAGE_ORDERS,)
         error_type_class = OrderError
         error_type_field = "order_errors"
@@ -269,14 +297,36 @@ class OrderUpdateShipping(EditableOrderValidationMixin, BaseMutation):
             qs=models.Order.objects.prefetch_related("lines"),
         )
         cls.validate_order(order)
+
         data = data.get("input")
 
-        if not data["shipping_method"]:
+        if "shipping_method" not in data:
+            raise ValidationError(
+                {
+                    "shipping_method": ValidationError(
+                        "Shipping method must be provided to perform mutation.",
+                        code=OrderErrorCode.SHIPPING_METHOD_REQUIRED,
+                    )
+                }
+            )
+
+        if not data.get("shipping_method"):
             if not order.is_draft() and order.is_shipping_required():
                 raise ValidationError(
                     {
                         "shipping_method": ValidationError(
                             "Shipping method is required for this order.",
+                            code=OrderErrorCode.SHIPPING_METHOD_REQUIRED,
+                        )
+                    }
+                )
+
+            # Shipping method is detached only when null is passed in input.
+            if data["shipping_method"] == "":
+                raise ValidationError(
+                    {
+                        "shipping_method": ValidationError(
+                            "Shipping method cannot be empty.",
                             code=OrderErrorCode.SHIPPING_METHOD_REQUIRED,
                         )
                     }
@@ -294,6 +344,7 @@ class OrderUpdateShipping(EditableOrderValidationMixin, BaseMutation):
                     "shipping_method_name",
                 ]
             )
+            recalculate_order(order)
             return OrderUpdateShipping(order=order)
 
         method = cls.get_node_or_error(
@@ -377,14 +428,18 @@ class OrderAddNote(BaseMutation):
         return cleaned_input
 
     @classmethod
+    @traced_atomic_transaction()
     def perform_mutation(cls, _root, info, **data):
         order = cls.get_node_or_error(info, data.get("id"), only_type=Order)
         cleaned_input = cls.clean_input(info, order, data)
         event = events.order_note_added_event(
             order=order,
             user=info.context.user,
+            app=info.context.app,
             message=cleaned_input["message"],
         )
+        func = get_webhook_handler_by_order_status(order.status, info)
+        transaction.on_commit(lambda: func(order))
         return OrderAddNote(order=order, event=event)
 
 
@@ -401,10 +456,19 @@ class OrderCancel(BaseMutation):
         error_type_field = "order_errors"
 
     @classmethod
+    @traced_atomic_transaction()
     def perform_mutation(cls, _root, info, **data):
         order = cls.get_node_or_error(info, data.get("id"), only_type=Order)
         clean_order_cancel(order)
-        cancel_order(order=order, user=info.context.user, manager=info.context.plugins)
+        user = info.context.user
+        app = info.context.app
+        cancel_order(
+            order=order,
+            user=user,
+            app=app,
+            manager=info.context.plugins,
+        )
+        deactivate_order_gift_cards(order.id, user, app)
         return OrderCancel(order=order)
 
 
@@ -436,12 +500,12 @@ class OrderMarkAsPaid(BaseMutation):
         order = cls.get_node_or_error(info, data.get("id"), only_type=Order)
         transaction_reference = data.get("transaction_reference")
         cls.clean_billing_address(order)
-        try_payment_action(
-            order, info.context.user, None, clean_mark_order_as_paid, order
-        )
+        user = info.context.user
+        app = info.context.app
+        try_payment_action(order, user, app, None, clean_mark_order_as_paid, order)
 
         mark_order_as_paid(
-            order, info.context.user, info.context.plugins, transaction_reference
+            order, user, app, info.context.plugins, transaction_reference
         )
         return OrderMarkAsPaid(order=order)
 
@@ -480,6 +544,7 @@ class OrderCapture(BaseMutation):
         transaction = try_payment_action(
             order,
             info.context.user,
+            info.context.app,
             payment,
             gateway.capture,
             payment,
@@ -491,7 +556,12 @@ class OrderCapture(BaseMutation):
         # asynchronous webhook with update status
         if transaction.kind == TransactionKind.CAPTURE:
             order_captured(
-                order, info.context.user, amount, payment, info.context.plugins
+                order,
+                info.context.user,
+                info.context.app,
+                amount,
+                payment,
+                info.context.plugins,
             )
         return OrderCapture(order=order)
 
@@ -517,6 +587,7 @@ class OrderVoid(BaseMutation):
         transaction = try_payment_action(
             order,
             info.context.user,
+            info.context.app,
             payment,
             gateway.void,
             payment,
@@ -526,7 +597,13 @@ class OrderVoid(BaseMutation):
         # Confirm that we changed the status to void. Some payment can receive
         # asynchronous webhook with update status
         if transaction.kind == TransactionKind.VOID:
-            order_voided(order, info.context.user, payment, info.context.plugins)
+            order_voided(
+                order,
+                info.context.user,
+                info.context.app,
+                payment,
+                info.context.plugins,
+            )
         return OrderVoid(order=order)
 
 
@@ -558,12 +635,15 @@ class OrderRefund(BaseMutation):
             )
 
         order = cls.get_node_or_error(info, data.get("id"), only_type=Order)
+        clean_order_refund(order)
+
         payment = order.get_last_payment()
         clean_refund_payment(payment)
 
         transaction = try_payment_action(
             order,
             info.context.user,
+            info.context.app,
             payment,
             gateway.refund,
             payment,
@@ -579,7 +659,12 @@ class OrderRefund(BaseMutation):
         # asynchronous webhook with update status
         if transaction.kind == TransactionKind.REFUND:
             order_refunded(
-                order, info.context.user, amount, payment, info.context.plugins
+                order,
+                info.context.user,
+                info.context.app,
+                amount,
+                payment,
+                info.context.plugins,
             )
         return OrderRefund(order=order)
 
@@ -636,11 +721,18 @@ class OrderConfirm(ModelMutation):
             order_captured(
                 order,
                 info.context.user,
+                info.context.app,
                 payment.total,
                 payment,
                 manager,
             )
-        order_confirmed(order, info.context.user, manager, send_confirmation_email=True)
+        order_confirmed(
+            order,
+            info.context.user,
+            info.context.app,
+            manager,
+            send_confirmation_email=True,
+        )
         return OrderConfirm(order=order)
 
 
@@ -704,7 +796,7 @@ class OrderLinesCreate(EditableOrderValidationMixin, BaseMutation):
             raise ValidationError(error)
 
     @staticmethod
-    def add_lines_to_order(order, lines_to_add, user, manager):
+    def add_lines_to_order(order, lines_to_add, user, app, manager):
         try:
             return [
                 add_variant_to_order(
@@ -712,6 +804,7 @@ class OrderLinesCreate(EditableOrderValidationMixin, BaseMutation):
                     variant,
                     quantity,
                     user,
+                    app,
                     manager,
                     allocate_stock=order.is_unconfirmed(),
                 )
@@ -724,6 +817,7 @@ class OrderLinesCreate(EditableOrderValidationMixin, BaseMutation):
             )
 
     @classmethod
+    @traced_atomic_transaction()
     def perform_mutation(cls, _root, info, **data):
         order = cls.get_node_or_error(info, data.get("id"), only_type=Order)
         cls.validate_order(order)
@@ -732,15 +826,26 @@ class OrderLinesCreate(EditableOrderValidationMixin, BaseMutation):
         cls.validate_variants(order, variants)
 
         lines = cls.add_lines_to_order(
-            order, lines_to_add, info.context.user, info.context.plugins
+            order,
+            lines_to_add,
+            info.context.user,
+            info.context.app,
+            info.context.plugins,
         )
 
         # Create the products added event
         events.order_added_products_event(
-            order=order, user=info.context.user, order_lines=lines_to_add
+            order=order,
+            user=info.context.user,
+            app=info.context.app,
+            order_lines=lines_to_add,
         )
 
         recalculate_order(order)
+
+        func = get_webhook_handler_by_order_status(order.status, info)
+        transaction.on_commit(lambda: func(order))
+
         return OrderLinesCreate(order=order, order_lines=lines)
 
 
@@ -760,7 +865,9 @@ class OrderLineDelete(EditableOrderValidationMixin, BaseMutation):
         error_type_field = "order_errors"
 
     @classmethod
+    @traced_atomic_transaction()
     def perform_mutation(cls, _root, info, id):
+        manager = info.context.plugins
         line = cls.get_node_or_error(
             info,
             id,
@@ -781,15 +888,33 @@ class OrderLineDelete(EditableOrderValidationMixin, BaseMutation):
             variant=line.variant,
             warehouse_pk=warehouse_pk,
         )
-        delete_order_line(line_info)
+        delete_order_line(line_info, manager)
         line.id = db_id
 
+        if not order.is_shipping_required():
+            order.shipping_method = None
+            order.shipping_price = zero_taxed_money(order.currency)
+            order.shipping_method_name = None
+            order.save(
+                update_fields=[
+                    "currency",
+                    "shipping_method",
+                    "shipping_price_net_amount",
+                    "shipping_price_gross_amount",
+                    "shipping_method_name",
+                ]
+            )
         # Create the removal event
         events.order_removed_products_event(
-            order=order, user=info.context.user, order_lines=[(line.quantity, line)]
+            order=order,
+            user=info.context.user,
+            app=info.context.app,
+            order_lines=[(line.quantity, line)],
         )
 
         recalculate_order(order)
+        func = get_webhook_handler_by_order_status(order.status, info)
+        transaction.on_commit(lambda: func(order))
         return OrderLineDelete(order=order, order_line=line)
 
 
@@ -828,7 +953,9 @@ class OrderLineUpdate(EditableOrderValidationMixin, ModelMutation):
         return cleaned_input
 
     @classmethod
+    @traced_atomic_transaction()
     def save(cls, info, instance, cleaned_input):
+        manager = info.context.plugins
         warehouse_pk = (
             instance.allocations.first().stock.warehouse.pk
             if instance.order.is_unconfirmed()
@@ -843,10 +970,12 @@ class OrderLineUpdate(EditableOrderValidationMixin, ModelMutation):
         try:
             change_order_line_quantity(
                 info.context.user,
+                info.context.app,
                 line_info,
                 instance.old_quantity,
                 instance.quantity,
                 instance.order.channel.slug,
+                manager,
             )
         except InsufficientStock:
             raise ValidationError(
@@ -854,6 +983,9 @@ class OrderLineUpdate(EditableOrderValidationMixin, ModelMutation):
                 code=OrderErrorCode.INSUFFICIENT_STOCK,
             )
         recalculate_order(instance.order)
+
+        func = get_webhook_handler_by_order_status(instance.order.status, info)
+        transaction.on_commit(lambda: func(instance.order))
 
     @classmethod
     def success_response(cls, instance):
