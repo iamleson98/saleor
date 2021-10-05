@@ -27,6 +27,7 @@ from jwt.exceptions import PyJWTError
 from .. import __version__ as saleor_version
 from ..core.exceptions import PermissionDenied, ReadOnlyException
 from ..core.utils import is_valid_ipv4, is_valid_ipv6
+from .utils import query_fingerprint
 
 API_PATH = SimpleLazyObject(lambda: reverse("api"))
 INT_ERROR_MSG = "Int cannot represent non 32-bit signed integer value"
@@ -113,7 +114,11 @@ class GraphQLView(View):
         return response
 
     def render_playground(self, request):
-        return render(request, "graphql/playground.html", {})
+        return render(
+            request,
+            "graphql/playground.html",
+            {"api_url": request.build_absolute_uri(str(API_PATH))},
+        )
 
     def _handle_query(self, request: HttpRequest) -> JsonResponse:
         try:
@@ -154,6 +159,7 @@ class GraphQLView(View):
                 opentracing.tags.HTTP_URL,
                 request.build_absolute_uri(request.get_full_path()),
             )
+            span.set_tag("http.useragent", request.META.get("HTTP_USER_AGENT", ""))
             span.set_tag("span.type", "web")
 
             request_ips = request.META.get(settings.REAL_IP_ENVIRON, "")
@@ -238,14 +244,14 @@ class GraphQLView(View):
                 if selection_name == "__schema":
                     query_with_schema = True
                     if selection_count > 1:
-                        msg = "`__schema` must be fetched in separete query"
+                        msg = "`__schema` must be fetched in separate query"
                         raise GraphQLError(msg)
         return query_with_schema
 
     def execute_graphql_request(self, request: HttpRequest, data: dict):
         with opentracing.global_tracer().start_active_span("graphql_query") as scope:
             span = scope.span
-            span.set_tag(opentracing.tags.COMPONENT, "GraphQL")
+            span.set_tag(opentracing.tags.COMPONENT, "graphql")
 
             query, variables, operation_name = self.get_graphql_params(request, data)
 
@@ -256,6 +262,7 @@ class GraphQLView(View):
             if document is not None:
                 raw_query_string = document.document_string
                 span.set_tag("graphql.query", raw_query_string)
+                span.set_tag("graphql.query_fingerprint", query_fingerprint(document))
                 try:
                     query_contains_schema = self.check_if_query_contains_only_schema(
                         document

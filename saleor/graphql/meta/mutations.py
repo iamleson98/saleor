@@ -7,6 +7,7 @@ from graphql.error.base import GraphQLError
 from ...core import models
 from ...core.error_codes import MetadataErrorCode
 from ...core.exceptions import PermissionDenied
+from ...discount import models as discount_models
 from ...menu import models as menu_models
 from ...product import models as product_models
 from ...shipping import models as shipping_models
@@ -14,6 +15,7 @@ from ..channel import ChannelContext
 from ..core.mutations import BaseMutation
 from ..core.types.common import MetadataError
 from ..core.utils import from_global_id_or_error
+from ..payment.utils import metadata_contains_empty_key
 from .extra_methods import MODEL_EXTRA_METHODS, MODEL_EXTRA_PREFETCH
 from .permissions import PRIVATE_META_PERMISSION_MAP, PUBLIC_META_PERMISSION_MAP
 from .types import ObjectWithMetadata
@@ -66,8 +68,7 @@ class BaseMetadataMutation(BaseMutation):
 
     @classmethod
     def validate_metadata_keys(cls, metadata_list: List[dict]):
-        # raise an error when any of the key is empty
-        if not all([data["key"].strip() for data in metadata_list]):
+        if metadata_contains_empty_key(metadata_list):
             raise ValidationError(
                 {
                     "input": ValidationError(
@@ -139,13 +140,15 @@ class BaseMetadataMutation(BaseMutation):
             [
                 isinstance(instance, Model)
                 for Model in [
-                    product_models.Product,
-                    product_models.ProductVariant,
-                    product_models.Collection,
-                    shipping_models.ShippingMethod,
-                    shipping_models.ShippingZone,
+                    discount_models.Sale,
+                    discount_models.Voucher,
                     menu_models.Menu,
                     menu_models.MenuItem,
+                    product_models.Collection,
+                    product_models.Product,
+                    product_models.ProductVariant,
+                    shipping_models.ShippingMethod,
+                    shipping_models.ShippingZone,
                 ]
             ]
         )

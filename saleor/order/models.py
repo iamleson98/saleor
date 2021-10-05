@@ -16,6 +16,7 @@ from django_measurement.models import MeasurementField
 from django_prices.models import MoneyField, TaxedMoneyField
 from measurement.measures import Weight
 
+from ..app.models import App
 from ..channel.models import Channel
 from ..core.models import ModelWithMetadata
 from ..core.permissions import OrderPermissions
@@ -129,9 +130,20 @@ class Order(ModelWithMetadata):
         related_name="orders",
         on_delete=models.SET_NULL,
     )
+    collection_point = models.ForeignKey(
+        "warehouse.Warehouse",
+        blank=True,
+        null=True,
+        related_name="orders",
+        on_delete=models.SET_NULL,
+    )
     shipping_method_name = models.CharField(
         max_length=255, null=True, default=None, blank=True, editable=False
     )
+    collection_point_name = models.CharField(
+        max_length=255, null=True, default=None, blank=True, editable=False
+    )
+
     channel = models.ForeignKey(
         Channel,
         related_name="orders",
@@ -406,8 +418,11 @@ class OrderLine(models.Model):
     variant_name = models.CharField(max_length=255, default="", blank=True)
     translated_product_name = models.CharField(max_length=386, default="", blank=True)
     translated_variant_name = models.CharField(max_length=255, default="", blank=True)
-    product_sku = models.CharField(max_length=255)
+    product_sku = models.CharField(max_length=255, null=True, blank=True)
+    # str with GraphQL ID used as fallback when product SKU is not available
+    product_variant_id = models.CharField(max_length=255, null=True, blank=True)
     is_shipping_required = models.BooleanField()
+    is_gift_card = models.BooleanField()
     quantity = models.IntegerField(validators=[MinValueValidator(1)])
     quantity_fulfilled = models.IntegerField(
         validators=[MinValueValidator(0)], default=0
@@ -647,6 +662,7 @@ class OrderEvent(models.Model):
         on_delete=models.SET_NULL,
         related_name="+",
     )
+    app = models.ForeignKey(App, related_name="+", on_delete=models.SET_NULL, null=True)
 
     class Meta:
         ordering = ("date",)

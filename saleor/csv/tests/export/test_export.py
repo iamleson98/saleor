@@ -1,3 +1,4 @@
+import datetime
 import json
 import shutil
 from tempfile import NamedTemporaryFile
@@ -21,6 +22,7 @@ from ...utils.export import (
     export_products_in_batches,
     get_filename,
     get_product_queryset,
+    parse_input,
     save_csv_file_in_export_file,
 )
 
@@ -44,7 +46,11 @@ def test_export_products(
 ):
     # given
     export_info = {
-        "fields": [ProductFieldEnum.NAME.value],
+        "fields": [
+            ProductFieldEnum.NAME.value,
+            ProductFieldEnum.VARIANT_ID.value,
+            ProductFieldEnum.VARIANT_SKU.value,
+        ],
         "warehouses": [],
         "attributes": [],
         "channels": [],
@@ -53,12 +59,14 @@ def test_export_products(
     mock_file = MagicMock(spec=File)
     create_file_with_headers_mock.return_value = mock_file
 
+    product_list[0].variants.update(sku=None)
+
     # when
     export_products(user_export_file, {"all": ""}, export_info, file_type)
 
     # then
     create_file_with_headers_mock.assert_called_once_with(
-        ["id", "name"], ";", file_type
+        ["id", "name", "variant id", "variant sku"], ";", file_type
     )
     assert export_products_in_batches_mock.call_count == 1
     args, kwargs = export_products_in_batches_mock.call_args
@@ -67,8 +75,8 @@ def test_export_products(
     )
     assert args[1:] == (
         export_info,
-        {"id", "name"},
-        ["id", "name"],
+        {"id", "name", "variants__id", "variants__sku"},
+        ["id", "name", "variants__id", "variants__sku"],
         ";",
         mock_file,
         file_type,
@@ -592,3 +600,42 @@ def test_export_products_in_batches_for_xlsx(
         assert row in data
 
     shutil.rmtree(tmpdir)
+
+
+def test_parse_input():
+    data = {
+        "collections": None,
+        "categories": None,
+        "attributes": [
+            {
+                "slug": "release-date-time",
+                "date_time": {
+                    "gte": "2019-08-08T00:00:00+02:00",
+                    "lte": "2021-08-08T00:00:00+02:00",
+                },
+            },
+            {
+                "slug": "release-date",
+                "date": {
+                    "gte": "2019-08-08",
+                },
+            },
+        ],
+        "stock_availability": None,
+        "price": None,
+        "product_types": None,
+    }
+    parsed_data = parse_input(data)
+
+    assert isinstance(
+        parsed_data["attributes"][0]["date_time"]["gte"], datetime.datetime
+    )
+    assert isinstance(
+        parsed_data["attributes"][0]["date_time"]["lte"], datetime.datetime
+    )
+    assert isinstance(parsed_data["attributes"][1]["date"]["gte"], datetime.date)
+
+    data.pop("attributes")
+    parsed_data = parse_input(data)
+
+    assert data == parsed_data

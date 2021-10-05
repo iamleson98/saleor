@@ -1,7 +1,7 @@
 import graphene
 
 from ...core.permissions import CheckoutPermissions
-from ...core.tracing import traced_resolver
+from ..core.descriptions import DEPRECATED_IN_3X_FIELD
 from ..core.fields import BaseDjangoConnectionField, PrefetchingConnectionField
 from ..core.scalars import UUID
 from ..decorators import permission_required
@@ -13,6 +13,7 @@ from .mutations import (
     CheckoutCreate,
     CheckoutCustomerAttach,
     CheckoutCustomerDetach,
+    CheckoutDeliveryMethodUpdate,
     CheckoutEmailUpdate,
     CheckoutLanguageCodeUpdate,
     CheckoutLineDelete,
@@ -48,12 +49,10 @@ class CheckoutQueries(graphene.ObjectType):
         return resolve_checkout(info, token)
 
     @permission_required(CheckoutPermissions.MANAGE_CHECKOUTS)
-    @traced_resolver
     def resolve_checkouts(self, *_args, channel=None, **_kwargs):
         return resolve_checkouts(channel)
 
     @permission_required(CheckoutPermissions.MANAGE_CHECKOUTS)
-    @traced_resolver
     def resolve_checkout_lines(self, *_args, **_kwargs):
         return resolve_checkout_lines()
 
@@ -72,5 +71,10 @@ class CheckoutMutations(graphene.ObjectType):
     checkout_remove_promo_code = CheckoutRemovePromoCode.Field()
     checkout_payment_create = CheckoutPaymentCreate.Field()
     checkout_shipping_address_update = CheckoutShippingAddressUpdate.Field()
-    checkout_shipping_method_update = CheckoutShippingMethodUpdate.Field()
+    checkout_shipping_method_update = CheckoutShippingMethodUpdate.Field(
+        deprecation_reason=(
+            f"{DEPRECATED_IN_3X_FIELD} " "Use `checkoutDeliveryMethodUpdate` instead."
+        )
+    )
+    checkout_delivery_method_update = CheckoutDeliveryMethodUpdate.Field()
     checkout_language_code_update = CheckoutLanguageCodeUpdate.Field()

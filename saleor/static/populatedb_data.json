@@ -280,7 +280,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -297,7 +298,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "0.2:kg"
+      "weight": "0.2:kg",
+      "kind": "normal"
     }
   },
   {
@@ -314,7 +316,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -331,7 +334,8 @@
       "has_variants": false,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -348,7 +352,8 @@
       "has_variants": false,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -365,7 +370,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "0.5:kg"
+      "weight": "0.5:kg",
+      "kind": "normal"
     }
   },
   {
@@ -382,7 +388,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -399,7 +406,8 @@
       "has_variants": true,
       "is_shipping_required": true,
       "is_digital": false,
-      "weight": "1.0:kg"
+      "weight": "1.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -413,7 +421,8 @@
       "has_variants": true,
       "is_shipping_required": false,
       "is_digital": true,
-      "weight": "0.0:kg"
+      "weight": "0.0:kg",
+      "kind": "normal"
     }
   },
   {
@@ -4246,6 +4255,23 @@
     }
   },
   {
+    "model": "product.productvariant",
+    "pk": 322,
+    "fields": {
+      "private_metadata": {},
+      "metadata": {},
+      "sku": "waterfall-ballads-extended-mp3",
+      "name": "MP3 Extended",
+      "product": 124,
+      "track_inventory": true,
+      "weight": null,
+      "default": true,
+      "is_preorder": true,
+      "preorder_end_date": null,
+      "preorder_global_threshold": 10
+    }
+  },
+  {
     "model": "product.productvariantchannellisting",
     "pk": 1,
     "fields": {
@@ -6655,6 +6681,30 @@
     }
   },
   {
+    "model": "product.productvariantchannellisting",
+    "pk": 220,
+    "fields": {
+      "variant": 322,
+      "channel": 1,
+      "currency": "USD",
+      "price_amount": "9.990",
+      "cost_price_amount": null,
+      "preorder_quantity_threshold": 8
+    }
+  },
+  {
+    "model": "product.productvariantchannellisting",
+    "pk": 221,
+    "fields": {
+      "variant": 322,
+      "channel": 2,
+      "currency": "PLN",
+      "price_amount": "20.000",
+      "cost_price_amount": null,
+      "preorder_quantity_threshold": 2
+    }
+  },
+  {
     "model": "attribute.assignedproductattribute",
     "pk": 1,
     "fields": {
@@ -8503,6 +8553,39 @@
     }
   },
   {
+    "model": "attribute.assignedvariantattribute",
+    "pk": 133,
+    "fields": {
+        "variant": 317,
+        "assignment": 12,
+        "values": [
+          103
+        ]
+    }
+  },
+  {
+    "model": "attribute.assignedvariantattribute",
+    "pk": 134,
+    "fields": {
+        "variant": 320,
+        "assignment": 12,
+        "values": [
+          104
+        ]
+    }
+  },
+  {
+    "model": "attribute.assignedvariantattribute",
+    "pk": 135,
+    "fields": {
+      "variant": 322,
+      "assignment": 8,
+      "values": [
+        85
+      ]
+    }
+  },
+  {
     "model": "attribute.assignedpageattribute",
     "pk": 1,
     "fields": {
@@ -8677,12 +8760,21 @@
         "product_type": 12
     }
   },
-    {
+  {
     "model": "attribute.attributevariant",
     "pk": 11,
     "fields": {
         "sort_order": null,
         "attribute": 34,
+        "product_type": 15
+    }
+  },
+  {
+    "model": "attribute.attributevariant",
+    "pk": 12,
+    "fields": {
+        "sort_order": null,
+        "attribute": 35,
         "product_type": 15
     }
   },
@@ -9090,6 +9182,27 @@
         "name": "Signed",
         "type": "product-type",
         "input_type": "boolean",
+        "entity_type": null,
+        "unit": null,
+        "value_required": false,
+        "is_variant_only": false,
+        "visible_in_storefront": true,
+        "filterable_in_storefront": true,
+        "filterable_in_dashboard": true,
+        "storefront_search_position": 0,
+        "available_in_grid": true
+    }
+  },
+    {
+    "model": "attribute.attribute",
+    "pk": 35,
+    "fields": {
+        "private_metadata": {},
+        "metadata": {},
+        "slug": "release-date",
+        "name": "Release Date",
+        "type": "product-type",
+        "input_type": "date-time",
         "entity_type": null,
         "unit": null,
         "value_required": false,
@@ -9808,7 +9921,7 @@
         "attribute": 32
     }
   },
-    {
+  {
     "model": "attribute.attributevalue",
     "pk": 101,
     "fields": {
@@ -9834,6 +9947,36 @@
         "content_type": null,
         "boolean": false,
         "attribute": 34
+    }
+  },
+    {
+    "model": "attribute.attributevalue",
+    "pk": 103,
+    "fields": {
+        "sort_order": 1,
+        "name": "2021-06-03 00:15:00+00:00",
+        "value": "",
+        "slug": "320_35",
+        "file_url": null,
+        "content_type": null,
+        "boolean": true,
+        "date_time": "2021-06-03 00:15:00+00:00",
+        "attribute": 35
+    }
+  },
+  {
+    "model": "attribute.attributevalue",
+    "pk": 104,
+    "fields": {
+        "sort_order": 2,
+        "name": "2021-06-01 14:15:00+00:00",
+        "value": "",
+        "slug": "317_35",
+        "file_url": null,
+        "content_type": null,
+        "boolean": false,
+        "date_time": "2021-06-01 14:15:00+00:00",
+        "attribute": 35
     }
   },
   {

@@ -40,7 +40,8 @@ def test_create_return_fulfillment_only_order_lines(
     lines_count = order_with_lines.lines.count()
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=order_with_lines,
         payment=payment,
         order_lines=[
@@ -113,7 +114,8 @@ def test_create_return_fulfillment_only_order_lines_with_refund(
     lines_count = order_with_lines.lines.count()
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=order_with_lines,
         payment=payment,
         order_lines=[
@@ -184,7 +186,8 @@ def test_create_return_fulfillment_only_order_lines_included_shipping_costs(
     lines_count = order_with_lines.lines.count()
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=order_with_lines,
         payment=payment,
         order_lines=[
@@ -274,7 +277,8 @@ def test_create_return_fulfillment_only_order_lines_with_replace_request(
     order_with_lines.save(update_fields=["metadata", "private_metadata"])
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=order_with_lines,
         payment=payment,
         order_lines=order_lines_data,
@@ -346,6 +350,7 @@ def test_create_return_fulfillment_only_order_lines_with_replace_request(
     assert replaced_line.product_name == expected_replaced_line.product_name
     assert replaced_line.variant_name == expected_replaced_line.variant_name
     assert replaced_line.product_sku == expected_replaced_line.product_sku
+    assert replaced_line.product_variant_id == expected_replaced_line.product_variant_id
     assert (
         replaced_line.is_shipping_required
         == expected_replaced_line.is_shipping_required
@@ -382,7 +387,8 @@ def test_create_return_fulfillment_only_fulfillment_lines(
     original_quantity = {line.id: line.quantity for line in fulfillment_lines}
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=fulfilled_order,
         payment=payment,
         order_lines=[],
@@ -439,7 +445,8 @@ def test_create_return_fulfillment_only_fulfillment_lines_replace_order(
     fulfillment_lines_to_return[0].quantity = replace_quantity
 
     response = create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=fulfilled_order,
         payment=payment,
         order_lines=[],
@@ -498,6 +505,7 @@ def test_create_return_fulfillment_only_fulfillment_lines_replace_order(
     assert replaced_line.product_name == expected_replaced_line.product_name
     assert replaced_line.variant_name == expected_replaced_line.variant_name
     assert replaced_line.product_sku == expected_replaced_line.product_sku
+    assert replaced_line.product_variant_id == expected_replaced_line.product_variant_id
     assert (
         replaced_line.is_shipping_required
         == expected_replaced_line.is_shipping_required
@@ -550,7 +558,9 @@ def test_create_return_fulfillment_with_lines_already_refunded(
         product_name=str(variant.product),
         variant_name=str(variant),
         product_sku=variant.sku,
+        product_variant_id=variant.get_global_id(),
         is_shipping_required=variant.is_shipping_required(),
+        is_gift_card=variant.is_gift_card(),
         quantity=quantity,
         quantity_fulfilled=2,
         variant=variant,
@@ -576,7 +586,8 @@ def test_create_return_fulfillment_with_lines_already_refunded(
         FulfillmentLineData(line=refunded_fulfillment_line, quantity=2)
     )
     create_fulfillments_for_returned_products(
-        requester=staff_user,
+        user=staff_user,
+        app=None,
         order=fulfilled_order,
         payment=payment,
         order_lines=[],

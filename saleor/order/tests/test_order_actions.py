@@ -54,7 +54,9 @@ def order_with_digital_line(order, digital_content, stock, site_settings):
         product_name=str(product),
         variant_name=str(variant),
         product_sku=variant.sku,
+        product_variant_id=variant.get_global_id(),
         is_shipping_required=variant.is_shipping_required(),
+        is_gift_card=variant.is_gift_card(),
         quantity=quantity,
         variant=variant,
         unit_price=unit_price,
@@ -95,7 +97,7 @@ def test_handle_fully_paid_order_digital_lines(
 
     mock_send_payment_confirmation.assert_called_once_with(order, manager)
     send_fulfillment_confirmation_to_customer.assert_called_once_with(
-        order, fulfillment, user=order.user, manager=manager
+        order, fulfillment, user=order.user, app=None, manager=manager
     )
 
     order.refresh_from_db()
@@ -129,7 +131,7 @@ def test_handle_fully_paid_order_no_email(mock_send_payment_confirmation, order)
 
 def test_mark_as_paid(admin_user, draft_order):
     manager = get_plugins_manager()
-    mark_order_as_paid(draft_order, admin_user, manager)
+    mark_order_as_paid(draft_order, admin_user, None, manager)
     payment = draft_order.payments.last()
     assert payment.charge_status == ChargeStatus.FULLY_CHARGED
     assert payment.captured_amount == draft_order.total.gross.amount
@@ -143,7 +145,7 @@ def test_mark_as_paid_with_external_reference(admin_user, draft_order):
     external_reference = "transaction_id"
     manager = get_plugins_manager()
     mark_order_as_paid(
-        draft_order, admin_user, manager, external_reference=external_reference
+        draft_order, admin_user, None, manager, external_reference=external_reference
     )
     payment = draft_order.payments.last()
     assert payment.charge_status == ChargeStatus.FULLY_CHARGED
@@ -162,7 +164,7 @@ def test_mark_as_paid_no_billing_address(admin_user, draft_order):
 
     manager = get_plugins_manager()
     with pytest.raises(Exception):
-        mark_order_as_paid(draft_order, admin_user, manager)
+        mark_order_as_paid(draft_order, admin_user, None, manager)
 
 
 def test_clean_mark_order_as_paid(payment_txn_preauth):
@@ -175,7 +177,7 @@ def test_cancel_fulfillment(fulfilled_order, warehouse):
     fulfillment = fulfilled_order.fulfillments.first()
     line_1, line_2 = fulfillment.lines.all()
 
-    cancel_fulfillment(fulfillment, None, warehouse, get_plugins_manager())
+    cancel_fulfillment(fulfillment, None, None, warehouse, get_plugins_manager())
 
     fulfillment.refresh_from_db()
     fulfilled_order.refresh_from_db()
@@ -193,7 +195,7 @@ def test_cancel_fulfillment_variant_witout_inventory_tracking(
     stock = line.order_line.variant.stocks.get()
     stock_quantity_before = stock.quantity
 
-    cancel_fulfillment(fulfillment, None, warehouse, get_plugins_manager())
+    cancel_fulfillment(fulfillment, None, None, warehouse, get_plugins_manager())
 
     fulfillment.refresh_from_db()
     line.refresh_from_db()
@@ -218,7 +220,7 @@ def test_cancel_order(
     ).exists()
 
     # when
-    cancel_order(order, None, manager)
+    cancel_order(order, None, None, manager)
 
     # then
     order_event = order.events.last()
@@ -229,11 +231,13 @@ def test_cancel_order(
         order_line__order=order, quantity_allocated__gt=0
     ).exists()
 
-    send_order_canceled_confirmation_mock.assert_called_once_with(order, None, manager)
+    send_order_canceled_confirmation_mock.assert_called_once_with(
+        order, None, None, manager
+    )
 
 
 @patch("saleor.order.actions.send_order_refunded_confirmation")
-def test_order_refunded(
+def test_order_refunded_by_user(
     send_order_refunded_confirmation_mock,
     order,
     checkout_with_item,
@@ -243,17 +247,44 @@ def test_order_refunded(
         gateway="mirumee.payments.dummy", is_active=True, checkout=checkout_with_item
     )
     amount = order.total.gross.amount
+    app = None
 
     # when
     manager = get_plugins_manager()
-    order_refunded(order, order.user, amount, payment, manager)
+    order_refunded(order, order.user, app, amount, payment, manager)
 
     # then
     order_event = order.events.last()
     assert order_event.type == OrderEvents.PAYMENT_REFUNDED
 
     send_order_refunded_confirmation_mock.assert_called_once_with(
-        order, order.user, amount, payment.currency, manager
+        order, order.user, None, amount, payment.currency, manager
+    )
+
+
+@patch("saleor.order.actions.send_order_refunded_confirmation")
+def test_order_refunded_by_app(
+    send_order_refunded_confirmation_mock,
+    order,
+    checkout_with_item,
+    app,
+):
+    # given
+    payment = Payment.objects.create(
+        gateway="mirumee.payments.dummy", is_active=True, checkout=checkout_with_item
+    )
+    amount = order.total.gross.amount
+
+    # when
+    manager = get_plugins_manager()
+    order_refunded(order, None, app, amount, payment, manager)
+
+    # then
+    order_event = order.events.last()
+    assert order_event.type == OrderEvents.PAYMENT_REFUNDED
+
+    send_order_refunded_confirmation_mock.assert_called_once_with(
+        order, None, app, amount, payment.currency, manager
     )
 
 
@@ -274,6 +305,7 @@ def test_fulfill_order_lines(order_with_lines):
                 warehouse_pk=stock.warehouse.pk,
             )
         ],
+        get_plugins_manager(),
     )
 
     stock.refresh_from_db()
@@ -312,6 +344,7 @@ def test_fulfill_order_lines_multiple_lines(order_with_lines):
                 warehouse_pk=stock_2.warehouse.pk,
             ),
         ],
+        get_plugins_manager(),
     )
 
     stock_1.refresh_from_db()
@@ -333,7 +366,9 @@ def test_fulfill_order_lines_with_variant_deleted(order_with_lines):
 
     line.refresh_from_db()
 
-    fulfill_order_lines([OrderLineData(line=line, quantity=line.quantity)])
+    fulfill_order_lines(
+        [OrderLineData(line=line, quantity=line.quantity)], get_plugins_manager()
+    )
 
 
 def test_fulfill_order_lines_without_inventory_tracking(order_with_lines):
@@ -356,7 +391,8 @@ def test_fulfill_order_lines_without_inventory_tracking(order_with_lines):
                 variant=variant,
                 warehouse_pk=stock.warehouse.pk,
             )
-        ]
+        ],
+        get_plugins_manager(),
     )
 
     stock.refresh_from_db()
