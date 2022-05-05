@@ -82,7 +82,7 @@ class AttributeValue(CountableDjangoObjectType):
 
     @staticmethod
     def resolve_reference(root: models.AttributeValue, info, **_kwargs):
-        def prepare_reference(attribute):
+        def prepare_reference(attribute: models.Attribute):
             if attribute.input_type != AttributeInputType.REFERENCE:
                 return
             reference_pk = root.slug.split("_")[1]
