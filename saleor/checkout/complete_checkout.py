@@ -56,6 +56,7 @@ from ..payment import PaymentError, TransactionKind, gateway
 from ..payment.models import Payment, Transaction
 from ..payment.utils import fetch_customer_id, store_customer_id
 from ..product.models import ProductTranslation, ProductVariantTranslation
+from ..tax.calculations import get_taxed_undiscounted_price
 from ..tax.utils import (
     get_shipping_tax_class_kwargs_for_order,
     get_tax_class_kwargs_for_order_line,
@@ -227,12 +228,6 @@ def _create_line_for_order(
         line_info=checkout_line_info,
         channel=checkout_info.channel,
     )
-    undiscounted_unit_price = TaxedMoney(
-        net=undiscounted_base_unit_price, gross=undiscounted_base_unit_price
-    )
-    undiscounted_total_price = TaxedMoney(
-        net=undiscounted_base_total_price, gross=undiscounted_base_total_price
-    )
     # total price after applying all discounts - sales and vouchers
     total_line_price = calculations.checkout_line_total(
         manager=manager,
@@ -252,6 +247,20 @@ def _create_line_for_order(
         checkout_info=checkout_info,
         lines=lines,
         checkout_line_info=checkout_line_info,
+    )
+    # unit price before applying discounts
+    undiscounted_unit_price = get_taxed_undiscounted_price(
+        undiscounted_base_unit_price,
+        unit_price,
+        tax_rate,
+        prices_entered_with_tax,
+    )
+    # total price before applying discounts
+    undiscounted_total_price = get_taxed_undiscounted_price(
+        undiscounted_base_total_price,
+        total_line_price,
+        tax_rate,
+        prices_entered_with_tax,
     )
 
     voucher_code = None

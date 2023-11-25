@@ -13,6 +13,7 @@ from ..order import base_calculations
 from ..payment.model_helpers import get_subtotal
 from ..plugins.manager import PluginsManager
 from ..tax import TaxCalculationStrategy
+from ..tax.calculations import get_taxed_undiscounted_price
 from ..tax.calculations.order import update_order_prices_with_flat_rates
 from ..tax.utils import (
     calculate_tax_rate,
@@ -21,13 +22,20 @@ from ..tax.utils import (
     normalize_tax_rate_for_db,
 )
 from . import ORDER_EDITABLE_STATUS
-from .base_calculations import base_order_subtotal, base_order_total
+from .base_calculations import (
+    base_order_line_total,
+    base_order_subtotal,
+    base_order_total,
+)
 from .interface import OrderTaxedPricesData
 from .models import Order, OrderLine
 
 
 def _recalculate_order_prices(
-    manager: PluginsManager, order: Order, lines: Iterable[OrderLine]
+    manager: PluginsManager,
+    order: Order,
+    lines: Iterable[OrderLine],
+    prices_entered_with_tax: bool,
 ) -> None:
     """Fetch taxes from plugins and recalculate order/lines prices.
 
@@ -46,18 +54,30 @@ def _recalculate_order_prices(
                 line_unit = manager.calculate_order_line_unit(
                     order, line, variant, product
                 )
-                line.undiscounted_unit_price = line_unit.undiscounted_price
                 line.unit_price = line_unit.price_with_discounts
 
                 line_total = manager.calculate_order_line_total(
                     order, line, variant, product
                 )
-                line.undiscounted_total_price = line_total.undiscounted_price
                 undiscounted_subtotal += line_total.undiscounted_price
                 line.total_price = line_total.price_with_discounts
 
                 line.tax_rate = manager.get_order_line_tax_rate(
                     order, product, variant, None, line_unit.undiscounted_price
+                )
+                line.undiscounted_unit_price = get_undiscounted_price(
+                    line_unit,
+                    line.undiscounted_base_unit_price,
+                    line.tax_rate,
+                    prices_entered_with_tax,
+                )
+
+                line.undiscounted_total_price = get_undiscounted_price(
+                    line_total,
+                    # base_order_line_total returns equal gross and net
+                    base_order_line_total(line).undiscounted_price.net,
+                    line.tax_rate,
+                    prices_entered_with_tax,
                 )
             except TaxError:
                 pass
@@ -73,6 +93,25 @@ def _recalculate_order_prices(
         net=order.base_shipping_price, gross=order.base_shipping_price
     )
     order.total = manager.calculate_order_total(order, lines)
+
+
+def get_undiscounted_price(
+    line_price: OrderTaxedPricesData,
+    line_base_price: Money,
+    tax_rate,
+    prices_entered_with_tax,
+):
+    if (
+        tax_rate > 0
+        and line_price.undiscounted_price.net == line_price.undiscounted_price.gross
+    ):
+        get_taxed_undiscounted_price(
+            line_base_price,
+            line_price.undiscounted_price,
+            tax_rate,
+            prices_entered_with_tax,
+        )
+    return line_price.undiscounted_price
 
 
 def _update_order_discounts_and_base_undiscounted_total(
@@ -309,7 +348,7 @@ def _calculate_and_add_tax(
     prices_entered_with_tax: bool,
 ):
     if tax_calculation_strategy == TaxCalculationStrategy.TAX_APP:
-        _recalculate_order_prices(manager, order, lines)
+        _recalculate_order_prices(manager, order, lines, prices_entered_with_tax)
         tax_data = manager.get_taxes_for_order(order)
         _apply_tax_data(order, lines, tax_data)
     else:

@@ -22,7 +22,6 @@ def test_create_page_with_each_of_attribute_types_core_0701(
     permission_manage_channels,
     permission_manage_shipping,
     permission_manage_product_types_and_attributes,
-    permission_manage_discounts,
     site_settings,
 ):
     # Before
@@ -33,7 +32,6 @@ def test_create_page_with_each_of_attribute_types_core_0701(
         permission_manage_channels,
         permission_manage_shipping,
         permission_manage_product_types_and_attributes,
-        permission_manage_discounts,
     ]
     assign_permissions(e2e_staff_api_client, permissions)
 
@@ -67,7 +65,11 @@ def test_create_page_with_each_of_attribute_types_core_0701(
         attr_swatch_id,
         attr_reference_id,
         attr_file_id,
-    ) = prepare_all_attributes(e2e_staff_api_client, attribute_type="PAGE_TYPE")
+    ) = prepare_all_attributes(
+        e2e_staff_api_client,
+        attribute_type="PAGE_TYPE",
+        entity_type="PRODUCT",
+    )
 
     # Step 1 - Create page type with all attributes
     add_attributes = [
