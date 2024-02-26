@@ -19,6 +19,17 @@ query Checkout($checkoutId: ID!){
         amount
       }
     }
+    subtotalPrice {
+      gross {
+        amount
+      }
+      net {
+        amount
+      }
+      tax {
+        amount
+      }
+    }
     availablePaymentGateways{
       id
       name
@@ -27,6 +38,17 @@ query Checkout($checkoutId: ID!){
       id
       name
       price{
+        amount
+      }
+    }
+    shippingPrice {
+      tax {
+        amount
+      }
+      net {
+        amount
+      }
+      gross {
         amount
       }
     }

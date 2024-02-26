@@ -5,7 +5,7 @@ from django.core.exceptions import ValidationError
 
 from .....discount import events, models
 from .....permission.enums import DiscountPermissions
-from .....product.tasks import update_products_discounted_prices_for_promotion_task
+from .....product.tasks import update_discounted_prices_task
 from .....webhook.event_types import WebhookEventAsyncType
 from ....app.dataloaders import get_app_promise
 from ....core import ResolveInfo
@@ -31,6 +31,18 @@ class PromotionRuleCreateInput(PromotionRuleInput):
 
 class PromotionRuleCreateError(Error):
     code = PromotionRuleCreateErrorCode(description="The error code.", required=True)
+    rules_limit = graphene.Int(
+        description="Limit of rules with orderPredicate defined."
+    )
+    rules_limit_exceed_by = graphene.Int(
+        description="Number of rules with orderPredicate defined exceeding the limit."
+    )
+    gifts_limit = graphene.Int(description="Limit of gifts assigned to promotion rule.")
+    gifts_limit_exceed_by = graphene.Int(
+        description=(
+            "Number of gifts defined for this promotion rule exceeding the limit."
+        )
+    )
 
 
 class PromotionRuleCreate(ModelMutation):
@@ -60,7 +72,15 @@ class PromotionRuleCreate(ModelMutation):
         cleaned_input = super().clean_input(info, instance, data, **kwargs)
         errors: defaultdict[str, list[ValidationError]] = defaultdict(list)
 
-        clean_promotion_rule(cleaned_input, errors, PromotionRuleCreateErrorCode)
+        promotion = cleaned_input["promotion"]
+        promotion_type = promotion.type
+
+        clean_promotion_rule(
+            cleaned_input,
+            promotion_type,
+            errors,
+            PromotionRuleCreateErrorCode,
+        )
 
         if errors:
             raise ValidationError(errors)
@@ -68,9 +88,9 @@ class PromotionRuleCreate(ModelMutation):
 
     @classmethod
     def post_save_action(cls, info: ResolveInfo, instance, cleaned_input):
-        products = get_products_for_rule(instance)
+        products = get_products_for_rule(instance, update_rule_variants=True)
         if products:
-            update_products_discounted_prices_for_promotion_task.delay(
+            update_discounted_prices_task.delay(
                 list(products.values_list("id", flat=True))
             )
         clear_promotion_old_sale_id(instance.promotion, save=True)

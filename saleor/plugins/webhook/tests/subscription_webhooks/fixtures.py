@@ -1001,6 +1001,20 @@ def subscription_voucher_deleted_webhook(subscription_webhook):
 
 
 @pytest.fixture
+def subscription_voucher_codes_created_webhook(subscription_webhook):
+    return subscription_webhook(
+        queries.VOUCHER_CODES_CREATED, WebhookEventAsyncType.VOUCHER_CODES_CREATED
+    )
+
+
+@pytest.fixture
+def subscription_voucher_codes_deleted_webhook(subscription_webhook):
+    return subscription_webhook(
+        queries.VOUCHER_CODES_DELETED, WebhookEventAsyncType.VOUCHER_CODES_DELETED
+    )
+
+
+@pytest.fixture
 def subscription_voucher_webhook_with_meta(subscription_webhook):
     return subscription_webhook(
         queries.VOUCHER_CREATED_WITH_META,
@@ -1200,4 +1214,14 @@ def subscription_app_status_changed_webhook_removed_app(
         queries.APP_STATUS_CHANGED,
         WebhookEventAsyncType.APP_STATUS_CHANGED,
         app=removed_app,
+    )
+
+
+@pytest.fixture
+def subscription_checkout_shipping_filter_and_list_missing_one_in_definition(
+    subscription_webhook,
+):
+    return subscription_webhook(
+        queries.THUMBNAIL_CREATED,
+        WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT,
     )

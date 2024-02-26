@@ -1,13 +1,7 @@
 from collections import defaultdict
 from collections.abc import Iterable
 from decimal import Decimal
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Optional,
-    Union,
-)
+from typing import TYPE_CHECKING, Any, Callable, Optional, Union
 
 import opentracing
 from django.conf import settings
@@ -26,6 +20,12 @@ from ..core.prices import quantize_price
 from ..core.taxes import TaxData, TaxType, zero_money, zero_taxed_money
 from ..graphql.core import ResolveInfo, SaleorContext
 from ..order import base_calculations as base_order_calculations
+from ..order.base_calculations import (
+    base_order_line_total,
+    base_order_subtotal,
+    get_total_price_with_subtotal_discount_for_order_line,
+    propagate_order_discount_on_order_prices,
+)
 from ..order.interface import OrderTaxedPricesData
 from ..payment.interface import (
     CustomerSource,
@@ -63,7 +63,7 @@ if TYPE_CHECKING:
     from ..core.middleware import Requestor
     from ..core.utils.translations import Translation
     from ..csv.models import ExportFile
-    from ..discount.models import Promotion, PromotionRule, Voucher
+    from ..discount.models import Promotion, PromotionRule, Voucher, VoucherCode
     from ..giftcard.models import GiftCard
     from ..invoice.models import Invoice
     from ..menu.models import Menu, MenuItem
@@ -345,12 +345,13 @@ class PluginsManager(PaymentInterface):
             currency,
         )
 
-    def calculate_order_shipping(self, order: "Order") -> TaxedMoney:
-        shipping_price = order.base_shipping_price
-        default_value = quantize_price(
-            TaxedMoney(net=shipping_price, gross=shipping_price),
-            shipping_price.currency,
+    def calculate_order_shipping(
+        self, order: "Order", lines: Iterable["OrderLine"]
+    ) -> TaxedMoney:
+        subtotal, shipping_price = propagate_order_discount_on_order_prices(
+            order, lines
         )
+        default_value = TaxedMoney(shipping_price, shipping_price)
         return quantize_price(
             self.__run_method_on_plugins(
                 "calculate_order_shipping",
@@ -398,7 +399,7 @@ class PluginsManager(PaymentInterface):
             checkout_line_info,
             checkout_info.channel,
         )
-        # apply entire order discount
+        # apply entire order discount or discount from order promotion
         default_value = base_calculations.apply_checkout_discount_on_checkout_line(
             checkout_info,
             lines,
@@ -425,8 +426,21 @@ class PluginsManager(PaymentInterface):
         order_line: "OrderLine",
         variant: "ProductVariant",
         product: "Product",
+        lines: Iterable["OrderLine"],
     ) -> OrderTaxedPricesData:
-        default_value = base_order_calculations.base_order_line_total(order_line)
+        base_subtotal = base_order_subtotal(order, lines)
+        subtotal, shipping_price = propagate_order_discount_on_order_prices(
+            order, lines
+        )
+        total_price = get_total_price_with_subtotal_discount_for_order_line(
+            order_line, lines, base_subtotal, base_subtotal - subtotal
+        )
+
+        default_value = OrderTaxedPricesData(
+            undiscounted_price=base_order_line_total(order_line).undiscounted_price,
+            price_with_discounts=TaxedMoney(total_price, total_price),
+        )
+
         currency = order_line.currency
 
         line_total = self.__run_method_on_plugins(
@@ -466,7 +480,7 @@ class PluginsManager(PaymentInterface):
             default_value * quantity,
         )
         default_taxed_value = TaxedMoney(
-            net=total_value / quantity, gross=default_value
+            net=total_value / quantity, gross=total_value / quantity
         )
         unit_price = self.__run_method_on_plugins(
             "calculate_checkout_line_unit_price",
@@ -485,17 +499,26 @@ class PluginsManager(PaymentInterface):
         order_line: "OrderLine",
         variant: "ProductVariant",
         product: "Product",
+        lines: Iterable["OrderLine"],
     ) -> OrderTaxedPricesData:
-        default_value = OrderTaxedPricesData(
-            undiscounted_price=TaxedMoney(
-                order_line.undiscounted_base_unit_price,
-                order_line.undiscounted_base_unit_price,
-            ),
-            price_with_discounts=TaxedMoney(
-                order_line.base_unit_price,
-                order_line.base_unit_price,
-            ),
+        base_subtotal = base_order_subtotal(order, lines)
+        subtotal, shipping_price = propagate_order_discount_on_order_prices(
+            order, lines
         )
+        total_price = get_total_price_with_subtotal_discount_for_order_line(
+            order_line, lines, base_subtotal, base_subtotal - subtotal
+        )
+        if total_price:
+            unit_price = total_price / order_line.quantity
+            unit_price = quantize_price(unit_price, order.currency)
+        else:
+            unit_price = order_line.base_unit_price
+
+        default_value = OrderTaxedPricesData(
+            undiscounted_price=order_line.undiscounted_unit_price,
+            price_with_discounts=TaxedMoney(unit_price, unit_price),
+        )
+
         currency = order_line.currency
         line_unit = self.__run_method_on_plugins(
             "calculate_order_line_unit",
@@ -560,17 +583,23 @@ class PluginsManager(PaymentInterface):
         default_value = False
         return self.__run_method_on_plugins("show_taxes_on_storefront", default_value)
 
-    def get_taxes_for_checkout(self, checkout_info, lines) -> Optional[TaxData]:
+    def get_taxes_for_checkout(
+        self, checkout_info, lines, app_identifier
+    ) -> Optional[TaxData]:
         return self.__run_plugin_method_until_first_success(
             "get_taxes_for_checkout",
             checkout_info,
             lines,
+            app_identifier,
             channel_slug=checkout_info.channel.slug,
         )
 
-    def get_taxes_for_order(self, order: "Order") -> Optional[TaxData]:
+    def get_taxes_for_order(self, order: "Order", app_identifier) -> Optional[TaxData]:
         return self.__run_plugin_method_until_first_success(
-            "get_taxes_for_order", order, channel_slug=order.channel.slug
+            "get_taxes_for_order",
+            order,
+            app_identifier,
+            channel_slug=order.channel.slug,
         )
 
     def preprocess_order_creation(
@@ -681,10 +710,16 @@ class PluginsManager(PaymentInterface):
             "product_variant_created", default_value, product_variant, webhooks=webhooks
         )
 
-    def product_variant_updated(self, product_variant: "ProductVariant", webhooks=None):
+    def product_variant_updated(
+        self, product_variant: "ProductVariant", webhooks=None, **kwargs
+    ):
         default_value = None
         return self.__run_method_on_plugins(
-            "product_variant_updated", default_value, product_variant, webhooks=webhooks
+            "product_variant_updated",
+            default_value,
+            product_variant,
+            webhooks=webhooks,
+            **kwargs,
         )
 
     def product_variant_deleted(self, product_variant: "ProductVariant", webhooks=None):
@@ -777,10 +812,10 @@ class PluginsManager(PaymentInterface):
             "sale_updated", default_value, sale, previous_catalogue, current_catalogue
         )
 
-    def sale_toggle(self, sale: "Promotion", catalogue):
+    def sale_toggle(self, sale: "Promotion", catalogue, webhooks=None):
         default_value = None
         return self.__run_method_on_plugins(
-            "sale_toggle", default_value, sale, catalogue
+            "sale_toggle", default_value, sale, catalogue, webhooks=webhooks
         )
 
     def promotion_created(self, promotion: "Promotion"):
@@ -801,15 +836,17 @@ class PluginsManager(PaymentInterface):
             "promotion_deleted", default_value, promotion, webhooks=webhooks
         )
 
-    def promotion_started(self, promotion: "Promotion"):
+    def promotion_started(self, promotion: "Promotion", webhooks=None):
         default_value = None
         return self.__run_method_on_plugins(
-            "promotion_started", default_value, promotion
+            "promotion_started", default_value, promotion, webhooks=webhooks
         )
 
-    def promotion_ended(self, promotion: "Promotion"):
+    def promotion_ended(self, promotion: "Promotion", webhooks=None):
         default_value = None
-        return self.__run_method_on_plugins("promotion_ended", default_value, promotion)
+        return self.__run_method_on_plugins(
+            "promotion_ended", default_value, promotion, webhooks=webhooks
+        )
 
     def promotion_rule_created(self, promotion_rule: "PromotionRule"):
         default_value = None
@@ -1523,6 +1560,18 @@ class PluginsManager(PaymentInterface):
             "voucher_deleted", default_value, voucher, code, webhooks=webhooks
         )
 
+    def voucher_codes_created(self, voucher_codes: list["VoucherCode"], webhooks=None):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "voucher_codes_created", default_value, voucher_codes, webhooks=webhooks
+        )
+
+    def voucher_codes_deleted(self, voucher_codes: list["VoucherCode"], webhooks=None):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "voucher_codes_deleted", default_value, voucher_codes, webhooks=webhooks
+        )
+
     def voucher_metadata_updated(self, voucher: "Voucher"):
         default_value = None
         return self.__run_method_on_plugins(
@@ -1859,9 +1908,11 @@ class PluginsManager(PaymentInterface):
     def _get_all_plugin_configs(self):
         with opentracing.global_tracer().start_active_span("_get_all_plugin_configs"):
             if not hasattr(self, "_plugin_configs"):
-                plugin_configurations = PluginConfiguration.objects.prefetch_related(
-                    "channel"
-                ).all()
+                plugin_configurations = (
+                    PluginConfiguration.objects.using(self.database)
+                    .prefetch_related("channel")
+                    .all()
+                )
                 self._plugin_configs_per_channel: defaultdict[
                     Channel, dict
                 ] = defaultdict(dict)
@@ -2119,8 +2170,8 @@ class PluginsManager(PaymentInterface):
 
 
 def get_plugins_manager(
+    allow_replica: bool,
     requestor_getter: Optional[Callable[[], "Requestor"]] = None,
-    allow_replica=True,
 ) -> PluginsManager:
     with opentracing.global_tracer().start_active_span("get_plugins_manager"):
         return PluginsManager(settings.PLUGINS, requestor_getter, allow_replica)

@@ -540,7 +540,10 @@ def test_channel_update_mutation_trigger_webhook(
     metadata_webhook_args = update_webhook_args.copy()
     metadata_webhook_args[1] = WebhookEventAsyncType.CHANNEL_METADATA_UPDATED
     mocked_webhook_trigger.assert_has_calls(
-        [call(*update_webhook_args), call(*metadata_webhook_args)]
+        [
+            call(*update_webhook_args, allow_replica=False),
+            call(*metadata_webhook_args, allow_replica=False),
+        ]
     )
 
 
@@ -1280,7 +1283,7 @@ def test_channel_update_set_checkout_use_legacy_error_flow_without_permission(
     assert_no_permission(response)
 
 
-def test_channel_update_checkout_and_order_settings_with_manage_orders(
+def test_channel_update_order_settings_with_manage_orders(
     staff_api_client, channel_USD, permission_manage_orders
 ):
     # given

@@ -54,11 +54,14 @@ from ..discount import (
     DiscountType,
     DiscountValueType,
     PromotionEvents,
+    PromotionType,
+    RewardType,
     RewardValueType,
     VoucherType,
 )
 from ..discount.interface import VariantPromotionRuleInfo
 from ..discount.models import (
+    CheckoutDiscount,
     CheckoutLineDiscount,
     NotApplicable,
     Promotion,
@@ -98,6 +101,7 @@ from ..order.utils import (
 from ..page.models import Page, PageTranslation, PageType
 from ..payment import ChargeStatus, TransactionKind
 from ..payment.interface import AddressData, GatewayConfig, GatewayResponse, PaymentData
+from ..payment.model_helpers import get_subtotal
 from ..payment.models import Payment, TransactionEvent, TransactionItem
 from ..payment.transaction_item_calculations import recalculate_transaction_amounts
 from ..payment.utils import create_manual_adjustment_events
@@ -126,6 +130,7 @@ from ..product.models import (
 )
 from ..product.search import prepare_product_search_vector_value
 from ..product.tests.utils import create_image
+from ..product.utils.variants import fetch_variants_for_promotion_rules
 from ..shipping.models import (
     ShippingMethod,
     ShippingMethodChannelListing,
@@ -315,7 +320,9 @@ def checkout_JPY(channel_JPY):
 @pytest.fixture
 def checkout_with_item(checkout, product):
     variant = product.variants.first()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 3)
     checkout.save()
     return checkout
@@ -401,6 +408,69 @@ def checkout_with_item_on_promotion(checkout_with_item):
 
 
 @pytest.fixture
+def checkout_with_item_and_order_discount(
+    checkout_with_item, catalogue_promotion_without_rules
+):
+    channel = checkout_with_item.channel
+
+    reward_value = Decimal("5")
+
+    rule = catalogue_promotion_without_rules.rules.create(
+        order_predicate={
+            "discountedObjectPredicate": {"baseSubtotalPrice": {"range": {"gte": 20}}}
+        },
+        reward_value_type=RewardValueType.FIXED,
+        reward_value=reward_value,
+        reward_type=RewardType.SUBTOTAL_DISCOUNT,
+    )
+    rule.channels.add(channel)
+
+    CheckoutDiscount.objects.create(
+        checkout=checkout_with_item,
+        promotion_rule=rule,
+        type=DiscountType.ORDER_PROMOTION,
+        value_type=rule.reward_value_type,
+        value=rule.reward_value,
+        amount_value=rule.reward_value,
+        currency=channel.currency_code,
+    )
+    checkout_with_item.discount_amount = reward_value
+    checkout_with_item.save(update_fields=["discount_amount"])
+
+    return checkout_with_item
+
+
+@pytest.fixture
+def checkout_with_item_and_gift_promotion(checkout_with_item, gift_promotion_rule):
+    channel = checkout_with_item.channel
+    variants = gift_promotion_rule.gifts.all()
+    variant_listings = ProductVariantChannelListing.objects.filter(variant__in=variants)
+    top_price, variant_id = max(
+        variant_listings.values_list("discounted_price_amount", "variant")
+    )
+
+    line = CheckoutLine.objects.create(
+        checkout=checkout_with_item,
+        quantity=1,
+        variant_id=variant_id,
+        is_gift=True,
+        currency="USD",
+    )
+
+    CheckoutLineDiscount.objects.create(
+        line=line,
+        promotion_rule=gift_promotion_rule,
+        type=DiscountType.ORDER_PROMOTION,
+        value_type=RewardValueType.FIXED,
+        value=top_price,
+        amount_value=top_price,
+        currency=channel.currency_code,
+    )
+
+    return checkout_with_item
+
+
+@pytest.fixture
 def checkout_with_item_and_transaction_item(checkout_with_item):
     TransactionItem.objects.create(
         name="Credit card",
@@ -423,7 +493,9 @@ def checkout_with_item_and_tax_exemption(checkout_with_item):
 @pytest.fixture
 def checkout_with_same_items_in_multiple_lines(checkout, product):
     variant = product.variants.first()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     add_variant_to_checkout(checkout_info, variant, 1, force_new_line=True)
     checkout.save()
@@ -434,7 +506,7 @@ def checkout_with_same_items_in_multiple_lines(checkout, product):
 def checkout_with_item_and_voucher_specific_products(
     checkout_with_item, voucher_specific_product_type
 ):
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
     add_voucher_to_checkout(
@@ -452,7 +524,7 @@ def checkout_with_item_and_voucher_specific_products(
 def checkout_with_item_and_voucher_once_per_order(checkout_with_item, voucher):
     voucher.apply_once_per_order = True
     voucher.save()
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
     add_voucher_to_checkout(
@@ -464,7 +536,7 @@ def checkout_with_item_and_voucher_once_per_order(checkout_with_item, voucher):
 
 @pytest.fixture
 def checkout_with_item_and_voucher(checkout_with_item, voucher):
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
     add_voucher_to_checkout(
@@ -482,7 +554,9 @@ def checkout_line(checkout_with_item):
 @pytest.fixture
 def checkout_with_item_total_0(checkout, product_price_0):
     variant = product_price_0.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     checkout.save()
     return checkout
@@ -491,7 +565,9 @@ def checkout_with_item_total_0(checkout, product_price_0):
 @pytest.fixture
 def checkout_JPY_with_item(checkout_JPY, product_in_channel_JPY):
     variant = product_in_channel_JPY.variants.get()
-    checkout_info = fetch_checkout_info(checkout_JPY, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout_JPY, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 3)
     checkout_JPY.save()
     return checkout_JPY
@@ -553,7 +629,9 @@ def checkout_ready_to_complete(checkout_with_item, address, shipping_method, gif
 def checkout_with_digital_item(checkout, digital_content, address):
     """Create a checkout with a digital line."""
     variant = digital_content.product_variant
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     checkout.discount_amount = Decimal(0)
     checkout.billing_address = address
@@ -566,7 +644,9 @@ def checkout_with_digital_item(checkout, digital_content, address):
 def checkout_with_shipping_required(checkout_with_item, product):
     checkout = checkout_with_item
     variant = product.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 3)
     checkout.save()
     return checkout
@@ -609,7 +689,9 @@ def other_shipping_method(shipping_zone, channel_USD):
 @pytest.fixture
 def checkout_without_shipping_required(checkout, product_without_shipping):
     variant = product_without_shipping.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     checkout.save()
     return checkout
@@ -618,7 +700,9 @@ def checkout_without_shipping_required(checkout, product_without_shipping):
 @pytest.fixture
 def checkout_with_single_item(checkout, product):
     variant = product.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     checkout.save()
     return checkout
@@ -629,7 +713,9 @@ def checkout_with_variant_without_inventory_tracking(
     checkout, variant_without_inventory_tracking, address, shipping_method
 ):
     variant = variant_without_inventory_tracking
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     checkout.shipping_address = address
     checkout.shipping_method = shipping_method
@@ -651,7 +737,9 @@ def checkout_with_variants(
     product_with_single_variant,
     product_with_two_variants,
 ):
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
 
     add_variant_to_checkout(
         checkout_info, product_with_default_variant.variants.get(), 1
@@ -720,7 +808,9 @@ def checkout_with_shipping_address_for_cc(checkout_with_variants_for_cc, address
 @pytest.fixture
 def checkout_with_items(checkout, product_list, product):
     variant = product.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 1)
     for prod in product_list:
         variant = prod.variants.get()
@@ -742,7 +832,9 @@ def checkout_with_items_and_shipping(checkout_with_items, address, shipping_meth
 @pytest.fixture
 def checkout_with_voucher(checkout, product, voucher):
     variant = product.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 3)
     checkout.voucher_code = voucher.code
     checkout.discount = Money("20.00", "USD")
@@ -753,7 +845,9 @@ def checkout_with_voucher(checkout, product, voucher):
 @pytest.fixture
 def checkout_with_voucher_percentage(checkout, product, voucher_percentage):
     variant = product.variants.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, variant, 3)
     checkout.voucher_code = voucher_percentage.code
     checkout.discount = Money("3.00", "USD")
@@ -765,7 +859,7 @@ def checkout_with_voucher_percentage(checkout, product, voucher_percentage):
 def checkout_with_voucher_free_shipping(
     checkout_with_items_and_shipping, voucher_free_shipping
 ):
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_items_and_shipping)
     checkout_info = fetch_checkout_info(
         checkout_with_items_and_shipping, lines, manager
@@ -795,7 +889,9 @@ def checkout_with_preorders_only(
     preorder_variant_channel_threshold,
 ):
     lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, lines, get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, preorder_variant_with_end_date, 2)
     add_variant_to_checkout(checkout_info, preorder_variant_channel_threshold, 2)
 
@@ -808,7 +904,9 @@ def checkout_with_preorders_and_regular_variant(
     checkout, stocks_for_cc, preorder_variant_with_end_date, product_variant_list
 ):
     lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, lines, get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, preorder_variant_with_end_date, 2)
     add_variant_to_checkout(checkout_info, product_variant_list[0], 2)
 
@@ -820,7 +918,9 @@ def checkout_with_preorders_and_regular_variant(
 def checkout_with_gift_card_items(
     checkout, non_shippable_gift_card_product, shippable_gift_card_product
 ):
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     non_shippable_variant = non_shippable_gift_card_product.variants.get()
     shippable_variant = shippable_gift_card_product.variants.get()
     add_variant_to_checkout(checkout_info, non_shippable_variant, 1)
@@ -859,7 +959,9 @@ def checkout_with_payments(checkout):
 def checkout_with_item_and_preorder_item(
     checkout_with_item, product, preorder_variant_channel_threshold
 ):
-    checkout_info = fetch_checkout_info(checkout_with_item, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout_with_item, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, preorder_variant_channel_threshold, 1)
     return checkout_with_item
 
@@ -1074,7 +1176,9 @@ def user_checkout_PLN(customer_user, channel_PLN):
 
 @pytest.fixture
 def user_checkout_with_items(user_checkout, product_list):
-    checkout_info = fetch_checkout_info(user_checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        user_checkout, [], get_plugins_manager(allow_replica=False)
+    )
     for product in product_list:
         variant = product.variants.get()
         add_variant_to_checkout(checkout_info, variant, 1)
@@ -1084,7 +1188,9 @@ def user_checkout_with_items(user_checkout, product_list):
 
 @pytest.fixture
 def user_checkout_with_items_for_cc(user_checkout_for_cc, product_list):
-    checkout_info = fetch_checkout_info(user_checkout_for_cc, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        user_checkout_for_cc, [], get_plugins_manager(allow_replica=False)
+    )
     for product in product_list:
         variant = product.variants.get()
         add_variant_to_checkout(checkout_info, variant, 1)
@@ -2421,7 +2527,7 @@ def categories_tree(db, product_type, channel_USD):  # pylint: disable=W0613
         visible_in_listings=True,
     )
 
-    associate_attribute_values_to_instance(product, product_attr, attr_value)
+    associate_attribute_values_to_instance(product, {product_attr.pk: [attr_value]})
     return parent
 
 
@@ -2633,7 +2739,9 @@ def product(product_type, category, warehouse, channel_USD, default_tax_class):
         available_for_purchase_at=datetime.datetime(1999, 1, 1, tzinfo=pytz.UTC),
     )
 
-    associate_attribute_values_to_instance(product, product_attr, product_attr_value)
+    associate_attribute_values_to_instance(
+        product, {product_attr.pk: [product_attr_value]}
+    )
 
     variant_attr = product_type.variant_attributes.first()
     variant_attr_value = variant_attr.values.first()
@@ -2649,7 +2757,9 @@ def product(product_type, category, warehouse, channel_USD, default_tax_class):
     )
     Stock.objects.create(warehouse=warehouse, product_variant=variant, quantity=10)
 
-    associate_attribute_values_to_instance(variant, variant_attr, variant_attr_value)
+    associate_attribute_values_to_instance(
+        variant, {variant_attr.pk: [variant_attr_value]}
+    )
 
     return product
 
@@ -2819,7 +2929,9 @@ def product_with_rich_text_attribute(
         available_for_purchase_at=datetime.datetime(1999, 1, 1, tzinfo=pytz.UTC),
     )
 
-    associate_attribute_values_to_instance(product, product_attr, product_attr_value)
+    associate_attribute_values_to_instance(
+        product, {product_attr.pk: [product_attr_value]}
+    )
 
     variant_attr = product_type_with_rich_text_attribute.variant_attributes.first()
     variant_attr_value = variant_attr.values.first()
@@ -2835,7 +2947,9 @@ def product_with_rich_text_attribute(
     )
     Stock.objects.create(warehouse=warehouse, product_variant=variant, quantity=10)
 
-    associate_attribute_values_to_instance(variant, variant_attr, variant_attr_value)
+    associate_attribute_values_to_instance(
+        variant, {variant_attr.pk: [variant_attr_value]}
+    )
     return [product, variant]
 
 
@@ -2989,10 +3103,10 @@ def product_with_variant_with_two_attributes(
     )
 
     associate_attribute_values_to_instance(
-        variant, color_attribute, color_attribute.values.first()
+        variant, {color_attribute.pk: [color_attribute.values.first()]}
     )
     associate_attribute_values_to_instance(
-        variant, size_attribute, size_attribute.values.first()
+        variant, {size_attribute.pk: [size_attribute.values.first()]}
     )
 
     return product
@@ -3052,10 +3166,10 @@ def product_with_variant_with_external_media(
     )
 
     associate_attribute_values_to_instance(
-        variant, color_attribute, color_attribute.values.first()
+        variant, {color_attribute.pk: [color_attribute.values.first()]}
     )
     associate_attribute_values_to_instance(
-        variant, size_attribute, size_attribute.values.first()
+        variant, {size_attribute.pk: [size_attribute.values.first()]}
     )
 
     return product
@@ -3103,7 +3217,7 @@ def product_with_variant_with_file_attribute(
     )
 
     associate_attribute_values_to_instance(
-        variant, file_attribute, file_attribute.values.first()
+        variant, {file_attribute.pk: [file_attribute.values.first()]}
     )
 
     return product
@@ -3128,7 +3242,9 @@ def product_with_multiple_values_attributes(product, product_type) -> Product:
     product_type.product_attributes.clear()
     product_type.product_attributes.add(attribute)
 
-    associate_attribute_values_to_instance(product, attribute, attr_val_1, attr_val_2)
+    associate_attribute_values_to_instance(
+        product, {attribute.pk: [attr_val_1, attr_val_2]}
+    )
     return product
 
 
@@ -3606,7 +3722,7 @@ def product_list(
     Stock.objects.bulk_create(stocks)
 
     for product in products:
-        associate_attribute_values_to_instance(product, product_attr, attr_value)
+        associate_attribute_values_to_instance(product, {product_attr.pk: [attr_value]})
         product.search_vector = FlatConcatSearchVector(
             *prepare_product_search_vector_value(product)
         )
@@ -3889,7 +4005,9 @@ def unavailable_product_with_variant(
     )
     Stock.objects.create(product_variant=variant, warehouse=warehouse, quantity=10)
 
-    associate_attribute_values_to_instance(variant, variant_attr, variant_attr_value)
+    associate_attribute_values_to_instance(
+        variant, {variant_attr.pk: [variant_attr_value]}
+    )
     return product
 
 
@@ -4099,12 +4217,12 @@ def order_line(order, variant):
 
 
 @pytest.fixture
-def order_line_on_promotion(order_line, promotion):
+def order_line_on_promotion(order_line, catalogue_promotion):
     variant = order_line.variant
 
     channel = order_line.order.channel
     reward_value = Decimal("1.0")
-    rule = promotion.rules.first()
+    rule = catalogue_promotion.rules.first()
     variant_channel_listing = variant.channel_listings.get(channel=channel)
 
     variant_channel_listing.discounted_price_amount = (
@@ -4416,7 +4534,9 @@ def checkout_line_with_one_reservation(
 def checkout_line_with_preorder_item(
     checkout, product, preorder_variant_channel_threshold
 ):
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, preorder_variant_channel_threshold, 1)
     return checkout.lines.last()
 
@@ -4425,7 +4545,9 @@ def checkout_line_with_preorder_item(
 def checkout_line_with_reserved_preorder_item(
     checkout, product, preorder_variant_channel_threshold
 ):
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, preorder_variant_channel_threshold, 2)
     checkout_line = checkout.lines.last()
 
@@ -4587,6 +4709,7 @@ def recalculate_order(order):
     total -= discount
 
     order.total = total
+    order.subtotal = get_subtotal(order.lines.all(), order.currency)
     order.undiscounted_total = undiscounted_total
 
     if discount:
@@ -5174,7 +5297,7 @@ def fulfilled_order(order_with_lines):
                 line=line_2, quantity=line_2.quantity, warehouse_pk=warehouse_2_pk
             ),
         ],
-        manager=get_plugins_manager(),
+        manager=get_plugins_manager(allow_replica=False),
     )
     order.status = OrderStatus.FULFILLED
     order.save(update_fields=["status"])
@@ -5201,7 +5324,7 @@ def fulfilled_order_without_inventory_tracking(
     fulfillment.lines.create(order_line=line, quantity=line.quantity, stock=stock)
     fulfill_order_lines(
         [OrderLineInfo(line=line, quantity=line.quantity, warehouse_pk=warehouse_pk)],
-        get_plugins_manager(),
+        get_plugins_manager(allow_replica=False),
     )
     order.status = OrderStatus.FULFILLED
     order.save(update_fields=["status"])
@@ -5225,7 +5348,13 @@ def fulfilled_order_with_all_cancelled_fulfillments(
     fulfilled_order, staff_user, warehouse
 ):
     fulfillment = fulfilled_order.fulfillments.get()
-    cancel_fulfillment(fulfillment, staff_user, None, warehouse, get_plugins_manager())
+    cancel_fulfillment(
+        fulfillment,
+        staff_user,
+        None,
+        warehouse,
+        get_plugins_manager(allow_replica=False),
+    )
     return fulfilled_order
 
 
@@ -5480,9 +5609,10 @@ def dummy_webhook_app_payment_data(dummy_payment_data, payment_app):
 
 
 @pytest.fixture
-def promotion(channel_USD, product, collection):
+def catalogue_promotion(channel_USD, product, collection):
     promotion = Promotion.objects.create(
         name="Promotion",
+        type=PromotionType.CATALOGUE,
         description=dummy_editorjs("Test description."),
         end_date=timezone.now() + timedelta(days=30),
     )
@@ -5520,22 +5650,37 @@ def promotion(channel_USD, product, collection):
     )
     for rule in rules:
         rule.channels.add(channel_USD)
+    fetch_variants_for_promotion_rules(promotion.rules.all())
     return promotion
 
 
 @pytest.fixture
-def promotion_without_rules(db):
+def catalogue_promotion_without_rules(db):
     promotion = Promotion.objects.create(
         name="Promotion",
         description=dummy_editorjs("Test description."),
         end_date=timezone.now() + timedelta(days=30),
+        type=PromotionType.CATALOGUE,
     )
     return promotion
 
 
 @pytest.fixture
-def promotion_with_single_rule(catalogue_predicate, channel_USD):
-    promotion = Promotion.objects.create(name="Promotion with single rule")
+def order_promotion_without_rules(db):
+    promotion = Promotion.objects.create(
+        name="Promotion",
+        description=dummy_editorjs("Test description."),
+        end_date=timezone.now() + timedelta(days=30),
+        type=PromotionType.ORDER,
+    )
+    return promotion
+
+
+@pytest.fixture
+def catalogue_promotion_with_single_rule(catalogue_predicate, channel_USD):
+    promotion = Promotion.objects.create(
+        name="Promotion with single rule", type=PromotionType.CATALOGUE
+    )
     rule = PromotionRule.objects.create(
         name="Sale rule",
         promotion=promotion,
@@ -5548,23 +5693,46 @@ def promotion_with_single_rule(catalogue_predicate, channel_USD):
 
 
 @pytest.fixture
+def order_promotion_with_rule(channel_USD):
+    promotion = Promotion.objects.create(
+        name="Promotion with order rule", type=PromotionType.ORDER
+    )
+    rule = PromotionRule.objects.create(
+        name="Promotion rule",
+        promotion=promotion,
+        order_predicate={
+            "discountedObjectPredicate": {"baseSubtotalPrice": {"range": {"gte": 100}}}
+        },
+        reward_value_type=RewardValueType.FIXED,
+        reward_value=Decimal(5),
+        reward_type=RewardType.SUBTOTAL_DISCOUNT,
+    )
+    rule.channels.add(channel_USD)
+    return promotion
+
+
+@pytest.fixture
 def promotion_list(channel_USD, product, collection):
+    collection.products.add(product)
     promotions = Promotion.objects.bulk_create(
         [
             Promotion(
                 name="Promotion 1",
+                type=PromotionType.CATALOGUE,
                 description=dummy_editorjs("Promotion 1 description."),
                 start_date=timezone.now() + timedelta(days=1),
                 end_date=timezone.now() + timedelta(days=10),
             ),
             Promotion(
                 name="Promotion 2",
+                type=PromotionType.CATALOGUE,
                 description=dummy_editorjs("Promotion 2 description."),
                 start_date=timezone.now() + timedelta(days=5),
                 end_date=timezone.now() + timedelta(days=20),
             ),
             Promotion(
                 name="Promotion 3",
+                type=PromotionType.CATALOGUE,
                 description=dummy_editorjs("TePromotion 3 description."),
                 start_date=timezone.now() + timedelta(days=15),
                 end_date=timezone.now() + timedelta(days=30),
@@ -5633,14 +5801,15 @@ def promotion_list(channel_USD, product, collection):
     )
     for rule in rules:
         rule.channels.add(channel_USD)
+    fetch_variants_for_promotion_rules(PromotionRule.objects.all())
     return promotions
 
 
 @pytest.fixture
-def promotion_rule(channel_USD, promotion, product):
+def promotion_rule(channel_USD, catalogue_promotion, product):
     rule = PromotionRule.objects.create(
         name="Promotion rule name",
-        promotion=promotion,
+        promotion=catalogue_promotion,
         description=dummy_editorjs("Test description for percentage promotion rule."),
         catalogue_predicate={
             "productPredicate": {
@@ -5651,6 +5820,37 @@ def promotion_rule(channel_USD, promotion, product):
         reward_value=Decimal("25"),
     )
     rule.channels.add(channel_USD)
+    return rule
+
+
+@pytest.fixture
+def order_promotion_rule(channel_USD, order_promotion_without_rules):
+    rule = PromotionRule.objects.create(
+        name="Order promotion rule",
+        promotion=order_promotion_without_rules,
+        order_predicate={
+            "discountedObjectPredicate": {"baseSubtotalPrice": {"range": {"gte": 20}}}
+        },
+        reward_value_type=RewardValueType.PERCENTAGE,
+        reward_value=Decimal("25"),
+        reward_type=RewardType.SUBTOTAL_DISCOUNT,
+    )
+    rule.channels.add(channel_USD)
+    return rule
+
+
+@pytest.fixture
+def gift_promotion_rule(channel_USD, order_promotion_without_rules, product_list):
+    rule = PromotionRule.objects.create(
+        name="Order promotion rule",
+        promotion=order_promotion_without_rules,
+        order_predicate={
+            "discountedObjectPredicate": {"baseSubtotalPrice": {"range": {"gte": 20}}}
+        },
+        reward_type=RewardType.GIFT,
+    )
+    rule.channels.add(channel_USD)
+    rule.gifts.set([product.variants.first() for product in product_list[:2]])
     return rule
 
 
@@ -5695,7 +5895,7 @@ def catalogue_predicate(product, category, collection, variant):
 
 @pytest.fixture
 def promotion_converted_from_sale(catalogue_predicate, channel_USD):
-    promotion = Promotion.objects.create(name="Sale")
+    promotion = Promotion.objects.create(name="Sale", type=PromotionType.CATALOGUE)
     promotion.assign_old_sale_id()
 
     rule = PromotionRule.objects.create(
@@ -5707,6 +5907,7 @@ def promotion_converted_from_sale(catalogue_predicate, channel_USD):
         old_channel_listing_id=PromotionRule.get_old_channel_listing_ids(1)[0][0],
     )
     rule.channels.add(channel_USD)
+    fetch_variants_for_promotion_rules(promotion.rules.all())
     return promotion
 
 
@@ -5724,12 +5925,15 @@ def promotion_converted_from_sale_with_many_channels(
         old_channel_listing_id=PromotionRule.get_old_channel_listing_ids(1)[0][0],
     )
     rule.channels.add(channel_PLN)
+    fetch_variants_for_promotion_rules(promotion.rules.all())
     return promotion
 
 
 @pytest.fixture
 def promotion_converted_from_sale_with_empty_predicate(channel_USD):
-    promotion = Promotion.objects.create(name="Sale with empty predicate")
+    promotion = Promotion.objects.create(
+        name="Sale with empty predicate", type=PromotionType.CATALOGUE
+    )
     promotion.assign_old_sale_id()
     rule = PromotionRule.objects.create(
         name="Sale with empty predicate rule",
@@ -5744,7 +5948,8 @@ def promotion_converted_from_sale_with_empty_predicate(channel_USD):
 
 
 @pytest.fixture
-def promotion_events(promotion, staff_user):
+def promotion_events(catalogue_promotion, staff_user):
+    promotion = catalogue_promotion
     rule_id = promotion.rules.first().pk
     events = PromotionEvent.objects.bulk_create(
         [
@@ -5994,6 +6199,23 @@ def permission_group_all_perms_without_any_channel(
 
 
 @pytest.fixture
+def shop_permissions(
+    permission_manage_products,
+    permission_manage_channels,
+    permission_manage_shipping,
+    permission_manage_taxes,
+    permission_manage_settings,
+):
+    return [
+        permission_manage_products,
+        permission_manage_channels,
+        permission_manage_shipping,
+        permission_manage_taxes,
+        permission_manage_settings,
+    ]
+
+
+@pytest.fixture
 def collection(db):
     collection = Collection.objects.create(
         name="Collection",
@@ -6149,7 +6371,9 @@ def page(db, page_type, size_page_attribute):
 
     # associate attribute value
     page_attr_value = size_page_attribute.values.get(slug="10")
-    associate_attribute_values_to_instance(page, size_page_attribute, page_attr_value)
+    associate_attribute_values_to_instance(
+        page, {size_page_attribute.pk: [page_attr_value]}
+    )
 
     return page
 
@@ -6168,10 +6392,10 @@ def page_with_rich_text_attribute(
     page = Page.objects.create(**data)
 
     # associate attribute value
-    page_attr_value = rich_text_attribute_page_type.values.first()
-    associate_attribute_values_to_instance(
-        page, rich_text_attribute_page_type, page_attr_value
-    )
+    page_attr = page_type_with_rich_text_attribute.page_attributes.first()
+    page_attr_value = page_attr.values.first()
+
+    associate_attribute_values_to_instance(page, {page_attr.pk: [page_attr_value]})
 
     return page
 
@@ -6308,7 +6532,7 @@ def translated_page_unique_attribute_value(page, rich_text_attribute_page_type):
     page_type.page_attributes.add(rich_text_attribute_page_type)
     attribute_value = rich_text_attribute_page_type.values.first()
     associate_attribute_values_to_instance(
-        page, rich_text_attribute_page_type, attribute_value
+        page, {rich_text_attribute_page_type.id: [attribute_value]}
     )
     return AttributeValueTranslation.objects.create(
         language_code="fr",
@@ -6323,7 +6547,7 @@ def translated_product_unique_attribute_value(product, rich_text_attribute):
     product_type.product_attributes.add(rich_text_attribute)
     attribute_value = rich_text_attribute.values.first()
     associate_attribute_values_to_instance(
-        product, rich_text_attribute, attribute_value
+        product, {rich_text_attribute.id: [attribute_value]}
     )
     return AttributeValueTranslation.objects.create(
         language_code="fr",
@@ -6338,7 +6562,7 @@ def translated_variant_unique_attribute_value(variant, rich_text_attribute):
     product_type.variant_attributes.add(rich_text_attribute)
     attribute_value = rich_text_attribute.values.first()
     associate_attribute_values_to_instance(
-        variant, rich_text_attribute, attribute_value
+        variant, {rich_text_attribute.id: [attribute_value]}
     )
     return AttributeValueTranslation.objects.create(
         language_code="fr",
@@ -6411,10 +6635,10 @@ def shipping_method_translation_fr(shipping_method):
 
 
 @pytest.fixture
-def promotion_translation_fr(promotion):
+def promotion_translation_fr(catalogue_promotion):
     return PromotionTranslation.objects.create(
         language_code="fr",
-        promotion=promotion,
+        promotion=catalogue_promotion,
         name="French promotion name",
         description=dummy_editorjs("French promotion description."),
     )
@@ -6570,6 +6794,7 @@ def transaction_item_generator():
         refunded_value=Decimal(0),
         canceled_value=Decimal(0),
         use_old_id=False,
+        last_refund_success=True,
     ):
         if available_actions is None:
             available_actions = []
@@ -6586,6 +6811,7 @@ def transaction_item_generator():
             app=app,
             user=user,
             use_old_id=use_old_id,
+            last_refund_success=last_refund_success,
         )
         create_manual_adjustment_events(
             transaction=transaction,
@@ -7490,7 +7716,7 @@ def checkout_with_prices(
     checkout_with_items.shipping_method = shipping_method
     checkout_with_items.save(update_fields=["shipping_method"])
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     channel = checkout_with_items.channel
     lines = checkout_with_items.lines.all()
     lines_info, _ = fetch_checkout_lines(checkout_with_items)
@@ -7578,6 +7804,7 @@ def warehouse_no_shipping_zone(address, channel_USD):
         name="Warehouse without shipping zone",
         slug="warehouse-no-shipping-zone",
         email="test2@example.com",
+        external_reference="warehouse-no-shipping-zone",
     )
     warehouse.channels.add(channel_USD)
     return warehouse
@@ -8265,6 +8492,8 @@ def async_subscription_webhooks_with_root_objects(
     subscription_voucher_created_webhook,
     subscription_voucher_updated_webhook,
     subscription_voucher_deleted_webhook,
+    subscription_voucher_codes_created_webhook,
+    subscription_voucher_codes_deleted_webhook,
     subscription_voucher_webhook_with_meta,
     subscription_voucher_metadata_updated_webhook,
     subscription_voucher_code_export_completed_webhook,
@@ -8304,6 +8533,7 @@ def async_subscription_webhooks_with_root_objects(
     page_type = page.page_type
     transaction_item_created_by_app.use_old_id = True
     transaction_item_created_by_app.save()
+    voucher_code = voucher.codes.first()
 
     return {
         events.ACCOUNT_DELETED: [
@@ -8592,6 +8822,14 @@ def async_subscription_webhooks_with_root_objects(
         events.VOUCHER_CREATED: [subscription_voucher_created_webhook, voucher],
         events.VOUCHER_UPDATED: [subscription_voucher_updated_webhook, voucher],
         events.VOUCHER_DELETED: [subscription_voucher_deleted_webhook, voucher],
+        events.VOUCHER_CODES_CREATED: [
+            subscription_voucher_codes_created_webhook,
+            voucher_code,
+        ],
+        events.VOUCHER_CODES_DELETED: [
+            subscription_voucher_codes_deleted_webhook,
+            voucher_code,
+        ],
         events.VOUCHER_METADATA_UPDATED: [
             subscription_voucher_metadata_updated_webhook,
             voucher,

@@ -2,7 +2,7 @@ import pytest
 
 from ....product.utils.preparing_product import prepare_product
 from ....promotions.utils import create_promotion, create_promotion_rule
-from ....shop.utils.preparing_shop import prepare_shop
+from ....shop.utils import prepare_default_shop
 from ....utils import assign_permissions
 from ...utils import (
     checkout_complete,
@@ -16,29 +16,24 @@ from ...utils import (
 def test_checkout_products_on_fixed_promotion_core_2102(
     e2e_not_logged_api_client,
     e2e_staff_api_client,
-    permission_manage_products,
-    permission_manage_channels,
-    permission_manage_shipping,
+    shop_permissions,
     permission_manage_product_types_and_attributes,
     permission_manage_discounts,
 ):
     # Before
 
     permissions = [
-        permission_manage_products,
-        permission_manage_channels,
-        permission_manage_shipping,
+        *shop_permissions,
         permission_manage_product_types_and_attributes,
         permission_manage_discounts,
     ]
     assign_permissions(e2e_staff_api_client, permissions)
 
-    (
-        warehouse_id,
-        channel_id,
-        channel_slug,
-        shipping_method_id,
-    ) = prepare_shop(e2e_staff_api_client)
+    shop_data = prepare_default_shop(e2e_staff_api_client)
+    channel_id = shop_data["channel"]["id"]
+    channel_slug = shop_data["channel"]["slug"]
+    warehouse_id = shop_data["warehouse"]["id"]
+    shipping_method_id = shop_data["shipping_method"]["id"]
 
     (
         product_id,
@@ -52,20 +47,26 @@ def test_checkout_products_on_fixed_promotion_core_2102(
     discount_value = 5
     discount_type = "FIXED"
     promotion_rule_name = "rule for product"
+    promotion_type = "CATALOGUE"
 
-    promotion_data = create_promotion(e2e_staff_api_client, promotion_name)
+    promotion_data = create_promotion(
+        e2e_staff_api_client, promotion_name, promotion_type
+    )
     promotion_id = promotion_data["id"]
 
     catalogue_predicate = {"productPredicate": {"ids": [product_id]}}
 
+    input = {
+        "promotion": promotion_id,
+        "channels": [channel_id],
+        "name": promotion_rule_name,
+        "cataloguePredicate": catalogue_predicate,
+        "rewardValue": discount_value,
+        "rewardValueType": "FIXED",
+    }
     promotion_rule = create_promotion_rule(
         e2e_staff_api_client,
-        promotion_id,
-        catalogue_predicate,
-        discount_type,
-        discount_value,
-        promotion_rule_name,
-        channel_id,
+        input,
     )
     product_predicate = promotion_rule["cataloguePredicate"]["productPredicate"]["ids"]
     assert promotion_rule["channels"][0]["id"] == channel_id
@@ -85,7 +86,6 @@ def test_checkout_products_on_fixed_promotion_core_2102(
     )
     checkout_id = checkout_data["id"]
     checkout_lines = checkout_data["lines"][0]
-    shipping_method_id = checkout_data["shippingMethods"][0]["id"]
     unit_price = float(product_variant_price) - discount_value
 
     assert checkout_data["isShippingRequired"] is True

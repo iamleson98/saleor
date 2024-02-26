@@ -1,4 +1,4 @@
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from unittest.mock import patch
 
 import before_after
@@ -62,6 +62,7 @@ def test_update_discounted_price_for_promotion_discount_on_variant(
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.add(variant)
 
     # when
     update_discounted_prices_for_promotion(Product.objects.filter(id__in=[product.id]))
@@ -109,6 +110,7 @@ def test_update_discounted_price_for_promotion_discount_on_product(
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.set(product.variants.all())
 
     # when
     update_discounted_prices_for_promotion(Product.objects.filter(id__in=[product.id]))
@@ -170,30 +172,19 @@ def test_update_discounted_price_for_promotion_discount_multiple_applicable_rule
     )
     rule_1.channels.add(variant_channel_listing.channel)
     rule_2.channels.add(variant_channel_listing.channel)
+    rule_1.variants.add(variant)
+    rule_2.variants.set(product.variants.all())
 
     # when
     update_discounted_prices_for_promotion(Product.objects.filter(id__in=[product.id]))
 
     # then
-    percentage_reward_value = (
-        (variant_price * (percentage_reward_value / 100))
-        .quantize(rounding=ROUND_HALF_UP)
-        .amount
-    )
-    expected_price_amount = round(
-        variant_price.amount - reward_value - percentage_reward_value, 2
-    )
+    expected_price_amount = round(variant_price.amount - reward_value, 2)
     product_channel_listing.refresh_from_db()
     variant_channel_listing.refresh_from_db()
     assert product_channel_listing.discounted_price_amount == expected_price_amount
     assert variant_channel_listing.discounted_price_amount == expected_price_amount
-    assert variant_channel_listing.promotion_rules.count() == 2
-    assert (
-        variant_channel_listing.variantlistingpromotionrule.get(
-            promotion_rule_id=rule_1.id
-        ).discount_amount
-        == percentage_reward_value
-    )
+    assert variant_channel_listing.promotion_rules.count() == 1
     assert (
         variant_channel_listing.variantlistingpromotionrule.get(
             promotion_rule_id=rule_2.id
@@ -234,6 +225,7 @@ def test_update_discounted_price_for_promotion_1_cent_variant_on_10_percentage_d
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.add(variant)
 
     # when
     update_discounted_prices_for_promotion(Product.objects.filter(id__in=[product.id]))
@@ -281,6 +273,7 @@ def test_update_discounted_price_for_promotion_promotion_not_applicable_for_chan
         reward_value=reward_value,
     )
     rule.channels.add(channel_PLN)
+    rule.variants.add(variant)
 
     # when
     update_discounted_prices_for_promotion(Product.objects.filter(id__in=[product.id]))
@@ -321,6 +314,7 @@ def test_update_discounted_price_for_promotion_discount_updated(product, channel
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.add(variant)
 
     listing_promotion_rule = VariantChannelListingPromotionRule.objects.create(
         variant_channel_listing=variant_channel_listing,
@@ -430,6 +424,7 @@ def test_update_discounted_price_for_promotion_discount_one_rule_not_valid_anymo
     )
     rule_1.channels.add(variant_channel_listing.channel)
     rule_2.channels.add(variant_channel_listing.channel)
+    rule_2.variants.set(product.variants.all())
 
     listing_promotion_rules = VariantChannelListingPromotionRule.objects.bulk_create(
         [
@@ -517,6 +512,7 @@ def test_update_discounted_price_for_promotion_promotion_rule_deleted_in_meantim
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.add(variant)
 
     def delete_promotion_rule(*args, **kwargs):
         PromotionRule.objects.all().delete()
@@ -570,6 +566,7 @@ def test_update_discounted_price_rule_deleted_in_meantime_promotion_listing_exis
         reward_value=reward_value,
     )
     rule.channels.add(variant_channel_listing.channel)
+    rule.variants.add(variant)
 
     listing_promotion_rule = VariantChannelListingPromotionRule.objects.create(
         variant_channel_listing=variant_channel_listing,

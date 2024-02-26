@@ -7,7 +7,7 @@ import pytest
 from .....account.models import Address
 from .....checkout.error_codes import CheckoutErrorCode
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
-from .....checkout.utils import PRIVATE_META_APP_SHIPPING_ID, invalidate_checkout_prices
+from .....checkout.utils import PRIVATE_META_APP_SHIPPING_ID, invalidate_checkout
 from .....plugins.manager import get_plugins_manager
 from .....shipping import models as shipping_models
 from .....shipping.utils import convert_to_shipping_method_data
@@ -62,11 +62,11 @@ MUTATION_UPDATE_DELIVERY_METHOD = """
 )
 @patch(
     "saleor.graphql.checkout.mutations.checkout_delivery_method_update."
-    "invalidate_checkout_prices",
-    wraps=invalidate_checkout_prices,
+    "invalidate_checkout",
+    wraps=invalidate_checkout,
 )
 def test_checkout_delivery_method_update(
-    mock_invalidate_checkout_prices,
+    mock_invalidate_checkout,
     mock_clean_delivery,
     api_client,
     delivery_method,
@@ -79,7 +79,7 @@ def test_checkout_delivery_method_update(
     mock_clean_delivery.return_value = is_valid_delivery_method
 
     checkout = checkout_with_item_for_cc
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
@@ -107,7 +107,7 @@ def test_checkout_delivery_method_update(
     if is_valid_delivery_method:
         assert not errors
         assert getattr(checkout, attribute_name) == delivery_method
-        assert mock_invalidate_checkout_prices.call_count == 1
+        assert mock_invalidate_checkout.call_count == 1
     else:
         assert len(errors) == 1
         assert errors[0]["field"] == "deliveryMethodId"
@@ -133,11 +133,11 @@ def test_checkout_delivery_method_update(
 )
 @patch(
     "saleor.graphql.checkout.mutations.checkout_delivery_method_update."
-    "invalidate_checkout_prices",
-    wraps=invalidate_checkout_prices,
+    "invalidate_checkout",
+    wraps=invalidate_checkout,
 )
 def test_checkout_delivery_method_update_no_checkout_metadata(
-    mock_invalidate_checkout_prices,
+    mock_invalidate_checkout,
     mock_clean_delivery,
     api_client,
     delivery_method,
@@ -151,7 +151,7 @@ def test_checkout_delivery_method_update_no_checkout_metadata(
 
     checkout = checkout_with_item_for_cc
     checkout.metadata_storage.delete()
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
@@ -182,7 +182,7 @@ def test_checkout_delivery_method_update_no_checkout_metadata(
     if is_valid_delivery_method:
         assert not errors
         assert getattr(checkout, attribute_name) == delivery_method
-        assert mock_invalidate_checkout_prices.call_count == 1
+        assert mock_invalidate_checkout.call_count == 1
     else:
         assert len(errors) == 1
         assert errors[0]["field"] == "deliveryMethodId"
@@ -475,7 +475,7 @@ def test_checkout_delivery_method_update_with_not_all_required_shipping_address_
     checkout = checkout_with_item_for_cc
     checkout.shipping_address = Address.objects.create(country="US")
     checkout.save()
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
@@ -550,7 +550,7 @@ def test_checkout_delivery_method_update_with_not_valid_address_data(
         postal_code="53-601",
     )
     checkout.save()
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 

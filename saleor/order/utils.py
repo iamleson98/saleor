@@ -334,6 +334,8 @@ def create_order_line_discounts(
     line_discounts_to_create: list[OrderLineDiscount] = []
     for rule_info in rules_info:
         rule = rule_info.rule
+        if not rule_info.variant_listing_promotion_rule:
+            continue
         rule_discount_amount = rule_info.variant_listing_promotion_rule.discount_amount
         line_discounts_to_create.append(
             OrderLineDiscount(
@@ -615,7 +617,7 @@ def get_all_shipping_methods_for_order(
     shipping_methods = ShippingMethod.objects.applicable_shipping_methods_for_instance(
         order,
         channel_id=order.channel_id,
-        price=order.get_subtotal().gross,
+        price=order.subtotal.gross,
         country_code=order.shipping_address.country.code,
     ).prefetch_related("channel_listings")
 
@@ -725,7 +727,7 @@ def get_voucher_discount_for_order(order: Order) -> Money:
     if not order.voucher:
         return zero_money(order.currency)
     validate_voucher_in_order(order)
-    subtotal = order.get_subtotal()
+    subtotal = order.subtotal
     if order.voucher.type == VoucherType.ENTIRE_ORDER:
         return order.voucher.get_discount_amount_for(subtotal.gross, order.channel)
     if order.voucher.type == VoucherType.SHIPPING:

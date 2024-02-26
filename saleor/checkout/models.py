@@ -42,6 +42,12 @@ class Checkout(models.Model):
 
     created_at = models.DateTimeField(auto_now_add=True)
     last_change = models.DateTimeField(auto_now=True, db_index=True)
+
+    # Denormalized modified_at for the latest modified transactionItem assigned to
+    # checkout
+    last_transaction_modified_at = models.DateTimeField(null=True, blank=True)
+    automatically_refundable = models.BooleanField(default=False)
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         blank=True,
@@ -105,6 +111,13 @@ class Checkout(models.Model):
         net_amount_field="total_net_amount",
         gross_amount_field="total_gross_amount",
     )
+    # base price contains only catalogue discounts (does not contains voucher discount)
+    base_total_amount = models.DecimalField(
+        max_digits=settings.DEFAULT_MAX_DIGITS,
+        decimal_places=settings.DEFAULT_DECIMAL_PLACES,
+        default=Decimal(0),
+    )
+    base_total = MoneyField(amount_field="base_total_amount", currency_field="currency")
 
     subtotal_net_amount = models.DecimalField(
         max_digits=settings.DEFAULT_MAX_DIGITS,
@@ -119,6 +132,15 @@ class Checkout(models.Model):
     subtotal = TaxedMoneyField(
         net_amount_field="subtotal_net_amount",
         gross_amount_field="subtotal_gross_amount",
+    )
+    # base price contains only catalogue discounts (does not contains voucher discount)
+    base_subtotal_amount = models.DecimalField(
+        max_digits=settings.DEFAULT_MAX_DIGITS,
+        decimal_places=settings.DEFAULT_DECIMAL_PLACES,
+        default=Decimal(0),
+    )
+    base_subtotal = MoneyField(
+        amount_field="base_subtotal_amount", currency_field="currency"
     )
 
     shipping_price_net_amount = models.DecimalField(
@@ -175,6 +197,7 @@ class Checkout(models.Model):
     )
 
     tax_exemption = models.BooleanField(default=False)
+    tax_error = models.CharField(max_length=255, blank=True, null=True)
 
     class Meta:
         ordering = ("-last_change", "pk")
@@ -197,9 +220,9 @@ class Checkout(models.Model):
 
     def get_total_gift_cards_balance(self) -> Money:
         """Return the total balance of the gift cards assigned to the checkout."""
-        balance = self.gift_cards.active(  # type: ignore[attr-defined] # problem with django-stubs detecting the correct manager # noqa: E501
-            date=date.today()
-        ).aggregate(models.Sum("current_balance_amount"))["current_balance_amount__sum"]
+        balance = self.gift_cards.active(date=date.today()).aggregate(
+            models.Sum("current_balance_amount")
+        )["current_balance_amount__sum"]
         if balance is None:
             return zero_money(currency=self.currency)
         return Money(balance, self.currency)
@@ -265,6 +288,7 @@ class CheckoutLine(ModelWithMetadata):
         "product.ProductVariant", related_name="+", on_delete=models.CASCADE
     )
     quantity = models.PositiveIntegerField(validators=[MinValueValidator(1)])
+    is_gift = models.BooleanField(default=False)
     price_override = models.DecimalField(
         max_digits=settings.DEFAULT_MAX_DIGITS,
         decimal_places=settings.DEFAULT_DECIMAL_PLACES,

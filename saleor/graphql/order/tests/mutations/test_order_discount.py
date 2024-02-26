@@ -50,34 +50,41 @@ mutation OrderDiscountAdd($orderId: ID!, $input: OrderDiscountCommonInput!){
 def test_add_order_discount_incorrect_values(
     value, value_type, draft_order, staff_api_client, permission_group_manage_orders
 ):
+    # given
     variables = {
         "orderId": graphene.Node.to_global_id("Order", draft_order.pk),
         "input": {"valueType": value_type, "value": value},
     }
     permission_group_manage_orders.user_set.add(staff_api_client.user)
+
+    # when
     response = staff_api_client.post_graphql(ORDER_DISCOUNT_ADD, variables)
+
+    # then
     content = get_graphql_content(response)
     data = content["data"]["orderDiscountAdd"]
-
     errors = data["errors"]
-
     error = data["errors"][0]
     assert error["field"] == "value"
     assert error["code"] == OrderErrorCode.INVALID.name
-
     assert len(errors) == 1
 
 
 def test_add_fixed_order_discount_order_is_not_draft(
     order_with_lines, staff_api_client, permission_group_manage_orders
 ):
+    # given
     value = Decimal("10")
     variables = {
         "orderId": graphene.Node.to_global_id("Order", order_with_lines.pk),
         "input": {"valueType": DiscountValueTypeEnum.FIXED.name, "value": value},
     }
     permission_group_manage_orders.user_set.add(staff_api_client.user)
+
+    # when
     response = staff_api_client.post_graphql(ORDER_DISCOUNT_ADD, variables)
+
+    # then
     content = get_graphql_content(response)
     data = content["data"]["orderDiscountAdd"]
 
@@ -92,6 +99,7 @@ def test_add_fixed_order_discount_order_is_not_draft(
 def test_add_fixed_order_discount_to_order(
     status, draft_order, staff_api_client, permission_group_manage_orders
 ):
+    # given
     order = draft_order
     order.status = status
     order.save(update_fields=["status"])
@@ -102,13 +110,16 @@ def test_add_fixed_order_discount_to_order(
         "input": {"valueType": DiscountValueTypeEnum.FIXED.name, "value": value},
     }
     permission_group_manage_orders.user_set.add(staff_api_client.user)
+
+    # when
     response = staff_api_client.post_graphql(ORDER_DISCOUNT_ADD, variables)
     content = get_graphql_content(response)
+
+    # then
     data = content["data"]["orderDiscountAdd"]
 
     order.refresh_from_db()
     expected_net = total_before_order_discount.net.amount - value
-
     errors = data["errors"]
     assert len(errors) == 0
 
@@ -484,7 +495,7 @@ def test_update_order_discount_incorrect_values(
     assert error["code"] == OrderErrorCode.INVALID.name
 
 
-def test_update_order_discount__by_user_no_channel_access(
+def test_update_order_discount_by_user_no_channel_access(
     draft_order_with_fixed_discount_order,
     staff_api_client,
     permission_group_all_perms_channel_USD_only,
@@ -809,6 +820,24 @@ def test_update_order_line_discount(
     data = content["data"]["orderLineDiscountUpdate"]
 
     line_to_discount.refresh_from_db()
+    second_line = order.lines.last()
+    order.refresh_from_db()
+    order_discount = order.discounts.get()
+    order_discount_amount = order_discount.amount
+    base_shipping = order.base_shipping_price
+    discount_applied_to_lines = order_discount_amount - (
+        base_shipping - order.shipping_price.gross
+    )
+    discount_applied_to_discounted_line = (
+        discount_applied_to_lines
+        - (second_line.base_unit_price - second_line.unit_price.gross)
+        * second_line.quantity
+    )
+    assert (
+        discount_applied_to_discounted_line
+        == (line_to_discount.base_unit_price - line_to_discount.unit_price.gross)
+        * line_to_discount.quantity
+    )
 
     errors = data["errors"]
     assert not errors
@@ -819,7 +848,10 @@ def test_update_order_line_discount(
     )
     expected_line_price = discount(line_price_before_discount)
 
-    assert line_to_discount.unit_price == quantize_price(expected_line_price, "USD")
+    assert (
+        line_to_discount.base_unit_price
+        == quantize_price(expected_line_price, "USD").gross
+    )
     unit_discount = line_to_discount.unit_discount
     assert unit_discount == (line_price_before_discount - expected_line_price).gross
 
@@ -1000,7 +1032,7 @@ def test_update_order_line_discount_line_with_discount(
     )
     expected_line_price = discount(line_undiscounted_price)
 
-    assert line_to_discount.unit_price == expected_line_price
+    assert line_to_discount.base_unit_price == expected_line_price.gross
     unit_discount = line_to_discount.unit_discount
     assert unit_discount == (line_undiscounted_price - expected_line_price).gross
 

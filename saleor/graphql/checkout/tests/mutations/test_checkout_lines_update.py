@@ -12,7 +12,7 @@ from .....checkout.models import Checkout, CheckoutLine
 from .....checkout.utils import (
     add_variant_to_checkout,
     calculate_checkout_quantity,
-    invalidate_checkout_prices,
+    invalidate_checkout,
 )
 from .....plugins.manager import get_plugins_manager
 from .....product.models import ProductChannelListing
@@ -52,6 +52,7 @@ MUTATION_CHECKOUT_LINES_UPDATE = """
                 code
                 message
                 variants
+                lines
             }
         }
     }
@@ -64,12 +65,11 @@ MUTATION_CHECKOUT_LINES_UPDATE = """
     wraps=update_checkout_shipping_method_if_invalid,
 )
 @mock.patch(
-    "saleor.graphql.checkout.mutations.checkout_lines_add."
-    "invalidate_checkout_prices",
-    wraps=invalidate_checkout_prices,
+    "saleor.graphql.checkout.mutations.checkout_lines_add.invalidate_checkout",
+    wraps=invalidate_checkout,
 )
 def test_checkout_lines_update(
-    mocked_invalidate_checkout_prices,
+    mocked_invalidate_checkout,
     mocked_update_shipping_method,
     user_api_client,
     checkout_with_item,
@@ -102,12 +102,12 @@ def test_checkout_lines_update(
     assert line.quantity == 1
     assert calculate_checkout_quantity(lines) == 1
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
     assert checkout.last_change != previous_last_change
-    assert mocked_invalidate_checkout_prices.call_count == 1
+    assert mocked_invalidate_checkout.call_count == 1
 
 
 @mock.patch(
@@ -146,7 +146,7 @@ def test_checkout_lines_update_using_line_id(
     assert line.quantity == 1
     assert calculate_checkout_quantity(lines) == 1
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -193,7 +193,7 @@ def test_checkout_lines_update_using_line_id_and_variant_id(
     assert line.quantity == 2
     assert calculate_checkout_quantity(lines) == 2
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -307,7 +307,7 @@ def test_checkout_lines_update_only_stock_in_cc_warehouse(
     assert line.quantity == 1
     assert calculate_checkout_quantity(lines) == 1
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -501,7 +501,9 @@ def test_checkout_lines_update_other_lines_reservations_expirations(
     checkout = checkout_line_with_one_reservation.checkout
     line = checkout_line_with_one_reservation
     reservation = line.reservations.get()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     lines, _ = fetch_checkout_lines(checkout)
     assert calculate_checkout_quantity(lines) == 2
 
@@ -936,7 +938,7 @@ def test_checkout_line_delete_by_zero_quantity(
     assert not data["errors"]
     checkout.refresh_from_db()
     assert checkout.lines.count() == 0
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -972,7 +974,7 @@ def test_checkout_line_delete_by_zero_quantity_when_variant_unavailable_for_purc
     assert not data["errors"]
     checkout.refresh_from_db()
     assert checkout.lines.count() == 0
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -1008,7 +1010,7 @@ def test_checkout_line_update_by_zero_quantity_dont_create_new_lines(
     assert not data["errors"]
     checkout.refresh_from_db()
     assert checkout.lines.count() == 0
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
@@ -1101,7 +1103,9 @@ def test_checkout_lines_update_remove_shipping_if_removed_product_with_shipping(
     checkout.shipping_address = address
     checkout.shipping_method = shipping_method
     checkout.save()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, digital_variant, 1)
     line = checkout.lines.first()
     variant = line.variant
@@ -1133,7 +1137,7 @@ def test_with_active_problems_flow(
     variant = product_with_single_variant.variants.first()
 
     checkout_info = fetch_checkout_info(
-        checkout_with_problems, [], get_plugins_manager()
+        checkout_with_problems, [], get_plugins_manager(allow_replica=False)
     )
     add_variant_to_checkout(checkout_info, variant, 1)
 
@@ -1151,3 +1155,29 @@ def test_with_active_problems_flow(
 
     # then
     assert not content["data"]["checkoutLinesUpdate"]["errors"]
+
+
+def test_checkout_lines_update_quantity_gift(user_api_client, checkout_with_item):
+    # given
+    checkout = checkout_with_item
+    line = checkout.lines.first()
+    line.is_gift = True
+    line.save(update_fields=["is_gift"])
+    line_id = to_global_id_or_none(line)
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "lines": [{"lineId": line_id, "quantity": 0}],
+    }
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINES_UPDATE, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutLinesUpdate"]
+    assert not data["checkout"]
+    errors = data["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] == "lineId"
+    assert errors[0]["code"] == CheckoutErrorCode.NON_EDITABLE_GIFT_LINE.name
+    assert errors[0]["lines"] == [line_id]

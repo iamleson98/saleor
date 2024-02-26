@@ -19,6 +19,9 @@ from .....webhook.transport.asynchronous.transport import (
     create_deliveries_for_subscriptions,
     logger,
 )
+from .....webhook.transport.synchronous.transport import (
+    create_delivery_for_subscription_sync_event,
+)
 from . import subscription_queries
 from .payloads import (
     generate_account_events_payload,
@@ -45,6 +48,7 @@ from .payloads import (
     generate_shipping_method_payload,
     generate_shop_payload,
     generate_staff_payload,
+    generate_voucher_code_payload,
     generate_voucher_created_payload_with_meta,
     generate_voucher_payload,
     generate_warehouse_payload,
@@ -1665,14 +1669,17 @@ def test_sale_toggle(promotion_converted_from_sale, subscription_sale_toggle_web
     assert deliveries[0].webhook == webhooks[0]
 
 
-def test_promotion_created(promotion, subscription_promotion_created_webhook):
+def test_promotion_created(catalogue_promotion, subscription_promotion_created_webhook):
     # given
+    promotion = catalogue_promotion
     webhooks = [subscription_promotion_created_webhook]
     event_type = WebhookEventAsyncType.PROMOTION_CREATED
     expected_payload = generate_promotion_payload(promotion)
 
     # when
-    deliveries = create_deliveries_for_subscriptions(event_type, promotion, webhooks)
+    deliveries = create_deliveries_for_subscriptions(
+        event_type, catalogue_promotion, webhooks
+    )
 
     # then
     assert deliveries[0].payload.payload == json.dumps(expected_payload)
@@ -1680,8 +1687,9 @@ def test_promotion_created(promotion, subscription_promotion_created_webhook):
     assert deliveries[0].webhook == webhooks[0]
 
 
-def test_promotion_updated(promotion, subscription_promotion_updated_webhook):
+def test_promotion_updated(catalogue_promotion, subscription_promotion_updated_webhook):
     # given
+    promotion = catalogue_promotion
     webhooks = [subscription_promotion_updated_webhook]
     event_type = WebhookEventAsyncType.PROMOTION_UPDATED
     expected_payload = generate_promotion_payload(promotion)
@@ -1695,8 +1703,9 @@ def test_promotion_updated(promotion, subscription_promotion_updated_webhook):
     assert deliveries[0].webhook == webhooks[0]
 
 
-def test_promotion_deleted(promotion, subscription_promotion_deleted_webhook):
+def test_promotion_deleted(catalogue_promotion, subscription_promotion_deleted_webhook):
     # given
+    promotion = catalogue_promotion
     webhooks = [subscription_promotion_deleted_webhook]
     event_type = WebhookEventAsyncType.PROMOTION_DELETED
     expected_payload = generate_promotion_payload(promotion)
@@ -1710,8 +1719,9 @@ def test_promotion_deleted(promotion, subscription_promotion_deleted_webhook):
     assert deliveries[0].webhook == webhooks[0]
 
 
-def test_promotion_started(promotion, subscription_promotion_started_webhook):
+def test_promotion_started(catalogue_promotion, subscription_promotion_started_webhook):
     # given
+    promotion = catalogue_promotion
     webhooks = [subscription_promotion_started_webhook]
     event_type = WebhookEventAsyncType.PROMOTION_STARTED
     expected_payload = generate_promotion_payload(promotion)
@@ -1725,8 +1735,9 @@ def test_promotion_started(promotion, subscription_promotion_started_webhook):
     assert deliveries[0].webhook == webhooks[0]
 
 
-def test_promotion_ended(promotion, subscription_promotion_ended_webhook):
+def test_promotion_ended(catalogue_promotion, subscription_promotion_ended_webhook):
     # given
+    promotion = catalogue_promotion
     webhooks = [subscription_promotion_ended_webhook]
     event_type = WebhookEventAsyncType.PROMOTION_ENDED
     expected_payload = generate_promotion_payload(promotion)
@@ -2472,6 +2483,50 @@ def test_voucher_deleted(voucher, subscription_voucher_deleted_webhook):
     assert deliveries[0].webhook == webhooks[0]
 
 
+def test_voucher_codes_created(voucher, subscription_voucher_codes_created_webhook):
+    # given
+    webhooks = [subscription_voucher_codes_created_webhook]
+
+    voucher_code = voucher.codes.first()
+
+    event_type = WebhookEventAsyncType.VOUCHER_CODES_CREATED
+
+    # when
+    deliveries = create_deliveries_for_subscriptions(
+        event_type, [voucher_code], webhooks
+    )
+
+    # then
+    expected_payload = generate_voucher_code_payload([voucher_code])
+    assert deliveries[0].payload.payload == expected_payload
+    assert len(deliveries) == len(webhooks)
+    assert deliveries[0].webhook == webhooks[0]
+
+
+def test_voucher_codes_deleted(voucher, subscription_voucher_codes_deleted_webhook):
+    # given
+    webhooks = [subscription_voucher_codes_deleted_webhook]
+
+    voucher_code = voucher.codes.first()
+
+    voucher_code_id = voucher_code.id
+    voucher_code.delete()
+    voucher_code.id = voucher_code_id
+
+    event_type = WebhookEventAsyncType.VOUCHER_CODES_DELETED
+
+    # when
+    deliveries = create_deliveries_for_subscriptions(
+        event_type, [voucher_code], webhooks
+    )
+
+    # then
+    expected_payload = generate_voucher_code_payload([voucher_code])
+    assert deliveries[0].payload.payload == expected_payload
+    assert len(deliveries) == len(webhooks)
+    assert deliveries[0].webhook == webhooks[0]
+
+
 def test_voucher_metadata_updated(
     voucher, subscription_voucher_metadata_updated_webhook
 ):
@@ -2723,6 +2778,24 @@ def test_checkout_filter_shipping_methods_with_circular_call_for_available_gatew
         == "Resolving this field is not allowed in synchronous events."
     )
     assert payload["checkout"] is None
+
+
+def test_checkout_list_methods_mismatch_in_subscription_query_definition(
+    checkout_ready_to_complete,
+    subscription_checkout_shipping_filter_and_list_missing_one_in_definition,
+):
+    # This test ensures  that subscription returns None and does not raise an error
+    # given
+    webhook = subscription_checkout_shipping_filter_and_list_missing_one_in_definition
+    event_type = WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT
+
+    # when
+    deliveries = create_delivery_for_subscription_sync_event(
+        event_type, checkout_ready_to_complete, webhook
+    )
+
+    # then
+    assert not deliveries
 
 
 def test_order_filter_shipping_methods(

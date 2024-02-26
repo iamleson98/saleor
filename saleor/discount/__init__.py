@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from django.db.models import QuerySet
-
 if TYPE_CHECKING:
     from .models import PromotionRule
 
@@ -20,13 +18,16 @@ class DiscountValueType:
 class DiscountType:
     SALE = "sale"
     PROMOTION = "promotion"
+    ORDER_PROMOTION = "order_promotion"
     VOUCHER = "voucher"
     MANUAL = "manual"
+
     CHOICES = [
         (SALE, "Sale"),
         (VOUCHER, "Voucher"),
         (MANUAL, "Manual"),
         (PROMOTION, "Promotion"),
+        (ORDER_PROMOTION, "Order promotion"),
     ]
 
 
@@ -42,6 +43,16 @@ class VoucherType:
     ]
 
 
+class PromotionType:
+    CATALOGUE = "catalogue"
+    ORDER = "order"
+
+    CHOICES = [
+        (CATALOGUE, "Catalogue"),
+        (ORDER, "Order"),
+    ]
+
+
 class RewardValueType:
     FIXED = "fixed"
     PERCENTAGE = "percentage"
@@ -49,6 +60,16 @@ class RewardValueType:
     CHOICES = [
         (FIXED, "fixed"),
         (PERCENTAGE, "%"),
+    ]
+
+
+class RewardType:
+    SUBTOTAL_DISCOUNT = "subtotal_discount"
+    GIFT = "gift"
+
+    CHOICES = [
+        (SUBTOTAL_DISCOUNT, "subtotal_discount"),
+        (GIFT, "gift"),
     ]
 
 
@@ -76,6 +97,4 @@ class PromotionEvents:
 @dataclass
 class PromotionRuleInfo:
     rule: "PromotionRule"
-    variant_ids: list[int]
-    variants: QuerySet
     channel_ids: list[int]

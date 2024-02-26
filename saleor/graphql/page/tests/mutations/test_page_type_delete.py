@@ -115,6 +115,7 @@ def test_page_type_delete_trigger_webhook(
         [any_webhook],
         page_type,
         SimpleLazyObject(lambda: staff_api_client.user),
+        allow_replica=False,
     )
 
 
@@ -194,7 +195,7 @@ def test_page_type_delete_with_file_attributes(
     page_type.page_attributes.add(page_file_attribute)
 
     value = page_file_attribute.values.first()
-    associate_attribute_values_to_instance(page, page_file_attribute, value)
+    associate_attribute_values_to_instance(page, {page_file_attribute.pk: [value]})
     page_type_id = graphene.Node.to_global_id("PageType", page_type.pk)
 
     variables = {"id": page_type_id}

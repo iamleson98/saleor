@@ -683,8 +683,15 @@ type Query {
   Requires one of the following permissions: HANDLE_PAYMENTS.
   """
   transaction(
-    """ID of a transaction."""
-    id: ID!
+    """
+    ID of a transaction. Either it or token is required to fetch the transaction data.
+    """
+    id: ID
+
+    """
+    Token of a transaction. Either it or ID is required to fetch the transaction data.
+    """
+    token: UUID
   ): TransactionItem @doc(category: "Payments")
 
   """Look up a page by ID or slug."""
@@ -2269,6 +2276,8 @@ enum WebhookEventTypeEnum @doc(category: "Webhooks") {
 
   """A voucher is deleted."""
   VOUCHER_DELETED
+  VOUCHER_CODES_CREATED
+  VOUCHER_CODES_DELETED
 
   """
   A voucher metadata is updated.
@@ -2993,6 +3002,8 @@ enum WebhookEventTypeAsyncEnum @doc(category: "Webhooks") {
 
   """A voucher is deleted."""
   VOUCHER_DELETED
+  VOUCHER_CODES_CREATED
+  VOUCHER_CODES_DELETED
 
   """
   A voucher metadata is updated.
@@ -3068,6 +3079,13 @@ type App implements Node & ObjectWithMetadata @doc(category: "Apps") {
   Added in Saleor 3.3.
   """
   metafields(keys: [String!]): Metadata
+
+  """
+  Canonical app ID from the manifest
+  
+  Added in Saleor 3.19.
+  """
+  identifier: String
 
   """List of the app's permissions."""
   permissions: [Permission!]
@@ -3697,6 +3715,8 @@ enum WebhookSampleEventTypeEnum @doc(category: "Webhooks") {
   VOUCHER_CREATED
   VOUCHER_UPDATED
   VOUCHER_DELETED
+  VOUCHER_CODES_CREATED
+  VOUCHER_CODES_DELETED
   VOUCHER_METADATA_UPDATED
   VOUCHER_CODE_EXPORT_COMPLETED
   OBSERVABILITY
@@ -5506,7 +5526,7 @@ type Weight {
   """Weight unit."""
   unit: WeightUnitsEnum!
 
-  """Weight value."""
+  """Weight value. Returns a value with maximal three decimal places"""
   value: Float!
 }
 
@@ -9801,6 +9821,13 @@ type TaxConfiguration implements Node & ObjectWithMetadata @doc(category: "Taxes
 
   """List of country-specific exceptions in tax configuration."""
   countries: [TaxConfigurationPerCountry!]!
+
+  """
+  The tax app id that will be used to calculate the taxes for the given channel. Empty value for `TAX_APP` set as `taxCalculationStrategy` means that Saleor will iterate over all installed tax apps. If multiple tax apps exist with provided tax app id use the `App` with newest `created` date. Will become mandatory in 4.0 for `TAX_APP` `taxCalculationStrategy`.
+  
+  Added in Saleor 3.19.
+  """
+  taxAppId: String
 }
 
 enum TaxCalculationStrategy @doc(category: "Taxes") {
@@ -9829,6 +9856,13 @@ type TaxConfigurationPerCountry @doc(category: "Taxes") {
   Determines whether displayed prices should include taxes for this country.
   """
   displayGrossPrices: Boolean!
+
+  """
+  The tax app id that will be used to calculate the taxes for the given channel and country. If not provided, use the value from the channel's tax configuration.
+  
+  Added in Saleor 3.19.
+  """
+  taxAppId: String
 }
 
 type TaxConfigurationCountableConnection @doc(category: "Taxes") {
@@ -10173,6 +10207,15 @@ type Shop implements ObjectWithMetadata {
   Added in Saleor 3.5.
   """
   schemaVersion: String!
+
+  """
+  List of tax apps that can be assigned to the channel. The list will be calculated by Saleor based on the apps that are subscribed to webhooks related to tax calculations: CHECKOUT_CALCULATE_TAXES
+  
+  Added in Saleor 3.19.
+  
+  Requires one of the following permissions: AUTHENTICATED_STAFF_USER, MANAGE_APPS.
+  """
+  availableTaxApps: [App!]!
 
   """Include taxes in prices."""
   includeTaxesInPrices: Boolean! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `Channel.taxConfiguration.pricesEnteredWithTax` to determine whether prices are entered with tax.")
@@ -11150,6 +11193,15 @@ type CheckoutLine implements Node & ObjectWithMetadata @doc(category: "Checkout"
   Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
   problems: [CheckoutLineProblem!]
+
+  """
+  Determine if the line is a gift.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  isGift: Boolean
 }
 
 """
@@ -11247,6 +11299,13 @@ type TransactionItem implements Node & ObjectWithMetadata @doc(category: "Paymen
   """
   metafields(keys: [String!]): Metadata
 
+  """
+  The transaction token.
+  
+  Added in Saleor 3.14.
+  """
+  token: UUID!
+
   """Date and time at which payment transaction was created."""
   createdAt: DateTime!
 
@@ -11329,6 +11388,13 @@ type TransactionItem implements Node & ObjectWithMetadata @doc(category: "Paymen
   Added in Saleor 3.6.
   """
   order: Order
+
+  """
+  The related checkout.
+  
+  Added in Saleor 3.14.
+  """
+  checkout: Checkout
 
   """List of all transaction's events."""
   events: [TransactionEvent!]!
@@ -12072,6 +12138,15 @@ type OrderLine implements Node & ObjectWithMetadata @doc(category: "Orders") {
   Added in Saleor 3.14.
   """
   voucherCode: String
+
+  """
+  Determine if the line is a gift.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  isGift: Boolean
 }
 
 """
@@ -12696,6 +12771,7 @@ enum OrderDiscountType @doc(category: "Discounts") {
   VOUCHER
   MANUAL
   PROMOTION
+  ORDER_PROMOTION
 }
 
 type OrderError @doc(category: "Orders") {
@@ -12759,6 +12835,8 @@ enum OrderErrorCode @doc(category: "Orders") {
   CHANNEL_INACTIVE
   INVALID_VOUCHER
   INVALID_VOUCHER_CODE
+  NON_EDITABLE_GIFT_LINE
+  NON_REMOVABLE_GIFT_LINE
 }
 
 """An enumeration."""
@@ -12885,6 +12963,13 @@ type TransactionEvent implements Node @doc(category: "Payments") {
   Added in Saleor 3.13.
   """
   createdBy: UserOrApp
+
+  """
+  Idempotency key assigned to the event.
+  
+  Added in Saleor 3.14.
+  """
+  idempotencyKey: String
 }
 
 """
@@ -14186,6 +14271,15 @@ type Promotion implements Node & ObjectWithMetadata @doc(category: "Discounts") 
   """Name of the promotion."""
   name: String!
 
+  """
+  The type of the promotion. Implicate if the discount is applied on catalogue or order level.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  type: PromotionTypeEnum
+
   """Description of the promotion."""
   description: JSON
 
@@ -14214,6 +14308,12 @@ type Promotion implements Node & ObjectWithMetadata @doc(category: "Discounts") 
   events: [PromotionEvent!]
 }
 
+"""An enumeration."""
+enum PromotionTypeEnum @doc(category: "Discounts") {
+  CATALOGUE
+  ORDER
+}
+
 """
 Represents the promotion rule that specifies the conditions that must be met to apply the promotion discount.
 
@@ -14240,28 +14340,83 @@ type PromotionRule implements Node @doc(category: "Discounts") {
   """
   channels: [Channel!]
 
+  """
+  The reward value of the promotion rule. Defines the discount value applied when the rule conditions are met.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  rewardValue: PositiveDecimal
+
   """The type of reward value of the promotion rule."""
   rewardValueType: RewardValueTypeEnum
+
+  """
+  The type of the predicate that must be met to apply the reward.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  predicateType: PromotionTypeEnum
 
   """The catalogue predicate that must be met to apply the rule reward."""
   cataloguePredicate: JSON
 
   """
-  The reward value of the promotion rule. Defines the discount value applied when the rule conditions are met.
+  The checkout/order predicate that must be met to apply the rule reward.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
-  rewardValue: PositiveDecimal
+  orderPredicate: JSON
+
+  """
+  The reward type of the promotion rule.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  rewardType: RewardTypeEnum
 
   """Returns translated promotion rule fields for the given language code."""
   translation(
     """A language code to return the translation for promotion rule."""
     languageCode: LanguageCodeEnum!
   ): PromotionRuleTranslation
+
+  """
+  Product variant IDs available as a gift to choose.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  giftIds: [ID!]
+
+  """
+  Defines the maximum number of gifts to choose from the gifts list.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  giftsLimit: Int
 }
 
 """An enumeration."""
 enum RewardValueTypeEnum @doc(category: "Discounts") {
   FIXED
   PERCENTAGE
+}
+
+"""An enumeration."""
+enum RewardTypeEnum @doc(category: "Discounts") {
+  SUBTOTAL_DISCOUNT
+  GIFT
 }
 
 union PromotionEvent = PromotionCreatedEvent | PromotionUpdatedEvent | PromotionStartedEvent | PromotionEndedEvent | PromotionRuleCreatedEvent | PromotionRuleUpdatedEvent | PromotionRuleDeletedEvent
@@ -14513,12 +14668,21 @@ input PromotionWhereInput @doc(category: "Discounts") {
   """Filter promotions by start date."""
   startDate: DateTimeFilterInput
   isOldSale: Boolean
+  type: PromotionTypeEnumFilterInput
 
   """List of conditions that must be met."""
   AND: [PromotionWhereInput!]
 
   """A list of conditions of which at least one must be met."""
   OR: [PromotionWhereInput!]
+}
+
+input PromotionTypeEnumFilterInput @doc(category: "Discounts") {
+  """The value equal to."""
+  eq: PromotionTypeEnum
+
+  """The value included in."""
+  oneOf: [PromotionTypeEnum!]
 }
 
 input PromotionSortingInput @doc(category: "Discounts") {
@@ -15281,7 +15445,7 @@ type Mutation {
   ): TaxExemptionManage @doc(category: "Taxes")
 
   """
-  Updates stocks for a given variant and warehouse.
+  Updates stocks for a given variant and warehouse. Variant and warehouse selectors have to be the same for all stock inputs. Is not allowed to use 'variantId' in one input and 'variantExternalReference' in another.
   
   Added in Saleor 3.13.
   
@@ -16454,8 +16618,15 @@ type Mutation {
   Requires the following permissions: OWNER and HANDLE_PAYMENTS for apps, HANDLE_PAYMENTS for staff users. Staff user cannot update a transaction that is owned by the app.
   """
   transactionUpdate(
-    """The ID of the transaction."""
-    id: ID!
+    """The ID of the transaction. One of field id or token is required."""
+    id: ID
+
+    """
+    The token of the transaction. One of field id or token is required.
+    
+    Added in Saleor 3.14.
+    """
+    token: UUID
 
     """Input data required to create a new transaction object."""
     transaction: TransactionUpdateInput
@@ -16482,8 +16653,15 @@ type Mutation {
     """
     amount: PositiveDecimal
 
-    """The ID of the transaction."""
-    id: ID!
+    """The ID of the transaction. One of field id or token is required."""
+    id: ID
+
+    """
+    The token of the transaction. One of field id or token is required.
+    
+    Added in Saleor 3.14.
+    """
+    token: UUID
   ): TransactionRequestAction @doc(category: "Payments")
 
   """
@@ -16499,8 +16677,15 @@ type Mutation {
     """The ID of the granted refund."""
     grantedRefundId: ID!
 
-    """The ID of the transaction."""
-    id: ID!
+    """The ID of the transaction. One of field id or token is required."""
+    id: ID
+
+    """
+    The token of the transaction. One of field id or token is required.
+    
+    Added in Saleor 3.14.
+    """
+    token: UUID
   ): TransactionRequestRefundForGrantedRefund @doc(category: "Payments")
 
   """
@@ -16524,8 +16709,8 @@ type Mutation {
     """
     externalUrl: String
 
-    """The ID of the transaction."""
-    id: ID!
+    """The ID of the transaction. One of field id or token is required."""
+    id: ID
 
     """The message related to the event."""
     message: String
@@ -16537,6 +16722,13 @@ type Mutation {
     The time of the event to report. If not provide, the current time will be used.
     """
     time: DateTime
+
+    """
+    The token of the transaction. One of field id or token is required.
+    
+    Added in Saleor 3.14.
+    """
+    token: UUID
 
     """Current status of the event to report."""
     type: TransactionEventTypeEnum!
@@ -16590,6 +16782,13 @@ type Mutation {
     """The ID of the checkout or order."""
     id: ID!
 
+    """
+    The idempotency key assigned to the action. It will be passed to the payment app to discover potential duplicate actions. If not provided, the default one will be generated. If empty string provided, INVALID error code will be raised.
+    
+    Added in Saleor 3.14.
+    """
+    idempotencyKey: String
+
     """Payment gateway used to initialize the transaction."""
     paymentGateway: PaymentGatewayToInitialize!
   ): TransactionInitialize @doc(category: "Payments")
@@ -16612,8 +16811,17 @@ type Mutation {
     """The data that will be passed to the payment gateway."""
     data: JSON
 
-    """The ID of the transaction to process."""
-    id: ID!
+    """
+    The ID of the transaction to process. One of field id or token is required.
+    """
+    id: ID
+
+    """
+    The token of the transaction to process. One of field id or token is required.
+    
+    Added in Saleor 3.14.
+    """
+    token: UUID
   ): TransactionProcess @doc(category: "Payments")
 
   """
@@ -18149,11 +18357,12 @@ type Mutation {
   
   Triggers the following webhook events:
   - VOUCHER_CREATED (async): A voucher was created.
+  - VOUCHER_CODES_CREATED (async): A voucher codes were created.
   """
   voucherCreate(
     """Fields required to create a voucher."""
     input: VoucherInput!
-  ): VoucherCreate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CREATED], syncEvents: [])
+  ): VoucherCreate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CREATED, VOUCHER_CODES_CREATED], syncEvents: [])
 
   """
   Deletes a voucher. 
@@ -18188,6 +18397,7 @@ type Mutation {
   
   Triggers the following webhook events:
   - VOUCHER_UPDATED (async): A voucher was updated.
+  - VOUCHER_CODES_CREATED (async): A voucher code was created.
   """
   voucherUpdate(
     """ID of a voucher to update."""
@@ -18195,7 +18405,7 @@ type Mutation {
 
     """Fields required to update a voucher."""
     input: VoucherInput!
-  ): VoucherUpdate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED], syncEvents: [])
+  ): VoucherUpdate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED, VOUCHER_CODES_CREATED], syncEvents: [])
 
   """
   Adds products, categories, collections to a voucher. 
@@ -18269,12 +18479,12 @@ type Mutation {
   Requires one of the following permissions: MANAGE_DISCOUNTS.
   
   Triggers the following webhook events:
-  - VOUCHER_UPDATED (async): A voucher was updated.
+  - VOUCHER_CODES_DELETED (async): A voucher codes were deleted.
   """
   voucherCodeBulkDelete(
     """List of voucher codes IDs to delete."""
     ids: [ID!]!
-  ): VoucherCodeBulkDelete @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED], syncEvents: [])
+  ): VoucherCodeBulkDelete @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CODES_DELETED], syncEvents: [])
 
   """
   Export products to csv file. 
@@ -20669,6 +20879,13 @@ input TaxConfigurationUpdateInput @doc(category: "Taxes") {
 
   """List of country codes for which to remove the tax configuration."""
   removeCountriesConfiguration: [CountryCode!]
+
+  """
+  The tax app id that will be used to calculate the taxes for the given channel. Empty value for `TAX_APP` set as `taxCalculationStrategy` means that Saleor will iterate over all installed tax apps. If multiple tax apps exist with provided tax app id use the `App` with newest `created` date. Will become mandatory in 4.0 for `TAX_APP` `taxCalculationStrategy`.
+  
+  Added in Saleor 3.19.
+  """
+  taxAppId: String
 }
 
 input TaxConfigurationPerCountryInput @doc(category: "Taxes") {
@@ -20687,6 +20904,13 @@ input TaxConfigurationPerCountryInput @doc(category: "Taxes") {
   Determines whether displayed prices should include taxes for this country.
   """
   displayGrossPrices: Boolean!
+
+  """
+  The tax app identifier that will be used to calculate the taxes for the given channel and country. If not provided, use the value from the channel's tax configuration.
+  
+  Added in Saleor 3.19.
+  """
+  taxAppId: String
 }
 
 """
@@ -20804,7 +21028,7 @@ enum TaxExemptionManageErrorCode @doc(category: "Taxes") {
 }
 
 """
-Updates stocks for a given variant and warehouse.
+Updates stocks for a given variant and warehouse. Variant and warehouse selectors have to be the same for all stock inputs. Is not allowed to use 'variantId' in one input and 'variantExternalReference' in another.
 
 Added in Saleor 3.13.
 
@@ -24478,6 +24702,7 @@ enum TransactionInitializeErrorCode @doc(category: "Payments") {
   GRAPHQL_ERROR
   INVALID
   NOT_FOUND
+  UNIQUE
 }
 
 """
@@ -26202,13 +26427,6 @@ input OrderBulkCreateInput @doc(category: "Orders") {
   """
   Code of a voucher associated with the order.
   
-  DEPRECATED: this field will be removed in Saleor 3.19. Use `voucherCode` instead.
-  """
-  voucher: String
-
-  """
-  Code of a voucher associated with the order.
-  
   Added in Saleor 3.18.
   """
   voucherCode: String
@@ -27367,6 +27585,18 @@ type PromotionCreateError {
 
   """Index of an input list item that caused the error."""
   index: Int
+
+  """Limit of rules with orderPredicate defined."""
+  rulesLimit: Int
+
+  """Number of rules with orderPredicate defined exceeding the limit."""
+  rulesLimitExceedBy: Int
+
+  """Limit of gifts assigned to promotion rule."""
+  giftsLimit: Int
+
+  """Number of gifts defined for this promotion rule exceeding the limit."""
+  giftsLimitExceedBy: Int
 }
 
 """An enumeration."""
@@ -27377,6 +27607,10 @@ enum PromotionCreateErrorCode {
   INVALID
   MULTIPLE_CURRENCIES_NOT_ALLOWED
   INVALID_PRECISION
+  MISSING_CHANNELS
+  RULES_NUMBER_LIMIT
+  GIFTS_NUMBER_LIMIT
+  INVALID_GIFT_TYPE
 }
 
 input PromotionCreateInput @doc(category: "Discounts") {
@@ -27391,6 +27625,17 @@ input PromotionCreateInput @doc(category: "Discounts") {
 
   """Promotion name."""
   name: String!
+
+  """
+  Defines the promotion type. Implicate the required promotion rules predicate type and whether the promotion rules will give the catalogue or order discount. 
+  
+  The default value is `Catalogue`.
+  
+  This field will be required from Saleor 3.20.
+  
+  Added in Saleor 3.19.
+  """
+  type: PromotionTypeEnum
 
   """List of promotion rules."""
   rules: [PromotionRuleInput!]
@@ -27409,6 +27654,15 @@ input PromotionRuleInput @doc(category: "Discounts") {
   cataloguePredicate: CataloguePredicateInput
 
   """
+  Defines the conditions on the checkout/draft order level that must be met for the reward to be applied.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  orderPredicate: OrderPredicateInput
+
+  """
   Defines the promotion rule reward value type. Must be provided together with reward value.
   """
   rewardValueType: RewardValueTypeEnum
@@ -27418,8 +27672,26 @@ input PromotionRuleInput @doc(category: "Discounts") {
   """
   rewardValue: PositiveDecimal
 
+  """
+  Defines the reward type of the promotion rule.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  rewardType: RewardTypeEnum
+
   """List of channel ids to which the rule should apply to."""
   channels: [ID!]
+
+  """
+  Product variant IDs available as a gift to choose.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  gifts: [ID!]
 }
 
 input CataloguePredicateInput @doc(category: "Discounts") {
@@ -27440,6 +27712,31 @@ input CataloguePredicateInput @doc(category: "Discounts") {
 
   """A list of conditions of which at least one must be met."""
   OR: [CataloguePredicateInput!]
+}
+
+input OrderPredicateInput @doc(category: "Discounts") {
+  """Defines the conditions related to checkout and order objects."""
+  discountedObjectPredicate: DiscountedObjectWhereInput
+
+  """List of conditions that must be met."""
+  AND: [OrderPredicateInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [OrderPredicateInput!]
+}
+
+input DiscountedObjectWhereInput @doc(category: "Discounts") {
+  """Filter by the base subtotal price."""
+  baseSubtotalPrice: DecimalFilterInput
+
+  """Filter by the base total price."""
+  baseTotalPrice: DecimalFilterInput
+
+  """List of conditions that must be met."""
+  AND: [DiscountedObjectWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [DiscountedObjectWhereInput!]
 }
 
 """
@@ -27560,6 +27857,18 @@ type PromotionRuleCreateError {
 
   """The error code."""
   code: PromotionRuleCreateErrorCode!
+
+  """Limit of rules with orderPredicate defined."""
+  rulesLimit: Int
+
+  """Number of rules with orderPredicate defined exceeding the limit."""
+  rulesLimitExceedBy: Int
+
+  """Limit of gifts assigned to promotion rule."""
+  giftsLimit: Int
+
+  """Number of gifts defined for this promotion rule exceeding the limit."""
+  giftsLimitExceedBy: Int
 }
 
 """An enumeration."""
@@ -27570,6 +27879,10 @@ enum PromotionRuleCreateErrorCode {
   INVALID
   MULTIPLE_CURRENCIES_NOT_ALLOWED
   INVALID_PRECISION
+  MISSING_CHANNELS
+  RULES_NUMBER_LIMIT
+  GIFTS_NUMBER_LIMIT
+  INVALID_GIFT_TYPE
 }
 
 input PromotionRuleCreateInput {
@@ -27585,6 +27898,15 @@ input PromotionRuleCreateInput {
   cataloguePredicate: CataloguePredicateInput
 
   """
+  Defines the conditions on the checkout/draft order level that must be met for the reward to be applied.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  orderPredicate: OrderPredicateInput
+
+  """
   Defines the promotion rule reward value type. Must be provided together with reward value.
   """
   rewardValueType: RewardValueTypeEnum
@@ -27594,8 +27916,26 @@ input PromotionRuleCreateInput {
   """
   rewardValue: PositiveDecimal
 
+  """
+  Defines the reward type of the promotion rule.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  rewardType: RewardTypeEnum
+
   """List of channel ids to which the rule should apply to."""
   channels: [ID!]
+
+  """
+  Product variant IDs available as a gift to choose.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  gifts: [ID!]
 
   """The ID of the promotion that rule belongs to."""
   promotion: ID!
@@ -27632,6 +27972,12 @@ type PromotionRuleUpdateError {
 
   """List of channel IDs which causes the error."""
   channels: [ID!]
+
+  """Limit of gifts assigned to promotion rule."""
+  giftsLimit: Int
+
+  """Number of gifts defined for this promotion rule exceeding the limit."""
+  giftsLimitExceedBy: Int
 }
 
 """An enumeration."""
@@ -27639,10 +27985,13 @@ enum PromotionRuleUpdateErrorCode {
   GRAPHQL_ERROR
   NOT_FOUND
   INVALID
+  REQUIRED
   DUPLICATED_INPUT_ITEM
   MISSING_CHANNELS
   MULTIPLE_CURRENCIES_NOT_ALLOWED
   INVALID_PRECISION
+  INVALID_GIFT_TYPE
+  GIFTS_NUMBER_LIMIT
 }
 
 input PromotionRuleUpdateInput {
@@ -27658,6 +28007,15 @@ input PromotionRuleUpdateInput {
   cataloguePredicate: CataloguePredicateInput
 
   """
+  Defines the conditions on the checkout/draft order level that must be met for the reward to be applied.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  orderPredicate: OrderPredicateInput
+
+  """
   Defines the promotion rule reward value type. Must be provided together with reward value.
   """
   rewardValueType: RewardValueTypeEnum
@@ -27667,11 +28025,38 @@ input PromotionRuleUpdateInput {
   """
   rewardValue: PositiveDecimal
 
+  """
+  Defines the reward type of the promotion rule.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  rewardType: RewardTypeEnum
+
   """List of channel ids to add."""
   addChannels: [ID!]
 
   """List of channel ids to remove."""
   removeChannels: [ID!]
+
+  """
+  List of variant IDs available as a gift to add.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  addGifts: [ID!]
+
+  """
+  List of variant IDs available as a gift to remove.
+  
+  Added in Saleor 3.19.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  removeGifts: [ID!]
 }
 
 """
@@ -28006,8 +28391,9 @@ Requires one of the following permissions: MANAGE_DISCOUNTS.
 
 Triggers the following webhook events:
 - VOUCHER_CREATED (async): A voucher was created.
+- VOUCHER_CODES_CREATED (async): A voucher codes were created.
 """
-type VoucherCreate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CREATED], syncEvents: []) {
+type VoucherCreate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CREATED, VOUCHER_CODES_CREATED], syncEvents: []) {
   discountErrors: [DiscountError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [DiscountError!]!
   voucher: Voucher
@@ -28125,8 +28511,9 @@ Requires one of the following permissions: MANAGE_DISCOUNTS.
 
 Triggers the following webhook events:
 - VOUCHER_UPDATED (async): A voucher was updated.
+- VOUCHER_CODES_CREATED (async): A voucher code was created.
 """
-type VoucherUpdate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED], syncEvents: []) {
+type VoucherUpdate @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED, VOUCHER_CODES_CREATED], syncEvents: []) {
   discountErrors: [DiscountError!]! @deprecated(reason: "This field will be removed in Saleor 4.0. Use `errors` field instead.")
   errors: [DiscountError!]!
   voucher: Voucher
@@ -28215,9 +28602,9 @@ Added in Saleor 3.18.
 Requires one of the following permissions: MANAGE_DISCOUNTS.
 
 Triggers the following webhook events:
-- VOUCHER_UPDATED (async): A voucher was updated.
+- VOUCHER_CODES_DELETED (async): A voucher codes were deleted.
 """
-type VoucherCodeBulkDelete @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_UPDATED], syncEvents: []) {
+type VoucherCodeBulkDelete @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CODES_DELETED], syncEvents: []) {
   """Returns how many codes were deleted."""
   count: Int!
   errors: [VoucherCodeBulkDeleteError!]!
@@ -28508,6 +28895,8 @@ enum CheckoutErrorCode @doc(category: "Checkout") {
   EMAIL_NOT_SET
   NO_LINES
   INACTIVE_PAYMENT
+  NON_EDITABLE_GIFT_LINE
+  NON_REMOVABLE_GIFT_LINE
 }
 
 """
@@ -30106,6 +30495,13 @@ enum AppErrorCode @doc(category: "Apps") {
 input AppInput @doc(category: "Apps") {
   """Name of the app."""
   name: String
+
+  """
+  Canonical app ID. If not provided, the identifier will be generated based on app.id.
+  
+  Added in Saleor 3.19.
+  """
+  identifier: String
 
   """List of permission code names to assign to this app."""
   permissions: [PermissionEnum!]
@@ -34826,6 +35222,50 @@ type VoucherDeleted implements Event @doc(category: "Discounts") {
 }
 
 """
+Event sent when new voucher codes were created.
+
+Added in Saleor 3.19.
+"""
+type VoucherCodesCreated implements Event {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The voucher codes the event relates to."""
+  voucherCodes: [VoucherCode!]
+}
+
+"""
+Event sent when voucher codes were deleted.
+
+Added in Saleor 3.19.
+"""
+type VoucherCodesDeleted implements Event {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The voucher codes the event relates to."""
+  voucherCodes: [VoucherCode!]
+}
+
+"""
 Event sent when voucher metadata is updated.
 
 Added in Saleor 3.8.
@@ -35508,6 +35948,13 @@ type TransactionInitializeSession implements Event @doc(category: "Payments") {
 
   """Action to proceed for the transaction"""
   action: TransactionProcessAction!
+
+  """
+  Idempotency key assigned to the transaction initialize.
+  
+  Added in Saleor 3.14.
+  """
+  idempotencyKey: String!
 }
 
 type TransactionProcessAction @doc(category: "Payments") {

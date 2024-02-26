@@ -244,6 +244,7 @@ class PluginSample(BasePlugin):
         sale: "Promotion",
         catalogue: defaultdict[str, set[str]],
         previous_value: Any,
+        webhooks,
     ):
         return sale, catalogue
 
@@ -295,12 +296,12 @@ class PluginSample(BasePlugin):
         return Decimal("0.080").quantize(Decimal(".01"))
 
     def get_taxes_for_checkout(
-        self, checkout_info: "CheckoutInfo", lines, previous_value
+        self, checkout_info: "CheckoutInfo", lines, app_identifier, previous_value
     ) -> Optional["TaxData"]:
         return sample_tax_data(checkout_info.checkout)
 
     def get_taxes_for_order(
-        self, order: "Order", previous_value
+        self, order: "Order", app_identifier, previous_value
     ) -> Optional["TaxData"]:
         return sample_tax_data(order)
 

@@ -293,7 +293,7 @@ def test_get_checkout_base_prices_no_charge_taxes_with_voucher(
     variant = line_info.variant
     product_price = variant.get_price(line_info.channel_listing)
 
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
     add_promo_code_to_checkout(
@@ -332,6 +332,46 @@ def test_get_checkout_base_prices_no_charge_taxes_with_voucher(
     )
     assert line_unit_price.gross == expected_unit_price
     assert line.total_price == checkout.total
+
+
+def test_get_checkout_base_prices_no_charge_taxes_with_order_promotion(
+    checkout_with_item_and_order_discount,
+):
+    # given
+    checkout = checkout_with_item_and_order_discount
+    discount_amount = checkout.discounts.first().amount_value
+
+    line = checkout.lines.first()
+    line.quantity = 7
+    line.save()
+
+    lines, _ = fetch_checkout_lines(checkout)
+    line_info = list(lines)[0]
+    variant = line_info.variant
+    product_price = variant.get_price(line_info.channel_listing)
+
+    manager = get_plugins_manager(allow_replica=False)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    _get_checkout_base_prices(checkout, checkout_info, lines)
+    checkout.save()
+    checkout.lines.bulk_update(
+        [line_info.line for line_info in lines],
+        [
+            "total_price_net_amount",
+            "total_price_gross_amount",
+            "tax_rate",
+        ],
+    )
+
+    # then
+    line.refresh_from_db()
+    assert line.tax_rate == Decimal("0.0")
+
+    line_total = product_price.amount * line.quantity - discount_amount
+    assert line.total_price_gross_amount == line_total
+    assert checkout.total_gross_amount == line_total
 
 
 @freeze_time("2020-12-12 12:00:00")
@@ -378,7 +418,7 @@ def test_fetch_checkout_prices_when_tax_exemption_and_include_taxes_in_prices(
     """
     # given
     settings.PLUGINS = ["saleor.plugins.tests.sample_plugins.PluginSample"]
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
 
     checkout = checkout_with_items_and_shipping
     checkout.price_expiration = timezone.now()
@@ -436,7 +476,7 @@ def test_fetch_checkout_prices_when_tax_exemption_and_not_include_taxes_in_price
     """
     # given
     settings.PLUGINS = ["saleor.plugins.tests.sample_plugins.PluginSample"]
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
 
     checkout = checkout_with_items_and_shipping
     checkout.price_expiration = timezone.now()

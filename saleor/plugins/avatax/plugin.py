@@ -16,9 +16,16 @@ from prices import Money, TaxedMoney, TaxedMoneyRange
 from ...checkout import base_calculations
 from ...checkout.fetch import fetch_checkout_lines
 from ...core.taxes import TaxError, TaxType, zero_taxed_money
+from ...order import base_calculations as order_base_calculation
 from ...order.interface import OrderTaxedPricesData
 from ...product.models import ProductType
-from ...tax.utils import get_charge_taxes_for_checkout, get_charge_taxes_for_order
+from ...tax import TaxCalculationStrategy
+from ...tax.utils import (
+    get_charge_taxes_for_checkout,
+    get_charge_taxes_for_order,
+    get_tax_calculation_strategy_for_checkout,
+    get_tax_calculation_strategy_for_order,
+)
 from ..base_plugin import BasePlugin, ConfigurationTypeField
 from ..error_codes import PluginErrorCode
 from . import (
@@ -311,6 +318,10 @@ class AvataxPlugin(BasePlugin):
         if self._skip_plugin(previous_value):
             return previous_value
 
+        tax_strategy = get_tax_calculation_strategy_for_checkout(checkout_info, lines)
+        if tax_strategy == TaxCalculationStrategy.FLAT_RATES:
+            return previous_value
+
         data = generate_request_data_from_checkout(
             checkout_info,
             lines,
@@ -347,6 +358,10 @@ class AvataxPlugin(BasePlugin):
     def order_confirmed(self, order: "Order", previous_value: Any) -> Any:
         if not self.active:
             return previous_value
+        tax_strategy = get_tax_calculation_strategy_for_order(order)
+        if tax_strategy == TaxCalculationStrategy.FLAT_RATES:
+            return previous_value
+
         request_data = get_order_request_data(order, self.config)
         if not request_data:
             return previous_value
@@ -445,13 +460,15 @@ class AvataxPlugin(BasePlugin):
         if not charge_taxes:
             return previous_value
 
+        base_value = order_base_calculation.base_order_line_total(order_line)
+
         prices_entered_with_tax = partial(_get_prices_entered_with_tax_for_order, order)
         taxes_data = self._get_order_tax_data(order, previous_value)
         return self._calculate_order_line_total_price(
             taxes_data,
             variant.sku or variant.get_global_id(),
             prices_entered_with_tax,
-            previous_value,
+            base_value,
         )
 
     @staticmethod
@@ -550,15 +567,14 @@ class AvataxPlugin(BasePlugin):
 
         quantity = order_line.quantity
         taxes_data = self._get_order_tax_data(order, previous_value)
-        default_total = OrderTaxedPricesData(
-            price_with_discounts=previous_value.price_with_discounts * quantity,
-            undiscounted_price=previous_value.undiscounted_price * quantity,
-        )
+
+        base_total = order_base_calculation.base_order_line_total(order_line)
+
         taxed_total_prices_data = self._calculate_order_line_total_price(
             taxes_data,
             variant.sku or variant.get_global_id(),
             prices_entered_with_tax,
-            default_total,
+            base_total,
         )
         return OrderTaxedPricesData(
             undiscounted_price=taxed_total_prices_data.undiscounted_price / quantity,
@@ -610,7 +626,7 @@ class AvataxPlugin(BasePlugin):
 
         for line in lines:
             base_line_price = OrderTaxedPricesData(
-                undiscounted_price=line.undiscounted_total_price,
+                undiscounted_price=line.undiscounted_base_unit_price * line.quantity,
                 price_with_discounts=TaxedMoney(
                     line.base_unit_price, line.base_unit_price
                 )

@@ -3,12 +3,13 @@ from unittest import mock
 import graphene
 
 from .....checkout import base_calculations
+from .....checkout.error_codes import CheckoutErrorCode
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from .....checkout.utils import (
     add_variant_to_checkout,
     add_voucher_to_checkout,
     calculate_checkout_quantity,
-    invalidate_checkout_prices,
+    invalidate_checkout,
 )
 from .....plugins.manager import get_plugins_manager
 from .....warehouse.models import Reservation
@@ -31,6 +32,7 @@ MUTATION_CHECKOUT_LINE_DELETE = """
             errors {
                 field
                 message
+                code
             }
         }
     }
@@ -43,12 +45,11 @@ MUTATION_CHECKOUT_LINE_DELETE = """
     wraps=update_checkout_shipping_method_if_invalid,
 )
 @mock.patch(
-    "saleor.graphql.checkout.mutations.checkout_line_delete."
-    "invalidate_checkout_prices",
-    wraps=invalidate_checkout_prices,
+    "saleor.graphql.checkout.mutations.checkout_line_delete.invalidate_checkout",
+    wraps=invalidate_checkout,
 )
 def test_checkout_line_delete(
-    mocked_invalidate_checkout_prices,
+    mocked_invalidate_checkout,
     mocked_update_shipping_method,
     user_api_client,
     checkout_line_with_reservation_in_many_stocks,
@@ -75,17 +76,17 @@ def test_checkout_line_delete(
     assert checkout.lines.count() == 0
     assert calculate_checkout_quantity(lines) == 0
     assert Reservation.objects.count() == 0
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     mocked_update_shipping_method.assert_called_once_with(checkout_info, lines)
     assert checkout.last_change != previous_last_change
-    assert mocked_invalidate_checkout_prices.call_count == 1
+    assert mocked_invalidate_checkout.call_count == 1
 
 
 def test_checkout_lines_delete_with_not_applicable_voucher(
     user_api_client, checkout_with_item, voucher, channel_USD
 ):
-    manager = get_plugins_manager()
+    manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
     subtotal = base_calculations.base_checkout_subtotal(
@@ -125,7 +126,9 @@ def test_checkout_line_delete_remove_shipping_if_removed_product_with_shipping(
     checkout.shipping_address = address
     checkout.shipping_method = shipping_method
     checkout.save()
-    checkout_info = fetch_checkout_info(checkout, [], get_plugins_manager())
+    checkout_info = fetch_checkout_info(
+        checkout, [], get_plugins_manager(allow_replica=False)
+    )
     add_variant_to_checkout(checkout_info, digital_variant, 1)
     line = checkout.lines.first()
 
@@ -153,7 +156,7 @@ def test_with_active_problems_flow(
     variant = product_with_single_variant.variants.first()
 
     checkout_info = fetch_checkout_info(
-        checkout_with_problems, [], get_plugins_manager()
+        checkout_with_problems, [], get_plugins_manager(allow_replica=False)
     )
     add_variant_to_checkout(checkout_info, variant, 1)
 
@@ -173,3 +176,25 @@ def test_with_active_problems_flow(
 
     # then
     assert not content["data"]["checkoutLineDelete"]["errors"]
+
+
+def test_checkout_line_delete_non_removable_gift(user_api_client, checkout_line):
+    # given
+    checkout = checkout_line.checkout
+    line = checkout_line
+    line.is_gift = True
+    line.save(update_fields=["is_gift"])
+    line_id = to_global_id_or_none(line)
+    variables = {"id": to_global_id_or_none(checkout), "lineId": line_id}
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINE_DELETE, variables)
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["checkoutLineDelete"]
+    assert not data["checkout"]
+    errors = data["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] == "lineId"
+    assert errors[0]["code"] == CheckoutErrorCode.NON_REMOVABLE_GIFT_LINE.name

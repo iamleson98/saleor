@@ -38,6 +38,7 @@ mutation CheckoutComplete($checkoutId: ID!) {
       deliveryMethod {
         ... on ShippingMethod {
           id
+          name
           price {
             amount
           }
@@ -77,6 +78,8 @@ mutation CheckoutComplete($checkoutId: ID!) {
         }
       }
       discounts {
+        id
+        name
         type
         value
       }
