@@ -1,5 +1,6 @@
 import datetime
 import itertools
+import random
 import uuid
 from collections import namedtuple
 from contextlib import contextmanager
@@ -156,6 +157,125 @@ from ..webhook.models import Webhook, WebhookEvent
 from ..webhook.observability import WebhookData
 from ..webhook.transport.utils import WebhookResponse, to_payment_app_id
 from .utils import dummy_editorjs
+
+CALCULATE_TAXES_SUBSCRIPTION_QUERY = """
+subscription CalculateTaxes {
+  event {
+    ...CalculateTaxesEvent
+  }
+}
+
+fragment CalculateTaxesEvent on Event {
+  __typename
+  ... on CalculateTaxes {
+    taxBase {
+      ...TaxBase
+    }
+    recipient {
+      privateMetadata {
+        key
+        value
+      }
+    }
+  }
+}
+
+fragment TaxBase on TaxableObject {
+  pricesEnteredWithTax
+  currency
+  channel {
+    slug
+  }
+  discounts {
+    ...TaxDiscount
+  }
+  address {
+    ...Address
+  }
+  shippingPrice {
+    amount
+  }
+  lines {
+    ...TaxBaseLine
+  }
+  sourceObject {
+    __typename
+    ... on Checkout {
+      avataxEntityCode: metafield(key: "avataxEntityCode")
+      user {
+        ...User
+      }
+    }
+    ... on Order {
+      avataxEntityCode: metafield(key: "avataxEntityCode")
+      user {
+        ...User
+      }
+    }
+  }
+}
+
+fragment TaxDiscount on TaxableObjectDiscount {
+  name
+  amount {
+    amount
+  }
+}
+
+fragment Address on Address {
+  streetAddress1
+  streetAddress2
+  city
+  countryArea
+  postalCode
+  country {
+    code
+  }
+}
+
+fragment TaxBaseLine on TaxableObjectLine {
+  sourceLine {
+    __typename
+    ... on CheckoutLine {
+      id
+      checkoutProductVariant: variant {
+        id
+        product {
+          taxClass {
+            id
+            name
+          }
+        }
+      }
+    }
+    ... on OrderLine {
+      id
+      orderProductVariant: variant {
+        id
+        product {
+          taxClass {
+            id
+            name
+          }
+        }
+      }
+    }
+  }
+  quantity
+  unitPrice {
+    amount
+  }
+  totalPrice {
+    amount
+  }
+}
+
+fragment User on User {
+  id
+  email
+  avataxCustomerCode: metafield(key: "avataxCustomerCode")
+}
+"""
 
 
 class CaptureQueriesContext(BaseCaptureQueriesContext):
@@ -1704,6 +1824,7 @@ def attribute_generator():
         slug="attr",
         name="Attr",
         type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.DROPDOWN,
         filterable_in_storefront=True,
         filterable_in_dashboard=True,
         available_in_grid=True,
@@ -1713,6 +1834,7 @@ def attribute_generator():
             slug=slug,
             name=name,
             type=type,
+            input_type=input_type,
             filterable_in_storefront=filterable_in_storefront,
             filterable_in_dashboard=filterable_in_dashboard,
             available_in_grid=available_in_grid,
@@ -1851,6 +1973,28 @@ def attribute_without_values():
         visible_in_storefront=True,
         entity_type=None,
     )
+
+
+@pytest.fixture
+def multiselect_attribute(db, attribute_generator, attribute_values_generator):
+    attribute = attribute_generator(
+        slug="multi",
+        name="Multi",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.MULTISELECT,
+        filterable_in_storefront=True,
+        filterable_in_dashboard=True,
+        available_in_grid=True,
+    )
+    slugs = ["choice-1", "choice-1"]
+    names = ["Choice 1", "Choice 2"]
+    attribute_values_generator(
+        attribute=attribute,
+        names=names,
+        slugs=slugs,
+    )
+
+    return attribute
 
 
 @pytest.fixture
@@ -7234,6 +7378,39 @@ def shipping_app(db, permission_manage_shipping):
 
 
 @pytest.fixture
+def shipping_app_with_subscription(db, permission_manage_shipping):
+    app = App.objects.create(name="Shipping App with subscription", is_active=True)
+    app.tokens.create(name="Default")
+    app.permissions.add(permission_manage_shipping)
+
+    webhook = Webhook.objects.create(
+        name="shipping-webhook-1",
+        app=app,
+        target_url="https://shipping-app.com/api/",
+        subscription_query="""
+        subscription {
+  event {
+    ... on ShippingListMethodsForCheckout {
+      __typename
+    }
+  }
+}
+
+        """,
+    )
+    webhook.events.bulk_create(
+        [
+            WebhookEvent(event_type=event_type, webhook=webhook)
+            for event_type in [
+                WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT,
+                WebhookEventAsyncType.FULFILLMENT_CREATED,
+            ]
+        ]
+    )
+    return app
+
+
+@pytest.fixture
 def list_stored_payment_methods_app(db, permission_manage_payments):
     app = App.objects.create(
         name="List payment methods app",
@@ -7347,6 +7524,30 @@ def tax_app(db, permission_handle_taxes):
         name="tax-webhook-1",
         app=app,
         target_url="https://tax-app.com/api/",
+        subscription_query=CALCULATE_TAXES_SUBSCRIPTION_QUERY,
+    )
+    webhook.events.bulk_create(
+        [
+            WebhookEvent(event_type=event_type, webhook=webhook)
+            for event_type in [
+                WebhookEventSyncType.ORDER_CALCULATE_TAXES,
+                WebhookEventSyncType.CHECKOUT_CALCULATE_TAXES,
+            ]
+        ]
+    )
+    return app
+
+
+@pytest.fixture
+def tax_app_with_subscription_webhooks(db, permission_handle_taxes):
+    app = App.objects.create(name="Tax App with subscription", is_active=True)
+    app.permissions.add(permission_handle_taxes)
+
+    webhook = Webhook.objects.create(
+        name="tax-subscription-webhook-1",
+        app=app,
+        target_url="https://tax-app.com/api/",
+        subscription_query=CALCULATE_TAXES_SUBSCRIPTION_QUERY,
     )
     webhook.events.bulk_create(
         [
@@ -8849,7 +9050,7 @@ def async_subscription_webhooks_with_root_objects(
 
 
 @pytest.fixture
-def lots_of_products_with_variants(product_type):
+def lots_of_products_with_variants(product_type, channel_USD):
     def chunks(iterable, size):
         it = iter(iterable)
         chunk = tuple(itertools.islice(it, size))
@@ -8864,19 +9065,41 @@ def lots_of_products_with_variants(product_type):
     for batch in chunks(range(products_count), 500):
         batch_len = len(batch)
         variants = []
-        for product in Product.objects.bulk_create(
-            [
-                Product(
-                    name=i,
-                    slug=next(slug_generator),
-                    product_type_id=product_type.pk,
+        product_listings = []
+        products = [
+            Product(
+                name=i,
+                slug=next(slug_generator),
+                product_type_id=product_type.pk,
+            )
+            for i in range(batch_len)
+        ]
+        for product in Product.objects.bulk_create(products):
+            product_listings.append(
+                ProductChannelListing(
+                    channel=channel_USD,
+                    product=product,
+                    visible_in_listings=True,
+                    available_for_purchase_at="2022-01-01",
+                    currency=channel_USD.currency_code,
                 )
-                for i in range(batch_len)
-            ]
-        ):
+            )
             for x in range(variants_per_product):
                 variant = ProductVariant(name=x, product_id=product.id)
                 variants.append(variant)
         ProductVariant.objects.bulk_create(variants)
-
+        variant_listings = []
+        for variant in variants:
+            price = random.randint(1, 100)
+            variant_listings.append(
+                ProductVariantChannelListing(
+                    variant=variant,
+                    channel=channel_USD,
+                    currency=channel_USD.currency_code,
+                    price_amount=price,
+                    discounted_price_amount=price,
+                )
+            )
+        ProductVariantChannelListing.objects.bulk_create(variant_listings)
+        ProductChannelListing.objects.bulk_create(product_listings)
     return Product.objects.all()

@@ -1,7 +1,8 @@
 from collections import defaultdict
+from functools import reduce
 from typing import Union
 
-from django.db.models import Exists, OuterRef
+from django.db.models import Exists, OuterRef, Q
 
 from ..page.models import Page
 from ..product.models import Product, ProductVariant
@@ -51,16 +52,35 @@ def associate_attribute_values_to_instance(
 
 
 def validate_attribute_owns_values(attr_val_map: dict[int, list]) -> None:
-    values = defaultdict(set)
-    for value in AttributeValue.objects.filter(
-        attribute_id__in=attr_val_map.keys(),
-        pk__in=[v.pk for values in attr_val_map.values() for v in values],
-    ).iterator():
-        values[value.attribute_id].add(value.id)
+    if not attr_val_map:
+        return
+    values_map = defaultdict(set)
+    slug_value_to_value_map = {}
 
-    for attribute_id, value_ids in attr_val_map.items():
-        if values[attribute_id] != {v.pk for v in value_ids}:
+    # we need to fetch the proper values which attribute ids and value slug matches
+    lookup = reduce(
+        lambda acc, val_map_item: acc
+        | Q(
+            attribute_id=val_map_item[0], slug__in=[val.slug for val in val_map_item[1]]
+        ),
+        attr_val_map.items(),
+        Q(),
+    )
+    values = AttributeValue.objects.filter(lookup)
+
+    for value in values:
+        values_map[value.attribute_id].add(value.slug)
+        slug_value_to_value_map[value.slug] = value
+
+    for attribute_id, attr_values in attr_val_map.items():
+        if values_map[attribute_id] != {v.slug for v in attr_values}:
             raise AssertionError("Some values are not from the provided attribute.")
+        # Update the attr_val_map to use the created AttributeValue instances with
+        # id set. This is needed as `ignore_conflicts=True` flag in `bulk_create
+        # is used in `AttributeValueManager`
+        attr_val_map[attribute_id] = [
+            slug_value_to_value_map[v.slug] for v in attr_values
+        ]
 
 
 def _associate_attribute_to_instance(
