@@ -565,7 +565,7 @@ class AttributeAssignmentMixin:
                     raise ValidationError(
                         "Attribute value with given externalReference can't be found"
                     )
-                return value
+                attribute_values.append(value)
 
             if attr_value.id:
                 _, attr_value_id = from_global_id_or_error(attr_value.id)
@@ -805,7 +805,7 @@ class AttributeAssignmentMixin:
 
     @classmethod
     def _bulk_create_pre_save_values(cls, pre_save_bulk):
-        results: dict["Attribute", list[AttributeValue]] = defaultdict(list)
+        results: dict[Attribute, list[AttributeValue]] = defaultdict(list)
 
         for action, attribute_data in pre_save_bulk.items():
             for attribute, values in attribute_data.items():

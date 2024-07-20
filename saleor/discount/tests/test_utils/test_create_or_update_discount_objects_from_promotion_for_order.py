@@ -10,7 +10,7 @@ from ....product.models import (
 from ....warehouse.models import Stock
 from ... import DiscountType, RewardType, RewardValueType
 from ...models import OrderDiscount, OrderLineDiscount
-from ...utils import create_or_update_discount_objects_from_promotion_for_order
+from ...utils.order import create_or_update_discount_objects_from_promotion_for_order
 
 
 def test_create_catalogue_discount_fixed(
@@ -219,6 +219,7 @@ def test_create_order_discount_gift(
     # given
     order = order_with_lines
     variant = variant_with_many_stocks
+    product = variant.product
     channel = order.channel
     promotion = order_promotion_without_rules
     promotion_id = graphene.Node.to_global_id("Promotion", promotion.id)
@@ -267,8 +268,10 @@ def test_create_order_discount_gift(
     assert gift_line.unit_price_net_amount == Decimal(0)
     assert gift_line.base_unit_price_amount == Decimal(0)
     assert gift_line.unit_discount_amount == Decimal(0)
-    assert gift_line.unit_discount_type == RewardValueType.FIXED
+    assert gift_line.unit_discount_type is None
     assert gift_line.unit_discount_value == Decimal(0)
+    assert gift_line.product_name == product.name
+    assert gift_line.product_sku == variant.sku
 
 
 def test_multiple_rules_subtotal_and_catalogue_discount_applied(

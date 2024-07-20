@@ -42,7 +42,9 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-task_logger = get_task_logger(__name__)
+task_logger = get_task_logger(f"{__name__}.celery")
+
+OBSERVABILITY_QUEUE_NAME = "observability"
 
 
 def create_deliveries_for_subscriptions(
@@ -100,7 +102,7 @@ def create_deliveries_for_subscriptions(
 
         if not data:
             logger.info(
-                "No payload was generated with subscription for event: %s" % event_type
+                "No payload was generated with subscription for event: %s", event_type
             )
             continue
 
@@ -172,6 +174,7 @@ def trigger_webhooks_async(
     allow_replica=False,
     pre_save_payloads=None,
     request_time=None,
+    queue=None,
 ):
     """Trigger async webhooks - both regular and subscription.
 
@@ -180,10 +183,11 @@ def trigger_webhooks_async(
         `legacy_data_generator` function is used to generate the payload when needed.
     :param event_type: used in both webhook types as event type.
     :param webhooks: used in both webhook types, queryset of async webhooks.
-    :param allow_replica: use a replica database.
     :param subscribable_object: subscribable object used in subscription webhooks.
     :param requestor: used in subscription webhooks to generate metadata for payload.
     :param legacy_data_generator: used to generate payload for regular webhooks.
+    :param allow_replica: use a replica database.
+    :param queue: defines the queue to which the event should be sent.
     """
     regular_webhooks, subscription_webhooks = group_webhooks_by_subscription(webhooks)
     deliveries = []
@@ -216,7 +220,13 @@ def trigger_webhooks_async(
         )
 
     for delivery in deliveries:
-        send_webhook_request_async.delay(delivery.id)
+        send_webhook_request_async.apply_async(
+            kwargs={"event_delivery_id": delivery.id},
+            queue=queue or settings.WEBHOOK_CELERY_QUEUE_NAME,
+            bind=True,
+            retry_backoff=10,
+            retry_kwargs={"max_retries": 5},
+        )
 
 
 @app.task(
@@ -237,7 +247,7 @@ def send_webhook_request_async(self, event_delivery_id):
     try:
         if not delivery.payload:
             raise ValueError(
-                "Event delivery id: %r has no payload." % event_delivery_id
+                f"Event delivery id: %{event_delivery_id}r has no payload."
             )
         data = delivery.payload.payload
         with webhooks_opentracing_trace(delivery.event_type, domain, app=webhook.app):
@@ -330,7 +340,7 @@ def send_observability_events(webhooks: list[WebhookData], events: list[bytes]):
         )
 
 
-@app.task
+@app.task(queue=OBSERVABILITY_QUEUE_NAME)
 def observability_send_events():
     with observability.opentracing_trace("send_events_task", "task"):
         if webhooks := observability.get_webhooks():
@@ -341,7 +351,7 @@ def observability_send_events():
                     send_observability_events(webhooks, events)
 
 
-@app.task
+@app.task(queue=OBSERVABILITY_QUEUE_NAME)
 def observability_reporter_task():
     with observability.opentracing_trace("reporter_task", "task"):
         if webhooks := observability.get_webhooks():

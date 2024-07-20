@@ -87,6 +87,7 @@ class OrderConfirm(ModelMutation):
                         authorized_payment,
                         manager,
                         site.settings,
+                        payment.gateway,
                     )
                 )
             transaction.on_commit(

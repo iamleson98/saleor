@@ -106,8 +106,8 @@ def generate_payload_from_subscription(
     )
     if hasattr(results, "errors"):
         logger.warning(
-            "Unable to build a payload for subscription. \n"
-            "error: %s" % str(results.errors),
+            "Unable to build a payload for subscription. \n" "error: %s",
+            str(results.errors),
             extra={"query": subscription_query, "app": app_id},
         )
         return None
@@ -123,7 +123,7 @@ def generate_payload_from_subscription(
         return None
 
     payload_instance = payload[0]
-    event_payload = get_event_payload(payload_instance.data.get("event"))
+    event_payload = get_event_payload(payload_instance.data.get("event")) or {}
 
     if payload_instance.errors:
         event_payload["errors"] = [

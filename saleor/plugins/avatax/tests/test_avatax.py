@@ -16,15 +16,13 @@ from ....checkout.fetch import (
     CheckoutInfo,
     fetch_checkout_info,
     fetch_checkout_lines,
-    get_delivery_method_info,
-    update_delivery_method_lists_for_checkout_info,
 )
 from ....checkout.utils import add_variant_to_checkout
 from ....core.prices import quantize_price
 from ....core.taxes import TaxError, TaxType, zero_money, zero_taxed_money
 from ....discount import DiscountType, DiscountValueType, RewardValueType, VoucherType
 from ....discount.models import CheckoutLineDiscount, Promotion, PromotionRule
-from ....discount.utils import (
+from ....discount.utils.checkout import (
     create_or_update_discount_objects_from_promotion_for_checkout,
 )
 from ....order import OrderStatus
@@ -32,7 +30,6 @@ from ....product import ProductTypeKind
 from ....product.models import Product, ProductType
 from ....product.utils.variant_prices import update_discounted_prices_for_promotion
 from ....product.utils.variants import fetch_variants_for_promotion_rules
-from ....shipping.utils import convert_to_shipping_method_data
 from ....tax import TaxCalculationStrategy
 from ....tax.models import TaxClass
 from ...manager import get_plugins_manager
@@ -2271,15 +2268,6 @@ def test_calculate_checkout_subtotal_for_product_without_tax(
 
     lines, _ = fetch_checkout_lines(checkout)
     assert len(lines) == 1
-    update_delivery_method_lists_for_checkout_info(
-        checkout_info,
-        checkout_info.checkout.shipping_method,
-        checkout_info.checkout.collection_point,
-        ship_to_pl_address,
-        lines,
-        manager,
-        checkout.channel.shipping_method_listings.all(),
-    )
 
     total = manager.calculate_checkout_subtotal(checkout_info, lines, address)
     total = quantize_price(total, total.currency)
@@ -3554,6 +3542,47 @@ def test_preprocess_order_creation_shipping_voucher_no_tax_class_on_delivery_met
 
 
 @pytest.mark.vcr
+@override_settings(PLUGINS=["saleor.plugins.avatax.plugin.AvataxPlugin"])
+def test_preprocess_order_creation_address_error_logging(
+    checkout_with_item,
+    monkeypatch,
+    address,
+    shipping_zone,
+    plugin_configuration,
+    caplog,
+):
+    # given
+    checkout = checkout_with_item
+    plugin_configuration()
+    monkeypatch.setattr(
+        "saleor.plugins.avatax.plugin.get_cached_tax_codes_or_fetch",
+        lambda _: {"PC040156": "desc"},
+    )
+    manager = get_plugins_manager(allow_replica=False)
+
+    address.validation_skipped = True
+    address.postal_code = "invalid postal code"
+    address.save(update_fields=["postal_code", "validation_skipped"])
+
+    checkout.shipping_address = address
+    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.save()
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    with pytest.raises(TaxError):
+        manager.preprocess_order_creation(checkout_info, lines)
+
+    # then
+    assert f"Unable to calculate taxes for checkout {checkout.pk}" in caplog.text
+    assert (
+        f"Fetching tax data for checkout with address validation skipped. "
+        f"Address ID: {address.pk}" in caplog.text
+    )
+
+
+@pytest.mark.vcr
 def test_get_cached_tax_codes_or_fetch(monkeypatch, avatax_config):
     monkeypatch.setattr("saleor.plugins.avatax.cache.get", lambda x, y: {})
     config = avatax_config
@@ -3779,26 +3808,21 @@ def test_get_checkout_line_tax_rate(
     checkout_with_item.shipping_address = address
     checkout_with_item.shipping_method = shipping_zone.shipping_methods.get()
     checkout_with_item.save(update_fields=["shipping_address", "shipping_method"])
-    delivery_method = checkout_with_item.shipping_method
+    lines, _ = fetch_checkout_lines(checkout_with_item)
+    shipping_method = checkout_with_item.shipping_method
     checkout_info = CheckoutInfo(
         checkout=checkout_with_item,
-        delivery_method_info=get_delivery_method_info(
-            convert_to_shipping_method_data(
-                delivery_method,
-                delivery_method.channel_listings.first(),
-            ),
-            address,
-        ),
         shipping_address=address,
         billing_address=None,
         channel=checkout_with_item.channel,
         user=None,
         tax_configuration=checkout_with_item.channel.tax_configuration,
-        valid_pick_up_points=[],
-        all_shipping_methods=[],
         discounts=[],
+        manager=manager,
+        lines=lines,
+        shipping_method=shipping_method,
+        shipping_channel_listings=shipping_method.channel_listings.all(),
     )
-    lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_line_info = lines[0]
 
     # when
@@ -3845,26 +3869,22 @@ def test_get_checkout_line_tax_rate_for_product_with_charge_taxes_set_to_false(
     checkout_with_item.shipping_address = address
     checkout_with_item.shipping_method = shipping_zone.shipping_methods.get()
     checkout_with_item.save(update_fields=["shipping_address", "shipping_method"])
-    delivery_method = checkout_with_item.shipping_method
 
+    lines, _ = fetch_checkout_lines(checkout_with_item)
+    shipping_method = checkout_with_item.shipping_method
     checkout_info = CheckoutInfo(
         checkout=checkout_with_item,
-        delivery_method_info=get_delivery_method_info(
-            convert_to_shipping_method_data(
-                delivery_method,
-                delivery_method.channel_listings.first(),
-            )
-        ),
         shipping_address=address,
         billing_address=None,
         channel=checkout_with_item.channel,
         user=None,
         tax_configuration=checkout_with_item.channel.tax_configuration,
-        valid_pick_up_points=[],
-        all_shipping_methods=[],
         discounts=[],
+        manager=manager,
+        lines=lines,
+        shipping_method=shipping_method,
+        shipping_channel_listings=shipping_method.channel_listings.all(),
     )
-    lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_line_info = lines[0]
     product = checkout_line_info.product
     product.tax_class = tax_class_zero_rates
@@ -3918,26 +3938,23 @@ def test_get_checkout_line_tax_rate_for_product_type_with_non_taxable_product(
     checkout_with_item.shipping_address = address
     checkout_with_item.shipping_method = shipping_zone.shipping_methods.get()
     checkout_with_item.save(update_fields=["shipping_address", "shipping_method"])
-    delivery_method = checkout_with_item.shipping_method
+
+    lines, _ = fetch_checkout_lines(checkout_with_item)
+    shipping_method = checkout_with_item.shipping_method
 
     variant2 = product2.variants.first()
     checkout_info = CheckoutInfo(
         checkout=checkout_with_item,
-        delivery_method_info=get_delivery_method_info(
-            convert_to_shipping_method_data(
-                delivery_method,
-                delivery_method.channel_listings.first(),
-            ),
-            address,
-        ),
         shipping_address=address,
         billing_address=None,
         channel=checkout_with_item.channel,
         user=None,
         tax_configuration=checkout_with_item.channel.tax_configuration,
-        valid_pick_up_points=[],
-        all_shipping_methods=[],
         discounts=[],
+        manager=manager,
+        shipping_method=shipping_method,
+        shipping_channel_listings=shipping_method.channel_listings.all(),
+        lines=lines,
     )
     add_variant_to_checkout(checkout_info, variant2, 1)
 
@@ -5447,6 +5464,39 @@ def test_get_order_tax_data_raised_error(
 
     # then
     assert e._excinfo[1].args[0] == return_value["error"]
+
+
+@pytest.mark.vcr
+@patch("saleor.plugins.avatax.cache.set")
+def test_get_order_tax_data_address_error_logging(
+    mock_cache_set,
+    order_line,
+    avatax_config,
+    address,
+    caplog,
+):
+    # given
+    order = order_line.order
+    invalid_postal_code = "invalid postal code"
+    address.validation_skipped = True
+    address.postal_code = invalid_postal_code
+    address.save(update_fields=["postal_code", "validation_skipped"])
+    order.shipping_address = address
+    order.billing_address = address
+    order.save(update_fields=["shipping_address", "billing_address"])
+
+    avatax_config.from_postal_code = invalid_postal_code
+
+    # when
+    with pytest.raises(TaxError):
+        get_order_tax_data(order, avatax_config)
+
+    # then
+    assert f"Unable to calculate taxes for order {order.pk}" in caplog.text
+    assert (
+        f"Fetching tax data for order with address validation skipped. "
+        f"Address ID: {address.pk}" in caplog.text
+    )
 
 
 @pytest.mark.parametrize(

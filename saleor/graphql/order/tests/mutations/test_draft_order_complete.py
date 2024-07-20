@@ -106,6 +106,7 @@ def test_draft_order_complete(
     assert data["status"] == order.status.upper()
     assert data["origin"] == OrderOrigin.DRAFT.upper()
     assert order.search_vector
+    assert order.status == OrderStatus.UNFULFILLED
 
     for line in order.lines.all():
         allocation = line.allocations.get()
@@ -127,6 +128,50 @@ def test_draft_order_complete(
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
         Stock.objects.last()
     )
+
+
+def test_draft_order_complete_no_automatically_confirm_all_new_orders(
+    staff_api_client,
+    permission_group_manage_orders,
+    staff_user,
+    draft_order,
+    channel_USD,
+):
+    # given
+    channel_USD.automatically_confirm_all_new_orders = False
+    channel_USD.save()
+    order = draft_order
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+
+    # Ensure no events were created
+    assert not OrderEvent.objects.exists()
+
+    # Ensure no allocation were created
+    assert not Allocation.objects.filter(order_line__order=order).exists()
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+
+    # when
+    response = staff_api_client.post_graphql(DRAFT_ORDER_COMPLETE_MUTATION, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["draftOrderComplete"]["order"]
+    order.refresh_from_db()
+    assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.DRAFT.upper()
+    assert order.search_vector
+    assert order.status == OrderStatus.UNCONFIRMED
+
+    for line in order.lines.all():
+        allocation = line.allocations.get()
+        assert allocation.quantity_allocated == line.quantity_unfulfilled
+
+    # ensure there are only 1 event with correct type
+    event = OrderEvent.objects.get(user=staff_user)
+    assert event.type == order_events.OrderEvents.PLACED_FROM_DRAFT
+    assert not OrderEvent.objects.exclude(user=staff_user).exists()
 
 
 def test_draft_order_complete_by_user_no_channel_access(
@@ -1406,3 +1451,42 @@ def test_draft_order_complete_with_catalogue_and_gift_discount(
     )
     assert order_data["total"]["net"]["amount"] == total
     assert total == line_2_total + line_1_total + order.base_shipping_price_amount
+
+
+def test_draft_order_complete_with_invalid_address(
+    staff_api_client,
+    permission_group_manage_orders,
+    staff_user,
+    draft_order,
+    address,
+):
+    """Check if draft order can be completed with invalid address.
+
+    After introducing `AddressInput.skip_validation`, Saleor may have invalid address
+    stored in database.
+    """
+    # given
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order = draft_order
+    wrong_postal_code = "wrong postal code"
+    address.postal_code = wrong_postal_code
+
+    order.shipping_address = address.get_copy()
+    order.billing_address = address.get_copy()
+    order.save(update_fields=["shipping_address", "billing_address"])
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+
+    # when
+    response = staff_api_client.post_graphql(DRAFT_ORDER_COMPLETE_MUTATION, variables)
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["draftOrderComplete"]["order"]
+    order.refresh_from_db()
+
+    assert data["status"] == order.status.upper()
+    assert data["origin"] == OrderOrigin.DRAFT.upper()
+    assert order.shipping_address.postal_code == wrong_postal_code
+    assert order.billing_address.postal_code == wrong_postal_code

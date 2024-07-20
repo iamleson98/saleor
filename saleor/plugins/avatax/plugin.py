@@ -15,6 +15,7 @@ from prices import Money, TaxedMoney, TaxedMoneyRange
 
 from ...checkout import base_calculations
 from ...checkout.fetch import fetch_checkout_lines
+from ...checkout.utils import log_address_if_validation_skipped_for_checkout
 from ...core.taxes import TaxError, TaxType, zero_taxed_money
 from ...order import base_calculations as order_base_calculation
 from ...order.interface import OrderTaxedPricesData
@@ -227,9 +228,7 @@ class AvataxPlugin(BasePlugin):
                 # for some cases we will need a base_value but no need to call it for
                 # each line
                 base_value=SimpleLazyObject(
-                    lambda: base_calculations.calculate_base_line_total_price(
-                        line, checkout_info.channel
-                    )
+                    lambda: base_calculations.calculate_base_line_total_price(line)
                 ),
             )
             taxed_total += taxed_line_total_data
@@ -361,6 +360,7 @@ class AvataxPlugin(BasePlugin):
                 error_code,
                 msg,
             )
+            log_address_if_validation_skipped_for_checkout(checkout_info, logger)
             customer_msg = CustomerErrors.get_error_msg(response.get("error", {}))
             raise TaxError(customer_msg)
         return previous_value
@@ -417,7 +417,7 @@ class AvataxPlugin(BasePlugin):
             prices_entered_with_tax,
             base_value=SimpleLazyObject(
                 lambda: base_calculations.calculate_base_line_total_price(
-                    checkout_line_info, checkout_info.channel
+                    checkout_line_info
                 )
             ),
         )
@@ -560,7 +560,7 @@ class AvataxPlugin(BasePlugin):
             prices_entered_with_tax,
             base_value=SimpleLazyObject(
                 lambda: base_calculations.calculate_base_line_total_price(
-                    checkout_line_info, checkout_info.channel
+                    checkout_line_info
                 )
             ),
         )

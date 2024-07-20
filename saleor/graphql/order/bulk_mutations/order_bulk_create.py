@@ -52,7 +52,7 @@ from ...core.descriptions import ADDED_IN_314, ADDED_IN_318, PREVIEW_FEATURE
 from ...core.doc_category import DOC_CATEGORY_ORDERS
 from ...core.enums import ErrorPolicy, ErrorPolicyEnum, LanguageCodeEnum
 from ...core.mutations import BaseMutation
-from ...core.scalars import PositiveDecimal, WeightScalar
+from ...core.scalars import DateTime, PositiveDecimal, WeightScalar
 from ...core.types import BaseInputObjectType, BaseObjectType, NonNullList
 from ...core.types.common import OrderBulkCreateError
 from ...core.utils import from_global_id_or_error
@@ -327,7 +327,7 @@ class OrderBulkCreateUserInput(BaseInputObjectType):
 
 
 class OrderBulkCreateInvoiceInput(BaseInputObjectType):
-    created_at = graphene.DateTime(
+    created_at = DateTime(
         required=True, description="The date, when the invoice was created."
     )
     number = graphene.String(description="Invoice number.")
@@ -369,7 +369,7 @@ class OrderBulkCreateNoteInput(BaseInputObjectType):
     message = graphene.String(
         required=True, description=f"Note message. Max characters: {MAX_NOTE_LENGTH}."
     )
-    date = graphene.DateTime(description="The date associated with the message.")
+    date = DateTime(description="The date associated with the message.")
     user_id = graphene.ID(description="The user ID associated with the message.")
     user_email = graphene.ID(description="The user email associated with the message.")
     user_external_reference = graphene.ID(
@@ -431,7 +431,7 @@ class OrderBulkCreateOrderLineInput(BaseInputObjectType):
     translated_product_name = graphene.String(
         description="Translation of the product name."
     )
-    created_at = graphene.DateTime(
+    created_at = DateTime(
         required=True, description="The date, when the order line was created."
     )
     is_shipping_required = graphene.Boolean(
@@ -477,7 +477,7 @@ class OrderBulkCreateInput(BaseInputObjectType):
     channel = graphene.String(
         required=True, description="Slug of the channel associated with the order."
     )
-    created_at = graphene.DateTime(
+    created_at = DateTime(
         required=True,
         description="The date, when the order was inserted to Saleor database.",
     )
@@ -929,6 +929,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         order_input: dict[str, Any],
         order_data: OrderBulkCreateData,
         object_storage: dict[str, Any],
+        info: ResolveInfo,
     ):
         """Get all instances of objects needed to create an order."""
         user = cls.get_instance_with_errors(
@@ -966,7 +967,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         metadata_list = billing_address_input.pop("metadata", None)
         private_metadata_list = billing_address_input.pop("private_metadata", None)
         try:
-            billing_address = cls.validate_address(billing_address_input)
+            billing_address = cls.validate_address(billing_address_input, info=info)
             cls.validate_and_update_metadata(
                 billing_address, metadata_list, private_metadata_list
             )
@@ -985,7 +986,9 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             metadata_list = shipping_address_input.pop("metadata", None)
             private_metadata_list = shipping_address_input.pop("private_metadata", None)
             try:
-                shipping_address = cls.validate_address(shipping_address_input)
+                shipping_address = cls.validate_address(
+                    shipping_address_input, info=info
+                )
                 cls.validate_and_update_metadata(
                     shipping_address, metadata_list, private_metadata_list
                 )
@@ -1861,7 +1864,10 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
 
     @classmethod
     def create_single_order(
-        cls, order_input, object_storage: dict[str, Any]
+        cls,
+        order_input,
+        object_storage: dict[str, Any],
+        info: ResolveInfo,
     ) -> OrderBulkCreateData:
         order_data = OrderBulkCreateData()
         cls.validate_order_input(order_input, order_data, object_storage)
@@ -1873,6 +1879,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             order_input=order_input,
             order_data=order_data,
             object_storage=object_storage,
+            info=info,
         )
 
         is_shipping_required = cls.is_shipping_required(order_input)
@@ -2238,7 +2245,9 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             #   - key for shipping prices: "shipping_price.{shipping_method_id}"
             object_storage: dict[str, Any] = cls.get_all_instances(orders_input)
             for order_input in orders_input:
-                orders_data.append(cls.create_single_order(order_input, object_storage))
+                orders_data.append(
+                    cls.create_single_order(order_input, object_storage, info)
+                )
 
             error_policy = data.get("error_policy") or ErrorPolicy.REJECT_EVERYTHING
             stock_update_policy = (

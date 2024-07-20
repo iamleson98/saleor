@@ -10,7 +10,11 @@ from ....core.taxes import TaxError
 from ....core.tracing import traced_atomic_transaction
 from ....core.utils.url import validate_storefront_url
 from ....discount.models import Voucher, VoucherCode
-from ....discount.utils import get_voucher_code_instance, increase_voucher_usage
+from ....discount.utils.voucher import (
+    get_active_voucher_code,
+    get_voucher_code_instance,
+    increase_voucher_usage,
+)
 from ....order import OrderOrigin, OrderStatus, events, models
 from ....order.error_codes import OrderErrorCode
 from ....order.search import update_order_search_vector
@@ -193,7 +197,8 @@ class DraftOrderCreate(
         shipping_method_input = {}
         if "shipping_method" in data:
             shipping_method_input["shipping_method"] = get_shipping_model_by_object_id(
-                object_id=data.pop("shipping_method", None), raise_error=False
+                object_id=data.pop("shipping_method", None),
+                error_field="shipping_method",
             )
 
         if email := data.get("user_email", None):
@@ -272,11 +277,23 @@ class DraftOrderCreate(
         if voucher is None:
             cleaned_input["voucher_code"] = None
             return
+
+        if isinstance(voucher, VoucherCode):
+            raise ValidationError(
+                {
+                    "voucher": ValidationError(
+                        "You cannot use voucherCode in the voucher input. "
+                        "Please use voucherCode input instead with a valid voucher code.",
+                        code=OrderErrorCode.INVALID_VOUCHER.value,
+                    )
+                }
+            )
+
         code_instance = None
         if channel.include_draft_order_in_voucher_usage:
             # Validate voucher when it's included in voucher usage calculation
             try:
-                code_instance = get_voucher_code_instance(voucher.code, channel.slug)
+                code_instance = get_active_voucher_code(voucher, channel.slug)
             except ValidationError:
                 raise ValidationError(
                     {
@@ -330,6 +347,7 @@ class DraftOrderCreate(
             voucher = code_instance.voucher
             cls.clean_voucher_listing(voucher, channel, "voucher_code")
         cleaned_input["voucher"] = voucher
+        cleaned_input["voucher_code"] = voucher_code
         cleaned_input["voucher_code_instance"] = code_instance
 
     @classmethod
@@ -581,6 +599,6 @@ class DraftOrderCreate(
             increase_voucher_usage(
                 voucher,
                 code_instance,
-                instance.user_email or instance.user.email,
+                instance.user_email or instance.user and instance.user.email,
                 increase_voucher_customer_usage=False,
             )

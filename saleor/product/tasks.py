@@ -7,6 +7,7 @@ from uuid import UUID
 from celery.utils.log import get_task_logger
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction
 from django.db.models import Exists, OuterRef, Q, QuerySet
 from django.utils import timezone
 
@@ -15,7 +16,6 @@ from ..celeryconf import app
 from ..core.exceptions import PreorderAllocationError
 from ..discount import PromotionType
 from ..discount.models import Promotion, PromotionRule
-from ..discount.utils import mark_active_catalogue_promotion_rules_as_dirty
 from ..plugins.manager import get_plugins_manager
 from ..warehouse.management import deactivate_preorder_for_variant
 from ..webhook.event_types import WebhookEventAsyncType
@@ -30,15 +30,15 @@ from .utils.variants import (
 )
 
 logger = logging.getLogger(__name__)
-task_logger = get_task_logger(__name__)
+task_logger = get_task_logger(f"{__name__}.celery")
 
 PRODUCTS_BATCH_SIZE = 300
 
 VARIANTS_UPDATE_BATCH = 500
 # Results in update time ~0.2s
 DISCOUNTED_PRODUCT_BATCH = 2000
-# Results in update time ~1.5s
-PROMOTION_RULE_BATCH_SIZE = 250
+# Results in update time ~2s when 600 channels exist
+PROMOTION_RULE_BATCH_SIZE = 100
 
 
 def _variants_in_batches(variants_qs):
@@ -66,7 +66,9 @@ def _update_variants_names(instance: ProductType, saved_attributes: Iterable):
     if not attributes_changed:
         return
 
-    variants = ProductVariant.objects.filter(
+    variants = ProductVariant.objects.using(
+        settings.DATABASE_CONNECTION_REPLICA_NAME
+    ).filter(
         name="",
         product__in=instance.products.all(),
         product__product_type__variant_attributes__in=attributes_changed,
@@ -83,11 +85,15 @@ def _update_variants_names(instance: ProductType, saved_attributes: Iterable):
 @app.task
 def update_variants_names(product_type_pk: int, saved_attributes_ids: list[int]):
     try:
-        instance = ProductType.objects.get(pk=product_type_pk)
+        instance = ProductType.objects.using(
+            settings.DATABASE_CONNECTION_REPLICA_NAME
+        ).get(pk=product_type_pk)
     except ObjectDoesNotExist:
         logging.warning(f"Cannot find product type with id: {product_type_pk}.")
         return
-    saved_attributes = Attribute.objects.filter(pk__in=saved_attributes_ids)
+    saved_attributes = Attribute.objects.using(
+        settings.DATABASE_CONNECTION_REPLICA_NAME
+    ).filter(pk__in=saved_attributes_ids)
     _update_variants_names(instance, saved_attributes)
 
 
@@ -117,15 +123,15 @@ def _get_channel_to_products_map(rule_to_variant_list):
         [rule_to_variant.promotionrule_id for rule_to_variant in rule_to_variant_list]
     )
     PromotionChannel = PromotionRule.channels.through
-    promotion_channel_qs = PromotionChannel.objects.using(
-        settings.DATABASE_CONNECTION_REPLICA_NAME
-    ).filter(promotionrule_id__in=rule_ids)
-    rule_to_channels_map = defaultdict(set)
-    for promotion_channel in promotion_channel_qs:
-        rule_to_channels_map[promotion_channel.promotionrule_id].add(
-            promotion_channel.channel_id
-        )
+    promotion_channel_qs = (
+        PromotionChannel.objects.using(settings.DATABASE_CONNECTION_REPLICA_NAME)
+        .filter(promotionrule_id__in=rule_ids)
+        .values_list("promotionrule_id", "channel_id")
+    )
 
+    rule_to_channels_map = defaultdict(set)
+    for promotionrule_id, channel_id in promotion_channel_qs.iterator():
+        rule_to_channels_map[promotionrule_id].add(channel_id)
     channel_to_products_map = defaultdict(set)
     for rule_to_variant in rule_to_variant_list:
         channel_ids = rule_to_channels_map[rule_to_variant.promotionrule_id]
@@ -139,9 +145,8 @@ def _get_channel_to_products_map(rule_to_variant_list):
 def _get_existing_rule_variant_list(rules: QuerySet[PromotionRule]):
     PromotionRuleVariant = PromotionRule.variants.through
     existing_rules_variants = (
-        PromotionRuleVariant.objects.filter(
-            Exists(rules.filter(pk=OuterRef("promotionrule_id")))
-        )
+        PromotionRuleVariant.objects.using(settings.DATABASE_CONNECTION_REPLICA_NAME)
+        .filter(Exists(rules.filter(pk=OuterRef("promotionrule_id"))))
         .all()
         .values_list(
             "promotionrule_id",
@@ -182,12 +187,24 @@ def update_variant_relations_for_active_promotion_rules_task():
         # in the promotion as dirty
         existing_variant_relation = _get_existing_rule_variant_list(rules)
 
-        new_rule_to_variant_list = fetch_variants_for_promotion_rules(rules=rules)
+        new_rule_to_variant_list = fetch_variants_for_promotion_rules(
+            rules=rules,
+            database_connection_name=settings.DATABASE_CONNECTION_REPLICA_NAME,
+        )
         channel_to_product_map = _get_channel_to_products_map(
             existing_variant_relation + new_rule_to_variant_list
         )
+        with transaction.atomic():
+            promotion_rule_ids = list(
+                PromotionRule.objects.select_for_update(of=("self",))
+                .filter(pk__in=ids, variants_dirty=True)
+                .order_by("pk")
+                .values_list("id", flat=True)
+            )
+            PromotionRule.objects.filter(pk__in=promotion_rule_ids).update(
+                variants_dirty=False
+            )
 
-        PromotionRule.objects.filter(pk__in=ids).update(variants_dirty=False)
         mark_products_in_channels_as_dirty(channel_to_product_map, allow_replica=True)
         update_variant_relations_for_active_promotion_rules_task.delay()
 
@@ -203,11 +220,7 @@ def update_products_discounted_prices_for_promotion_task(
 
     # In case of triggered the task by old server worker, mark all active promotions as
     # dirty. This will make the same re-calculation as the old task.
-    from ..channel.models import Channel
-
-    mark_active_catalogue_promotion_rules_as_dirty(
-        Channel.objects.all().values_list("id", flat=True)
-    )
+    PromotionRule.objects.filter(variants_dirty=False).update(variants_dirty=True)
 
 
 @app.task
@@ -229,9 +242,16 @@ def recalculate_discounted_price_for_products_task():
             settings.DATABASE_CONNECTION_REPLICA_NAME
         ).filter(id__in=products_ids)
         update_discounted_prices_for_promotion(products, only_dirty_products=True)
-        ProductChannelListing.objects.filter(id__in=listing_ids).update(
-            discounted_price_dirty=False
-        )
+        with transaction.atomic():
+            channel_listings_ids = list(
+                ProductChannelListing.objects.select_for_update(of=("self",))
+                .filter(id__in=listing_ids, discounted_price_dirty=True)
+                .order_by("pk")
+                .values_list("id", flat=True)
+            )
+            ProductChannelListing.objects.filter(id__in=channel_listings_ids).update(
+                discounted_price_dirty=False
+            )
         recalculate_discounted_price_for_products_task.delay()
 
 
@@ -240,7 +260,7 @@ def update_discounted_prices_task(product_ids: Iterable[int]):
     # FIXME: Should be removed in Saleor 3.21
 
     # in case triggering the task by old server worker, we will just mark the products
-    # as dirty. The recalculation will happen in the backgorund
+    # as dirty. The recalculation will happen in the background.
     ProductChannelListing.objects.filter(product_id__in=product_ids).update(
         discounted_price_dirty=True
     )

@@ -192,7 +192,9 @@ class WebhookPlugin(BasePlugin):
     def _generate_meta(self):
         return generate_meta(requestor_data=generate_requestor(self.requestor))
 
-    def _trigger_metadata_updated_event(self, event_type, instance, webhooks=None):
+    def _trigger_metadata_updated_event(
+        self, event_type, instance, webhooks=None, queue=None
+    ):
         if webhooks := self._get_webhooks_for_event(event_type, webhooks):
             metadata_payload_generator = partial(
                 generate_metadata_updated_payload, instance, self.requestor
@@ -204,6 +206,7 @@ class WebhookPlugin(BasePlugin):
                 instance,
                 self.requestor,
                 legacy_data_generator=metadata_payload_generator,
+                queue=queue,
             )
 
     def _trigger_account_request_event(
@@ -746,6 +749,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def _trigger_menu_event(self, event_type, menu, webhooks=None):
@@ -836,6 +840,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_fully_paid(self, order: "Order", previous_value: Any) -> Any:
@@ -853,6 +858,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_paid(self, order: "Order", previous_value: Any) -> Any:
@@ -870,6 +876,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_refunded(self, order: "Order", previous_value: Any) -> Any:
@@ -887,6 +894,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_fully_refunded(self, order: "Order", previous_value: Any) -> Any:
@@ -904,6 +912,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_updated(self, order: "Order", previous_value: Any, webhooks=None) -> Any:
@@ -921,13 +930,14 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
-    def order_expired(self, order: "Order", previous_value: Any) -> Any:
+    def order_expired(self, order: "Order", previous_value: Any, webhooks=None) -> Any:
         if not self.active:
             return previous_value
         event_type = WebhookEventAsyncType.ORDER_EXPIRED
-        if webhooks := get_webhooks_for_event(event_type):
+        if webhooks := self._get_webhooks_for_event(event_type, webhooks):
             order_data_generator = partial(
                 generate_order_payload, order, self.requestor
             )
@@ -938,6 +948,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def sale_created(
@@ -1239,6 +1250,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_fulfilled(self, order: "Order", previous_value: Any) -> Any:
@@ -1256,13 +1268,16 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def order_metadata_updated(self, order: "Order", previous_value: Any) -> Any:
         if not self.active:
             return previous_value
         self._trigger_metadata_updated_event(
-            WebhookEventAsyncType.ORDER_METADATA_UPDATED, order
+            WebhookEventAsyncType.ORDER_METADATA_UPDATED,
+            order,
+            queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         )
 
     def order_bulk_created(self, orders: list["Order"], previous_value: Any) -> Any:
@@ -1283,6 +1298,7 @@ class WebhookPlugin(BasePlugin):
                 orders,
                 self.requestor,
                 legacy_data_generator=generate_bulk_order_payload,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def draft_order_created(self, order: "Order", previous_value: Any) -> Any:
@@ -1300,6 +1316,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def draft_order_updated(self, order: "Order", previous_value: Any) -> Any:
@@ -1317,6 +1334,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def draft_order_deleted(self, order: "Order", previous_value: Any) -> Any:
@@ -1334,6 +1352,7 @@ class WebhookPlugin(BasePlugin):
                 order,
                 self.requestor,
                 legacy_data_generator=order_data_generator,
+                queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def fulfillment_created(
@@ -1817,6 +1836,7 @@ class WebhookPlugin(BasePlugin):
                 checkout,
                 self.requestor,
                 legacy_data_generator=checkout_data_generator,
+                queue=settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def checkout_updated(self, checkout: "Checkout", previous_value: Any) -> Any:
@@ -1834,6 +1854,7 @@ class WebhookPlugin(BasePlugin):
                 checkout,
                 self.requestor,
                 legacy_data_generator=checkout_data_generator,
+                queue=settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def checkout_fully_paid(self, checkout: "Checkout", previous_value: Any) -> Any:
@@ -1851,6 +1872,7 @@ class WebhookPlugin(BasePlugin):
                 checkout,
                 self.requestor,
                 legacy_data_generator=checkout_data_generator,
+                queue=settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             )
 
     def checkout_metadata_updated(
@@ -2399,6 +2421,7 @@ class WebhookPlugin(BasePlugin):
                 channel=request_delete_data.channel,
             ),
             timeout=WEBHOOK_SYNC_TIMEOUT,
+            requestor=self.requestor,
         )
         if response_data:
             invalidate_cache_for_stored_payment_methods(
@@ -2436,6 +2459,7 @@ class WebhookPlugin(BasePlugin):
                     subscribable_object=list_payment_method_data,
                     request_timeout=WEBHOOK_SYNC_TIMEOUT,
                     cache_timeout=WEBHOOK_CACHE_DEFAULT_TIMEOUT,
+                    requestor=self.requestor,
                 )
                 if response_data:
                     previous_value.extend(
@@ -2470,6 +2494,7 @@ class WebhookPlugin(BasePlugin):
             False,
             subscribable_object=request_data,
             timeout=WEBHOOK_SYNC_TIMEOUT,
+            requestor=self.requestor,
         )
         return response_data
 
@@ -2702,6 +2727,7 @@ class WebhookPlugin(BasePlugin):
                 webhook,
                 False,
                 subscribable_object=payment,
+                requestor=self.requestor,
             )
             if response_data is None:
                 continue
@@ -2754,6 +2780,7 @@ class WebhookPlugin(BasePlugin):
             allow_replica=False,
             subscribable_object=subscribable_object,
             request=request,
+            requestor=self.requestor,
         )
         error_msg = None
         if response_data is None:
@@ -2841,6 +2868,7 @@ class WebhookPlugin(BasePlugin):
             webhook=webhook,
             allow_replica=False,
             subscribable_object=transaction_session_data,
+            requestor=self.requestor,
         )
         error_msg = None
         if response_data is None:
@@ -2897,6 +2925,7 @@ class WebhookPlugin(BasePlugin):
                 webhook=webhook,
                 allow_replica=False,
                 subscribable_object=checkout,
+                requestor=self.requestor,
             )
             if response_data:
                 app_gateways = parse_list_payment_gateways_response(
@@ -3042,6 +3071,7 @@ class WebhookPlugin(BasePlugin):
             allow_replica=False,
             subscribable_object=subscriptable_object,
             request=request_context,
+            requestor=self.requestor,
         )
         return parse_tax_data(response)
 
@@ -3109,6 +3139,7 @@ class WebhookPlugin(BasePlugin):
                     subscribable_object=checkout,
                     request_timeout=WEBHOOK_SYNC_TIMEOUT,
                     cache_timeout=CACHE_TIME_SHIPPING_LIST_METHODS_FOR_CHECKOUT,
+                    requestor=self.requestor,
                 )
 
                 if response_data:

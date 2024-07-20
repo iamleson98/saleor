@@ -33,6 +33,7 @@ from ..core.utils.anonymization import (
 )
 from ..core.utils.json_serializer import CustomJsonEncoder
 from ..discount import VoucherType
+from ..discount.utils.voucher import is_order_level_voucher
 from ..order import FulfillmentStatus, OrderStatus
 from ..order.models import Fulfillment, FulfillmentLine, Order, OrderLine
 from ..order.utils import get_order_country
@@ -1309,18 +1310,19 @@ def generate_checkout_payload_for_tax_calculation(
     # order promotion discount and entire_order voucher discount with
     # apply_once_per_order set to False is not already included in the total price
     discounted_object_promotion = bool(checkout_info.discounts)
-    discount_not_included = discounted_object_promotion or (
+    discount_not_included = discounted_object_promotion or is_order_level_voucher(
         checkout_info.voucher
-        and checkout_info.voucher.type == VoucherType.ENTIRE_ORDER
-        and not checkout_info.voucher.apply_once_per_order
     )
-    discount_amount = quantize_price(checkout.discount_amount, checkout.currency)
-    discount_name = checkout.discount_name
-    discounts = (
-        [{"name": discount_name, "amount": discount_amount}]
-        if discount_amount and discount_not_included
-        else []
-    )
+    if not checkout.discount_amount:
+        discounts = []
+    else:
+        discount_amount = quantize_price(checkout.discount_amount, checkout.currency)
+        discount_name = checkout.discount_name
+        discounts = (
+            [{"name": discount_name, "amount": discount_amount}]
+            if discount_amount and discount_not_included
+            else []
+        )
 
     # Prepare shipping data
     shipping_method = checkout.shipping_method
@@ -1432,6 +1434,8 @@ def generate_order_payload_for_tax_calculation(order: "Order"):
     discounts = order.discounts.all()
     discounts_dict = []
     for discount in discounts:
+        if is_order_level_voucher(discount.voucher):
+            continue
         quantize_price_fields(discount, ("amount_value",), order.currency)
         discount_amount = quantize_price(discount.amount_value, order.currency)
         discounts_dict.append({"name": discount.name, "amount": discount_amount})

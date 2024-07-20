@@ -133,6 +133,10 @@ class Voucher(ModelWithMetadata):
         code_instance = self.codes.last()
         return code_instance.code if code_instance else None
 
+    @property
+    def promo_codes(self):
+        return list(self.codes.values_list("code", flat=True))
+
     def get_discount(self, channel: Channel):
         """Return proper discount amount for given channel.
 
@@ -160,7 +164,7 @@ class Voucher(ModelWithMetadata):
             )
         raise NotImplementedError("Unknown discount type")
 
-    def get_discount_amount_for(self, price: Money, channel: Channel):
+    def get_discount_amount_for(self, price: Money, channel: Channel) -> Money:
         discount = self.get_discount(channel)
         after_discount = discount(price)
         if after_discount.amount < 0:

@@ -1,3 +1,4 @@
+import logging
 from collections.abc import Iterable
 from decimal import Decimal
 from typing import Optional
@@ -11,7 +12,7 @@ from ..core.db.connection import allow_writer
 from ..core.prices import quantize_price
 from ..core.taxes import TaxData, TaxEmptyData, TaxError, zero_taxed_money
 from ..discount import DiscountType
-from ..discount.utils import create_or_update_discount_objects_from_promotion_for_order
+from ..discount.utils.order import create_or_update_discount_objects_for_order
 from ..payment.model_helpers import get_subtotal
 from ..plugins import PLUGIN_IDENTIFIER_PREFIX
 from ..plugins.manager import PluginsManager
@@ -26,9 +27,12 @@ from ..tax.utils import (
 )
 from . import ORDER_EDITABLE_STATUS
 from .base_calculations import apply_order_discounts, base_order_line_total
-from .fetch import DraftOrderLineInfo, fetch_draft_order_lines_info
+from .fetch import EditableOrderLineInfo, fetch_draft_order_lines_info
 from .interface import OrderTaxedPricesData
 from .models import Order, OrderLine
+from .utils import log_address_if_validation_skipped_for_order
+
+logger = logging.getLogger(__name__)
 
 
 def fetch_order_prices_if_expired(
@@ -52,15 +56,17 @@ def fetch_order_prices_if_expired(
         return order, lines
 
     # handle promotions
-    lines_info: list[DraftOrderLineInfo] = fetch_draft_order_lines_info(order, lines)
-    create_or_update_discount_objects_from_promotion_for_order(
+    lines_info: list[EditableOrderLineInfo] = fetch_draft_order_lines_info(order, lines)
+    create_or_update_discount_objects_for_order(
         order, lines_info, database_connection_name
     )
     lines = [line_info.line for line_info in lines_info]
     _update_order_discount_for_voucher(order)
 
     _clear_prefetched_discounts(order, lines)
-    prefetch_related_objects([order], "discounts")
+    with allow_writer():
+        # TODO: Load discounts with a dataloader and pass as argument
+        prefetch_related_objects([order], "discounts")
 
     # handle taxes
     _recalculate_prices(
@@ -111,11 +117,11 @@ def fetch_order_prices_if_expired(
         return order, lines
 
 
+@allow_writer()
 def _update_order_discount_for_voucher(order: Order):
     """Create or delete OrderDiscount instances."""
     if not order.voucher_id:
-        with allow_writer():
-            order.discounts.filter(type=DiscountType.VOUCHER).delete()
+        order.discounts.filter(type=DiscountType.VOUCHER).delete()
 
     elif (
         order.voucher_id
@@ -228,6 +234,8 @@ def _calculate_and_add_tax(
             _recalculate_with_plugins(manager, order, lines, prices_entered_with_tax)
             # Get the taxes calculated with apps and apply to order.
             tax_data = manager.get_taxes_for_order(order, tax_app_identifier)
+            if not tax_data:
+                log_address_if_validation_skipped_for_order(order, logger)
             _apply_tax_data(order, lines, tax_data)
         else:
             _call_plugin_or_tax_app(
@@ -273,6 +281,7 @@ def _call_plugin_or_tax_app(
     else:
         tax_data = manager.get_taxes_for_order(order, tax_app_identifier)
         if tax_data is None:
+            log_address_if_validation_skipped_for_order(order, logger)
             raise TaxEmptyData("Empty tax data.")
         _apply_tax_data(order, lines, tax_data)
 
@@ -514,6 +523,65 @@ def order_line_tax_rate(
     )
     order_line = _find_order_line(lines, order_line)
     return order_line.tax_rate
+
+
+def order_line_unit_discount(
+    order: Order,
+    order_line: OrderLine,
+    manager: PluginsManager,
+    lines: Optional[Iterable[OrderLine]] = None,
+    force_update: bool = False,
+) -> Decimal:
+    """Return the line unit discount.
+
+    It takes into account all plugins.
+    If the prices are expired, call all order price calculation methods
+    and save them in the model directly.
+
+    Line unit discount includes discounts from:
+    - catalogue promotion
+    - voucher applied on the line (`SPECIFIC_PRODUCT`, `apply_once_per_order` )
+    - manual line discounts
+    """
+    _, lines = fetch_order_prices_if_expired(order, manager, lines, force_update)
+    order_line = _find_order_line(lines, order_line)
+    return order_line.unit_discount
+
+
+def order_line_unit_discount_value(
+    order: Order,
+    order_line: OrderLine,
+    manager: PluginsManager,
+    lines: Optional[Iterable[OrderLine]] = None,
+    force_update: bool = False,
+) -> Decimal:
+    """Return the line unit discount value.
+
+    It takes into account all plugins.
+    If the prices are expired, call all order price calculation methods
+    and save them in the model directly.
+    """
+    _, lines = fetch_order_prices_if_expired(order, manager, lines, force_update)
+    order_line = _find_order_line(lines, order_line)
+    return order_line.unit_discount_value
+
+
+def order_line_unit_discount_type(
+    order: Order,
+    order_line: OrderLine,
+    manager: PluginsManager,
+    lines: Optional[Iterable[OrderLine]] = None,
+    force_update: bool = False,
+) -> Optional[str]:
+    """Return the line unit discount type.
+
+    It takes into account all plugins.
+    If the prices are expired, call all order price calculation methods
+    and save them in the model directly.
+    """
+    _, lines = fetch_order_prices_if_expired(order, manager, lines, force_update)
+    order_line = _find_order_line(lines, order_line)
+    return order_line.unit_discount_type
 
 
 def order_shipping(

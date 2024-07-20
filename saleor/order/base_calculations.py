@@ -4,11 +4,13 @@ from typing import TYPE_CHECKING, Optional
 from django.conf import settings
 from prices import Money, TaxedMoney
 
+from ..core.db.connection import allow_writer
 from ..core.prices import quantize_price
 from ..core.taxes import zero_money
 from ..discount import DiscountType, DiscountValueType, VoucherType
 from ..discount.models import OrderDiscount
-from ..discount.utils import apply_discount_to_value
+from ..discount.utils.manual_discount import apply_discount_to_value
+from ..discount.utils.voucher import is_order_level_voucher
 from ..shipping.models import ShippingMethodChannelListing
 from .interface import OrderTaxedPricesData
 
@@ -35,6 +37,7 @@ def base_order_subtotal(order: "Order", lines: Iterable["OrderLine"]) -> Money:
         quantity = line.quantity
         base_line_total = line.base_unit_price * quantity
         subtotal += base_line_total
+
     return quantize_price(subtotal, currency)
 
 
@@ -91,24 +94,29 @@ def propagate_order_discount_on_order_prices(
     discount.
     """
     base_subtotal = base_order_subtotal(order, lines)
+    # TODO (SHOPX-875): add undiscounted_base_shipping_price field to Order model,
+    # and use it here
     base_shipping_price = order.base_shipping_price
     subtotal = base_subtotal
     shipping_price = base_shipping_price
     currency = order.currency
     order_discounts_to_update = []
 
+    shipping_voucher_discount = None
     for order_discount in order.discounts.all():
         subtotal_before_discount = subtotal
         shipping_price_before_discount = shipping_price
         if order_discount.type == DiscountType.VOUCHER:
             voucher = order_discount.voucher
-            if voucher and voucher.type == VoucherType.ENTIRE_ORDER:
+            if is_order_level_voucher(voucher):
                 subtotal = apply_discount_to_value(
                     value=order_discount.value,
                     value_type=order_discount.value_type,
                     currency=currency,
                     price_to_discount=subtotal,
                 )
+            elif voucher and voucher.type == VoucherType.SHIPPING:
+                shipping_voucher_discount = order_discount
         elif order_discount.type == DiscountType.ORDER_PROMOTION:
             subtotal = apply_discount_to_value(
                 value=order_discount.value,
@@ -153,6 +161,19 @@ def propagate_order_discount_on_order_prices(
         if order_discount.amount != total_discount_amount:
             order_discount.amount = total_discount_amount
             order_discounts_to_update.append(order_discount)
+
+    # Apply shipping voucher discount
+    if shipping_voucher_discount:
+        shipping_price = apply_discount_to_value(
+            value=shipping_voucher_discount.value,
+            value_type=shipping_voucher_discount.value_type,
+            currency=currency,
+            price_to_discount=shipping_price,
+        )
+        discount_amount = shipping_price_before_discount - shipping_price
+        if shipping_voucher_discount.amount != discount_amount:
+            shipping_voucher_discount.amount = discount_amount
+            order_discounts_to_update.append(shipping_voucher_discount)
 
     if order_discounts_to_update:
         OrderDiscount.objects.bulk_update(order_discounts_to_update, ["amount_value"])
@@ -231,11 +252,13 @@ def propagate_order_discount_on_order_lines_prices(
     elif lines_count > 1:
         remaining_discount = subtotal_discount
         for idx, line in enumerate(lines):
-            if idx < lines_count - 1:
+            if not base_subtotal.amount:
+                yield line, zero_money(base_subtotal.currency)
+            elif idx < lines_count - 1:
                 share = (
                     line.base_unit_price_amount * line.quantity / base_subtotal.amount
                 )
-                discount = min(share * remaining_discount, base_subtotal)
+                discount = min(share * subtotal_discount, base_subtotal)
                 yield (
                     line,
                     _get_total_price_with_subtotal_discount_for_order_line(
@@ -305,6 +328,9 @@ def assign_order_prices(
     shipping_price: Money,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ):
+    # TODO (SHOPX-875): set order.base_shipping_price as this price should include
+    # the shipping discount - must be done together with adding
+    # undiscounted_base_shipping_price to Order model
     order.shipping_price_net_amount = shipping_price.amount
     order.shipping_price_gross_amount = shipping_price.amount
     order.total_net_amount = subtotal.amount + shipping_price.amount
@@ -327,7 +353,12 @@ def undiscounted_order_shipping(
     """Return shipping price without any discounts."""
     # TODO: add undiscounted_shipping_price field to order model.
     # https://github.com/saleor/saleor/issues/14915
-    if shipping_method := order.shipping_method:
+
+    with allow_writer():
+        # TODO: load shipping_method with dataloader and pass as an argument
+        shipping_method = order.shipping_method
+
+    if shipping_method:
         if (
             listing := ShippingMethodChannelListing.objects.using(
                 database_connection_name

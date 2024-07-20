@@ -4,7 +4,6 @@ from json import JSONDecodeError
 from typing import TYPE_CHECKING, Any, Callable, Optional, TypeVar
 from urllib.parse import urlparse
 
-from celery.utils.log import get_task_logger
 from django.conf import settings
 from django.core.cache import cache
 
@@ -49,7 +48,6 @@ R = TypeVar("R")
 
 
 logger = logging.getLogger(__name__)
-task_logger = get_task_logger(__name__)
 
 
 @app.task(
@@ -175,6 +173,7 @@ def trigger_webhook_sync_if_not_cached(
     request_timeout=None,
     cache_timeout=None,
     request=None,
+    requestor=None,
 ) -> Optional[dict]:
     """Get response for synchronous webhook.
 
@@ -195,6 +194,7 @@ def trigger_webhook_sync_if_not_cached(
             subscribable_object=subscribable_object,
             timeout=request_timeout,
             request=request,
+            requestor=requestor,
         )
         if response_data is not None:
             cache.set(
@@ -273,6 +273,7 @@ def trigger_webhook_sync(
     subscribable_object=None,
     timeout=None,
     request=None,
+    requestor=None,
 ) -> Optional[dict[Any, Any]]:
     """Send a synchronous webhook request."""
     if webhook.subscription_query:
@@ -280,6 +281,7 @@ def trigger_webhook_sync(
             event_type=event_type,
             subscribable_object=subscribable_object,
             webhook=webhook,
+            requestor=requestor,
             request=request,
             allow_replica=allow_replica,
         )

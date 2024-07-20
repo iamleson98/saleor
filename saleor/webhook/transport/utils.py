@@ -53,7 +53,7 @@ from ..models import Webhook
 from . import signature_for_payload
 
 logger = logging.getLogger(__name__)
-task_logger = get_task_logger(__name__)
+task_logger = get_task_logger(f"{__name__}.celery")
 
 
 DEFAULT_TAX_CODE = "UNMAPPED"
@@ -363,7 +363,7 @@ def get_delivery_for_webhook(event_delivery_id) -> Optional["EventDelivery"]:
             id=event_delivery_id
         )
     except EventDelivery.DoesNotExist:
-        logger.error("Event delivery id: %r not found", event_delivery_id)
+        logger.warning("Event delivery id: %r not found", event_delivery_id)
         return None
 
     if not delivery.webhook.is_active:

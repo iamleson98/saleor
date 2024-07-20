@@ -144,6 +144,14 @@ class PluginsManager(PaymentInterface):
             self.loaded_global = False
             self.requestor_getter = requestor_getter
 
+    def __del__(self) -> None:
+        # remove references to plugins
+        self.all_plugins.clear()
+        self.global_plugins.clear()
+        for c in self.plugins_per_channel.values():
+            c.clear()
+        self.loaded_channels.clear()
+
     def _ensure_channel_plugins_loaded(
         self, channel_slug: Optional[str], channel: Optional[Channel] = None
     ):
@@ -443,7 +451,6 @@ class PluginsManager(PaymentInterface):
     ) -> TaxedMoney:
         default_value = base_calculations.calculate_base_line_total_price(
             checkout_line_info,
-            checkout_info.channel,
         )
         # apply entire order discount or discount from order promotion
         default_value = base_calculations.apply_checkout_discount_on_checkout_line(
@@ -520,7 +527,7 @@ class PluginsManager(PaymentInterface):
     ) -> TaxedMoney:
         quantity = checkout_line_info.line.quantity
         default_value = base_calculations.calculate_base_line_unit_price(
-            checkout_line_info, checkout_info.channel
+            checkout_line_info
         )
         # apply entire order discount
         total_value = base_calculations.apply_checkout_discount_on_checkout_line(
@@ -1090,10 +1097,14 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    def order_expired(self, order: "Order"):
+    def order_expired(self, order: "Order", webhooks=None):
         default_value = None
         return self.__run_method_on_plugins(
-            "order_expired", default_value, order, channel_slug=order.channel.slug
+            "order_expired",
+            default_value,
+            order,
+            channel_slug=order.channel.slug,
+            webhooks=webhooks,
         )
 
     def order_fulfilled(self, order: "Order"):
@@ -2282,13 +2293,14 @@ class PluginsManager(PaymentInterface):
         plugins: Optional[list["BasePlugin"]] = None,
     ):
         if plugins is None:
-            plugins = self.get_plugins(channel_slug=channel_slug)
-        for plugin in plugins:
-            result = self.__run_method_on_single_plugin(
-                plugin, method_name, None, *args
-            )
-            if result is not None:
-                return result
+            plugins = self.get_plugins(channel_slug=channel_slug, active_only=True)
+        if plugins:
+            for plugin in plugins:
+                result = self.__run_method_on_single_plugin(
+                    plugin, method_name, None, *args
+                )
+                if result is not None:
+                    return result
         return None
 
     def _get_all_plugin_configs(self):
@@ -2488,7 +2500,7 @@ class PluginsManager(PaymentInterface):
     ) -> tuple[Optional["User"], dict]:
         """Verify the provided authentication data."""
         default_data: dict[str, str] = dict()
-        default_user: Optional["User"] = None
+        default_user: Optional[User] = None
         default_value = default_user, default_data
         plugin = self.get_plugin(plugin_id)
         return self.__run_method_on_single_plugin(

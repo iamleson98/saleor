@@ -12,6 +12,7 @@ from prices import TaxedMoney
 from ...account import CustomerEvents
 from ...account.models import CustomerEvent
 from ...channel import MarkAsPaidStrategy
+from ...checkout import CheckoutAuthorizeStatus
 from ...core.exceptions import InsufficientStock
 from ...core.notify_events import NotifyEventType
 from ...core.taxes import zero_money, zero_taxed_money
@@ -30,9 +31,12 @@ from ...product.models import ProductTranslation, ProductVariantTranslation
 from ...tests.utils import flush_post_commit_hooks
 from .. import calculations
 from ..complete_checkout import (
+    _complete_checkout_fail_handler,
     _create_order,
+    _increase_checkout_voucher_usage,
     _prepare_order_data,
     _process_shipping_data_for_order,
+    _release_checkout_voucher_usage,
     complete_checkout,
 )
 from ..fetch import fetch_checkout_info, fetch_checkout_lines
@@ -115,7 +119,7 @@ def test_create_order_captured_payment_creates_expected_events(
     assert payment_captured_event.order is order
     # ensure a date was set
     assert payment_captured_event.date
-    # should not have any additional parameters
+    # should have additional parameters
     assert "amount" in payment_captured_event.parameters.keys()
     assert "payment_id" in payment_captured_event.parameters.keys()
     assert "payment_gateway" in payment_captured_event.parameters.keys()
@@ -129,8 +133,8 @@ def test_create_order_captured_payment_creates_expected_events(
     assert order_fully_paid_event.order is order
     # ensure a date was set
     assert order_fully_paid_event.date
-    # should not have any additional parameters
-    assert not order_fully_paid_event.parameters
+    # should have payment_gateway in additional parameters
+    assert "payment_gateway" in order_fully_paid_event.parameters
 
     expected_order_payload = {
         "order": get_default_order_payload(order, checkout.redirect_url),
@@ -263,7 +267,7 @@ def test_create_order_captured_payment_creates_expected_events_anonymous_user(
     assert payment_captured_event.order is order
     # ensure a date was set
     assert payment_captured_event.date
-    # should not have any additional parameters
+    # should have additional parameters
     assert "amount" in payment_captured_event.parameters.keys()
     assert "payment_id" in payment_captured_event.parameters.keys()
     assert "payment_gateway" in payment_captured_event.parameters.keys()
@@ -277,8 +281,8 @@ def test_create_order_captured_payment_creates_expected_events_anonymous_user(
     assert order_fully_paid_event.order is order
     # ensure a date was set
     assert order_fully_paid_event.date
-    # should not have any additional parameters
-    assert not order_fully_paid_event.parameters
+    # should have payment_gateway in additional parameters
+    assert "payment_gateway" in order_fully_paid_event.parameters
 
     expected_order_payload = {
         "order": get_default_order_payload(order, checkout.redirect_url),
@@ -1391,6 +1395,8 @@ def test_complete_checkout_action_required_voucher_once_per_customer(
     assert action_required is True
     assert not voucher_customer.exists()
     mocked_create_order.assert_not_called()
+    checkout.refresh_from_db()
+    assert checkout.is_voucher_usage_increased is False
 
 
 @mock.patch("saleor.checkout.complete_checkout._create_order")
@@ -1452,9 +1458,16 @@ def test_complete_checkout_action_required_voucher_single_use(
     assert action_required is True
     assert not voucher_customer.exists()
     mocked_create_order.assert_not_called()
+    checkout.refresh_from_db()
+    assert checkout.is_voucher_usage_increased is False
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
 
     code.refresh_from_db()
     assert code.is_active is True
+
+    checkout.refresh_from_db()
+    assert checkout.is_voucher_usage_increased is False
 
 
 @mock.patch("saleor.checkout.complete_checkout._create_order")
@@ -1505,6 +1518,8 @@ def test_complete_checkout_order_not_created_when_the_refund_is_ongoing(
     # then
     assert not order
     mocked_create_order.assert_not_called()
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
 
 
 @mock.patch("saleor.checkout.complete_checkout._create_order")
@@ -1617,6 +1632,146 @@ def test_complete_checkout_checkout_was_deleted_before_completing(
     assert order.pk == order_from_checkout.pk
     assert action_required is False
     mocked_create_order.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._process_payment")
+def test_complete_checkout_checkout_limited_use_voucher_multiple_thread(
+    mocked_process_payment,
+    mocked_payment_refund_or_void,
+    customer_user,
+    checkout_with_voucher_free_shipping,
+    voucher_free_shipping,
+    app,
+    success_gateway_response,
+):
+    # given
+    checkout = checkout_with_voucher_free_shipping
+    address = customer_user.default_billing_address
+    checkout.user = customer_user
+    checkout.billing_address = address
+    checkout.shipping_address = address
+    checkout.tracking_code = ""
+    checkout.redirect_url = "https://www.example.com"
+    checkout.save()
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    voucher_free_shipping.usage_limit = 1
+    voucher_free_shipping.save(update_fields=["usage_limit"])
+
+    total = calculations.calculate_checkout_total_with_gift_cards(
+        manager, checkout_info, lines, address
+    )
+
+    Payment.objects.create(
+        gateway="mirumee.payments.dummy",
+        is_active=True,
+        checkout=checkout,
+        total=total.gross.amount,
+    )
+    mocked_process_payment.return_value = success_gateway_response
+
+    # when
+    def call_checkout_complete(*args, **kwargs):
+        lines_2, _ = fetch_checkout_lines(checkout)
+        checkout_info_2 = fetch_checkout_info(checkout, lines, manager)
+        complete_checkout(
+            checkout_info=checkout_info_2,
+            lines=lines_2,
+            manager=manager,
+            payment_data={},
+            store_source=False,
+            user=customer_user,
+            app=app,
+        )
+
+    with before_after.after(
+        "saleor.checkout.complete_checkout._process_payment", call_checkout_complete
+    ):
+        order_from_checkout, action_required, _ = complete_checkout(
+            checkout_info=checkout_info,
+            lines=lines,
+            manager=manager,
+            payment_data={},
+            store_source=False,
+            user=customer_user,
+            app=app,
+        )
+    # then
+    assert order_from_checkout
+    mocked_payment_refund_or_void.assert_not_called()
+    code = voucher_free_shipping.codes.first()
+    assert code.used == 1
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._process_payment")
+def test_complete_checkout_checkout_completed_in_the_meantime(
+    mocked_process_payment,
+    mocked_payment_refund_or_void,
+    customer_user,
+    checkout,
+    app,
+    success_gateway_response,
+):
+    # given
+    address = customer_user.default_billing_address
+    checkout.user = customer_user
+    checkout.billing_address = address
+    checkout.shipping_address = address
+    checkout.tracking_code = ""
+    checkout.redirect_url = "https://www.example.com"
+    checkout.save()
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    total = calculations.calculate_checkout_total_with_gift_cards(
+        manager, checkout_info, lines, address
+    )
+
+    Payment.objects.create(
+        gateway="mirumee.payments.dummy",
+        is_active=True,
+        checkout=checkout,
+        total=total.gross.amount,
+    )
+    mocked_process_payment.return_value = success_gateway_response
+
+    # when
+    def call_checkout_complete(*args, **kwargs):
+        lines_2, _ = fetch_checkout_lines(checkout)
+        checkout_info_2 = fetch_checkout_info(checkout, lines, manager)
+        complete_checkout(
+            checkout_info=checkout_info_2,
+            lines=lines_2,
+            manager=manager,
+            payment_data={},
+            store_source=False,
+            user=customer_user,
+            app=app,
+        )
+
+    with before_after.after(
+        "saleor.checkout.complete_checkout._reserve_stocks_without_availability_check",
+        call_checkout_complete,
+    ):
+        order_from_checkout, action_required, _ = complete_checkout(
+            checkout_info=checkout_info,
+            lines=lines,
+            manager=manager,
+            payment_data={},
+            store_source=False,
+            user=customer_user,
+            app=app,
+        )
+    # then
+    assert order_from_checkout
+    mocked_payment_refund_or_void.assert_not_called()
 
 
 def test_process_shipping_data_for_order_store_customer_shipping_address(
@@ -1890,6 +2045,8 @@ def test_complete_checkout_invalid_shipping_method(
     mocked_payment_refund_or_void.called_once_with(
         payment, manager, channel_slug=checkout.channel.slug
     )
+    checkout.refresh_from_db()
+    assert checkout.is_voucher_usage_increased is False
 
 
 @mock.patch("saleor.checkout.complete_checkout.complete_checkout_with_transaction")
@@ -1989,6 +2146,65 @@ def test_checkout_complete_pick_transaction_flow_when_checkout_total_zero(
     )
 
 
+@mock.patch("saleor.checkout.complete_checkout.complete_checkout_with_transaction")
+def test_checkout_complete_pick_transaction_flow_not_authorized_no_active_payment(
+    mocked_flow,
+    order,
+    checkout_ready_to_complete,
+    customer_user,
+    transaction_item_generator,
+    payment,
+):
+    # given
+    checkout = checkout_ready_to_complete
+    checkout.user = customer_user
+    checkout.billing_address = customer_user.default_billing_address
+    checkout.shipping_address = customer_user.default_billing_address
+    checkout.tracking_code = ""
+    checkout.redirect_url = "https://www.example.com"
+
+    # checkout is not fully authorized
+    checkout.authorize_status = CheckoutAuthorizeStatus.PARTIAL
+
+    # transaction item exists
+    transaction_item_generator(checkout_id=checkout.pk)
+    assert checkout.payment_transactions.exists()
+
+    # there is no active payments
+    payment.checkout = checkout
+    payment.is_active = False
+    payment.save(update_fields=["checkout", "is_active"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+    transaction_item_generator(checkout_id=checkout.pk)
+    mocked_flow.return_value = order, False, {}
+
+    # when
+    order, action_required, _ = complete_checkout(
+        checkout_info=checkout_info,
+        manager=manager,
+        lines=lines,
+        payment_data={},
+        store_source=False,
+        user=customer_user,
+        app=None,
+    )
+
+    # then
+    mocked_flow.assert_called_once_with(
+        manager=manager,
+        checkout_info=checkout_info,
+        lines=lines,
+        user=customer_user,
+        app=None,
+        redirect_url=None,
+        metadata_list=None,
+        private_metadata_list=None,
+    )
+
+
 @mock.patch("saleor.checkout.complete_checkout.complete_checkout_with_payment")
 def test_checkout_complete_pick_payment_flow(
     mocked_flow, order, checkout_ready_to_complete, customer_user
@@ -2018,6 +2234,66 @@ def test_checkout_complete_pick_payment_flow(
         checkout_info=checkout_info,
         lines=lines,
         manager=manager,
+        payment_data={},
+        store_source=False,
+        user=customer_user,
+        app=None,
+    )
+
+    # then
+    mocked_flow.assert_called_once_with(
+        manager=manager,
+        checkout_pk=checkout.pk,
+        payment_data={},
+        store_source=False,
+        user=customer_user,
+        app=None,
+        site_settings=None,
+        redirect_url=None,
+        metadata_list=None,
+        private_metadata_list=None,
+    )
+
+
+@mock.patch("saleor.checkout.complete_checkout.complete_checkout_with_payment")
+def test_checkout_complete_pick_payment_flow_not_authorized_active_payment(
+    mocked_flow,
+    order,
+    checkout_ready_to_complete,
+    customer_user,
+    transaction_item_generator,
+    payment,
+):
+    # given
+    checkout = checkout_ready_to_complete
+    checkout.user = customer_user
+    checkout.billing_address = customer_user.default_billing_address
+    checkout.shipping_address = customer_user.default_billing_address
+    checkout.tracking_code = ""
+    checkout.redirect_url = "https://www.example.com"
+
+    # checkout is not fully authorized
+    checkout.authorize_status = CheckoutAuthorizeStatus.PARTIAL
+
+    # transaction item exists
+    transaction_item_generator(checkout_id=checkout.pk)
+    assert checkout.payment_transactions.exists()
+
+    # there is no active payments
+    payment.checkout = checkout
+    payment.save(update_fields=["checkout"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+    transaction_item_generator(checkout_id=checkout.pk)
+    mocked_flow.return_value = order, False, {}
+
+    # when
+    order, action_required, _ = complete_checkout(
+        checkout_info=checkout_info,
+        manager=manager,
+        lines=lines,
         payment_data={},
         store_source=False,
         user=customer_user,
@@ -2119,3 +2395,200 @@ def test_complete_checkout_ensure_prices_are_not_recalculated_in_post_payment_pa
         mocked_get_tax_calculation_strategy_for_checkout.call_count
         == calculation_call_count
     )
+
+
+@mock.patch("saleor.checkout.complete_checkout.increase_voucher_usage")
+def test_increase_checkout_voucher_usage(
+    increase_voucher_usage_mock, checkout_with_voucher, voucher
+):
+    # given
+    code = voucher.codes.first()
+
+    # when
+    _increase_checkout_voucher_usage(checkout_with_voucher, code, voucher, None)
+
+    # then
+    checkout_with_voucher.refresh_from_db()
+    assert checkout_with_voucher.is_voucher_usage_increased is True
+    increase_voucher_usage_mock.assert_called_once()
+
+
+@mock.patch("saleor.checkout.complete_checkout.increase_voucher_usage")
+def test_increase_checkout_voucher_usage_checkout_usage_already_increased(
+    increase_voucher_usage_mock, checkout_with_voucher, voucher
+):
+    # given
+    code = voucher.codes.first()
+    checkout_with_voucher.is_voucher_usage_increased = True
+    checkout_with_voucher.save(update_fields=["is_voucher_usage_increased"])
+
+    # when
+    _increase_checkout_voucher_usage(checkout_with_voucher, code, voucher, None)
+
+    # then
+    checkout_with_voucher.refresh_from_db()
+    assert checkout_with_voucher.is_voucher_usage_increased is True
+    increase_voucher_usage_mock.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.release_voucher_code_usage")
+def test_release_checkout_voucher_usage(
+    release_voucher_usage_mock, checkout_with_voucher, voucher
+):
+    # given
+    code = voucher.codes.first()
+    checkout_with_voucher.is_voucher_usage_increased = True
+    checkout_with_voucher.save(update_fields=["is_voucher_usage_increased"])
+
+    # when
+    _release_checkout_voucher_usage(checkout_with_voucher, code, voucher, None)
+
+    # then
+    checkout_with_voucher.refresh_from_db()
+    assert checkout_with_voucher.is_voucher_usage_increased is False
+    release_voucher_usage_mock.assert_called_once()
+
+
+@mock.patch("saleor.checkout.complete_checkout.release_voucher_code_usage")
+def test_release_checkout_voucher_usage_checkout_usage_not_increased(
+    release_voucher_usage_mock, checkout_with_voucher, voucher
+):
+    # given
+    code = voucher.codes.first()
+    checkout_with_voucher.is_voucher_usage_increased = False
+    checkout_with_voucher.save(update_fields=["is_voucher_usage_increased"])
+
+    # when
+    _release_checkout_voucher_usage(checkout_with_voucher, code, voucher, None)
+
+    # then
+    checkout_with_voucher.refresh_from_db()
+    assert checkout_with_voucher.is_voucher_usage_increased is False
+    release_voucher_usage_mock.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.release_voucher_code_usage")
+def test_release_checkout_voucher_usage_no_voucher_code(
+    release_voucher_usage_mock, checkout_with_voucher, voucher
+):
+    # given
+    checkout_with_voucher.is_voucher_usage_increased = True
+    checkout_with_voucher.save(update_fields=["is_voucher_usage_increased"])
+
+    # when
+    _release_checkout_voucher_usage(checkout_with_voucher, None, voucher, None)
+
+    # then
+    checkout_with_voucher.refresh_from_db()
+    assert checkout_with_voucher.is_voucher_usage_increased is False
+    release_voucher_usage_mock.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._release_checkout_voucher_usage")
+def test_complete_checkout_fail_handler(
+    _release_checkout_voucher_usage_mock,
+    _payment_refund_or_void_mock,
+    checkout_with_item,
+):
+    # given
+    checkout = checkout_with_item
+    checkout.completing_started_at = timezone.now()
+    checkout.save(update_fields=["completing_started_at"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    _complete_checkout_fail_handler(checkout_info, manager)
+
+    # then
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
+    _payment_refund_or_void_mock.assert_not_called()
+    _release_checkout_voucher_usage_mock.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._release_checkout_voucher_usage")
+def test_complete_checkout_fail_handler_with_voucher(
+    _release_checkout_voucher_usage_mock,
+    _payment_refund_or_void_mock,
+    checkout_with_voucher,
+    voucher,
+):
+    # given
+    checkout = checkout_with_voucher
+    checkout.completing_started_at = timezone.now()
+    checkout.save(update_fields=["completing_started_at"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    _complete_checkout_fail_handler(checkout_info, manager, voucher=voucher)
+
+    # then
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
+    _payment_refund_or_void_mock.assert_not_called()
+    _release_checkout_voucher_usage_mock.assert_called_once()
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._release_checkout_voucher_usage")
+def test_complete_checkout_fail_handler_with_payment(
+    _release_checkout_voucher_usage_mock,
+    _payment_refund_or_void_mock,
+    checkout_with_item,
+    payment,
+):
+    # given
+    checkout = checkout_with_item
+    checkout.completing_started_at = timezone.now()
+    checkout.save(update_fields=["completing_started_at"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    _complete_checkout_fail_handler(checkout_info, manager, payment=payment)
+
+    # then
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
+    _payment_refund_or_void_mock.assert_called_once()
+    _release_checkout_voucher_usage_mock.assert_not_called()
+
+
+@mock.patch("saleor.checkout.complete_checkout.gateway.payment_refund_or_void")
+@mock.patch("saleor.checkout.complete_checkout._release_checkout_voucher_usage")
+def test_complete_checkout_fail_handler_with_voucher_and_payment(
+    _release_checkout_voucher_usage_mock,
+    _payment_refund_or_void_mock,
+    checkout_with_voucher,
+    payment,
+    voucher,
+):
+    # given
+    checkout = checkout_with_voucher
+    checkout.completing_started_at = timezone.now()
+    checkout.save(update_fields=["completing_started_at"])
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+
+    # when
+    _complete_checkout_fail_handler(
+        checkout_info, manager, voucher=voucher, payment=payment
+    )
+
+    # then
+    checkout.refresh_from_db()
+    assert not checkout.completing_started_at
+    _payment_refund_or_void_mock.assert_called_once()
+    _release_checkout_voucher_usage_mock.assert_called_once()

@@ -20,7 +20,7 @@ from ....core import ResolveInfo
 from ....core.descriptions import ADDED_IN_317, ADDED_IN_319, PREVIEW_FEATURE
 from ....core.doc_category import DOC_CATEGORY_DISCOUNTS
 from ....core.mutations import ModelMutation
-from ....core.scalars import JSON
+from ....core.scalars import JSON, DateTime
 from ....core.types import BaseInputObjectType, Error, NonNullList
 from ....core.utils import WebhookEventInfo
 from ....core.validators import validate_end_is_after_start
@@ -70,12 +70,10 @@ class PromotionRuleInput(PromotionRuleBaseInput):
 
 class PromotionInput(BaseInputObjectType):
     description = JSON(description="Promotion description.")
-    start_date = graphene.types.datetime.DateTime(
+    start_date = DateTime(
         description="The start date of the promotion in ISO 8601 format."
     )
-    end_date = graphene.types.datetime.DateTime(
-        description="The end date of the promotion in ISO 8601 format."
-    )
+    end_date = DateTime(description="The end date of the promotion in ISO 8601 format.")
 
 
 class PromotionCreateInput(PromotionInput):
@@ -84,11 +82,9 @@ class PromotionCreateInput(PromotionInput):
         description=(
             "Defines the promotion type. Implicate the required promotion rules "
             "predicate type and whether the promotion rules will give the catalogue "
-            "or order discount. "
-            "\n\nThe default value is `Catalogue`."
-            "\n\nThis field will be required from Saleor 3.20." + ADDED_IN_319
+            "or order discount. " + ADDED_IN_319
         ),
-        required=False,
+        required=True,
     )
     rules = NonNullList(PromotionRuleInput, description="List of promotion rules.")
 
@@ -135,7 +131,7 @@ class PromotionCreate(ModelMutation):
             error.code = PromotionCreateErrorCode.INVALID.value
             errors["end_date"].append(error)
 
-        promotion_type = cleaned_input.get("type", PromotionType.CATALOGUE)
+        promotion_type = cleaned_input.get("type")
         if rules := cleaned_input.get("rules"):
             cleaned_rules, errors = cls.clean_rules(info, rules, promotion_type, errors)
             cleaned_input["rules"] = cleaned_rules

@@ -4,12 +4,13 @@ from enum import Enum
 from typing import Any, Optional, Union, cast
 
 import graphene
+from django.conf import settings
 from django.db.models import Exists, OuterRef, QuerySet
 from graphene.utils.str_converters import to_snake_case
 
 from ...checkout.models import Checkout
 from ...discount.models import Promotion, PromotionRule
-from ...discount.utils import update_rule_variant_relation
+from ...discount.utils.promotion import update_rule_variant_relation
 from ...order.models import Order
 from ...product.managers import ProductsQueryset, ProductVariantQueryset
 from ...product.models import (
@@ -167,12 +168,14 @@ PREDICATE_TO_HANDLE_METHOD = {
 
 
 def get_variants_for_catalogue_predicate(
-    predicate, queryset: Optional[ProductVariantQueryset] = None
+    predicate,
+    queryset: Optional[ProductVariantQueryset] = None,
+    database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ):
     if not predicate:
         return ProductVariant.objects.none()
     if queryset is None:
-        queryset = ProductVariant.objects.all()
+        queryset = ProductVariant.objects.using(database_connection_name).all()
     return filter_qs_by_predicate(predicate, queryset, PredicateObjectType.CATALOGUE)
 
 
@@ -316,12 +319,9 @@ def _handle_checkout_predicate(
 ):
     predicate_data = _predicate_to_snake_case(predicate_data)
     if predicate := predicate_data.get("discounted_object_predicate"):
-        if currency:
-            predicate["currency"] = currency
-
         checkouts = where_filter_qs(
             Checkout.objects.filter(pk__in=base_qs.values("pk")),
-            {},
+            {"currency": currency} if currency else {},
             CheckoutDiscountedObjectWhere,
             predicate,
             None,
@@ -342,12 +342,9 @@ def _handle_order_predicate(
 ):
     predicate_data = _predicate_to_snake_case(predicate_data)
     if predicate := predicate_data.get("discounted_object_predicate"):
-        if currency:
-            predicate["currency"] = currency
-
         orders = where_filter_qs(
             Order.objects.filter(pk__in=base_qs.values("pk")),
-            {},
+            {"currency": currency} if currency else {},
             OrderDiscountedObjectWhere,
             predicate,
             None,

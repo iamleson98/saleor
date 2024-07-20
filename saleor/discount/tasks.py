@@ -31,7 +31,7 @@ from .models import (
     PromotionRule,
     VoucherCode,
 )
-from .utils import mark_catalogue_promotion_rules_as_dirty
+from .utils.promotion import mark_catalogue_promotion_rules_as_dirty
 
 if TYPE_CHECKING:
     from uuid import UUID
@@ -170,7 +170,7 @@ def get_ending_promotions(batch=False):
 
 def fetch_promotion_variants_and_product_ids(promotions: "QuerySet[Promotion]"):
     """Fetch products that are included in the given promotions."""
-    promotion_id_to_variants: dict[UUID, "QuerySet"] = defaultdict(
+    promotion_id_to_variants: dict[UUID, QuerySet] = defaultdict(
         lambda: ProductVariant.objects.none()
     )
     variants = ProductVariant.objects.none()

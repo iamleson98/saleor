@@ -1,11 +1,12 @@
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Optional
 
+from django.conf import settings
 from django.db.models import QuerySet
 
 from ...attribute import AttributeType
 from ...discount.models import PromotionRule
-from ...discount.utils import update_rule_variant_relation
+from ...discount.utils.promotion import update_rule_variant_relation
 from ..models import ProductVariant
 
 if TYPE_CHECKING:
@@ -54,13 +55,17 @@ def get_variant_selection_attributes(
 
 def fetch_variants_for_promotion_rules(
     rules: QuerySet[PromotionRule],
+    database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ):
     from ...graphql.discount.utils import get_variants_for_catalogue_predicate
 
     PromotionRuleVariant = PromotionRule.variants.through
     new_rules_variants = []
     for rule in rules.iterator():
-        variants = get_variants_for_catalogue_predicate(rule.catalogue_predicate)
+        variants = get_variants_for_catalogue_predicate(
+            rule.catalogue_predicate,
+            database_connection_name=settings.DATABASE_CONNECTION_REPLICA_NAME,
+        )
         new_rules_variants.extend(
             [
                 PromotionRuleVariant(
