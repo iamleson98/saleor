@@ -191,6 +191,10 @@ def test_checkout_complete(
     checkout_line_quantity = checkout_line.quantity
     checkout_line_variant = checkout_line.variant
 
+    shipping_price = checkout.shipping_method.channel_listings.get(
+        channel=checkout.channel
+    ).price
+
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
@@ -260,6 +264,9 @@ def test_checkout_complete(
     assert (
         order.shipping_tax_class_private_metadata == shipping_tax_class.private_metadata
     )
+    assert order.shipping_price_gross_amount == shipping_price.amount
+    assert order.base_shipping_price_amount == shipping_price.amount
+    assert order.undiscounted_base_shipping_price_amount == shipping_price.amount
     assert order.payments.exists()
     assert order.search_vector
     order_payment = order.payments.first()
@@ -275,12 +282,15 @@ def test_checkout_complete(
     assert not Checkout.objects.filter(
         pk=checkout.pk
     ).exists(), "Checkout should have been deleted"
-    order_confirmed_mock.assert_called_once_with(order)
+    order_confirmed_mock.assert_called_once_with(order, webhooks=set())
     recalculate_with_plugins_mock.assert_not_called()
 
     assert not len(Reservation.objects.all())
 
-    assert str(checkout_info.checkout.pk) == caplog.records[0].checkout_id
+    assert (
+        graphene.Node.to_global_id("Checkout", checkout_info.checkout.pk)
+        == caplog.records[0].checkout_id
+    )
     assert gift_card.initial_balance_amount == Decimal(
         caplog.records[0].gift_card_compensation
     )
@@ -364,7 +374,7 @@ def test_checkout_complete_with_metadata(
     assert not Checkout.objects.filter(
         pk=checkout.pk
     ).exists(), "Checkout should have been deleted"
-    order_confirmed_mock.assert_called_once_with(order)
+    order_confirmed_mock.assert_called_once_with(order, webhooks=set())
 
 
 @pytest.mark.integration
@@ -503,7 +513,7 @@ def test_checkout_complete_with_metadata_checkout_without_metadata(
     assert not Checkout.objects.filter(
         pk=checkout.pk
     ).exists(), "Checkout should have been deleted"
-    order_confirmed_mock.assert_called_once_with(order)
+    order_confirmed_mock.assert_called_once_with(order, webhooks=set())
 
 
 @pytest.mark.integration
@@ -708,7 +718,7 @@ def test_checkout_complete_gift_card_bought(
         checkout.channel.slug,
         resending=False,
     )
-    order_confirmed_mock.assert_called_once_with(order)
+    order_confirmed_mock.assert_called_once_with(order, webhooks=set())
     assert Fulfillment.objects.count() == 1
 
 
@@ -3433,6 +3443,9 @@ def test_checkout_complete_0_total_value(
     assert checkout_line_variant == order_line.variant
     assert order.shipping_address is None
     assert order.shipping_method is None
+    assert order.shipping_price_gross_amount == 0
+    assert order.base_shipping_price_amount == 0
+    assert order.undiscounted_base_shipping_price_amount == 0
     assert order.payments.exists()
     order_payment = order.payments.first()
     assert order_payment == payment
@@ -3860,7 +3873,7 @@ def test_checkout_complete_with_preorder_variant(
     assert not Checkout.objects.filter(
         pk=checkout.pk
     ).exists(), "Checkout should have been deleted"
-    order_confirmed_mock.assert_called_once_with(order)
+    order_confirmed_mock.assert_called_once_with(order, webhooks=set())
 
 
 def test_checkout_complete_with_click_collect_preorder_fails_for_disabled_warehouse(
