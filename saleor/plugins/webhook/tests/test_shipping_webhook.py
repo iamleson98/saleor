@@ -681,8 +681,8 @@ def test_trigger_webhook_sync(mock_request, shipping_app):
     trigger_webhook_sync(
         WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT, data, webhook, False
     )
-    event_delivery = EventDelivery.objects.first()
-    mock_request.assert_called_once_with(event_delivery)
+    mock_request.assert_called_once()
+    assert not EventDelivery.objects.exists()
 
 
 @mock.patch("saleor.webhook.transport.synchronous.transport.cache.set")
@@ -1172,3 +1172,62 @@ def test_parse_list_shipping_methods_with_metadata(app):
     # then
     assert response[0].metadata == response_data_with_meta[0]["metadata"]
     assert response[0].description == response_data_with_meta[0]["description"]
+
+
+def test_parse_list_shipping_methods_with_metadata_in_incorrect_format(app):
+    # given
+    response_data_with_meta = [
+        {
+            "id": 123,
+            "amount": 10,
+            "currency": "USD",
+            "name": "shipping",
+            "description": "Description",
+            "maximum_delivery_days": 10,
+            "minimum_delivery_days": 2,
+            "metadata": {"field": None},
+        }
+    ]
+    # when
+    response = parse_list_shipping_methods_response(response_data_with_meta, app)
+    # then
+    assert response[0].metadata == {}
+
+
+def test_parse_list_shipping_methods_metadata_absent_in_response(app):
+    # given
+    response_data_with_meta = [
+        {
+            "id": 123,
+            "amount": 10,
+            "currency": "USD",
+            "name": "shipping",
+            "description": "Description",
+            "maximum_delivery_days": 10,
+            "minimum_delivery_days": 2,
+        }
+    ]
+    # when
+    response = parse_list_shipping_methods_response(response_data_with_meta, app)
+    # then
+    assert response[0].metadata == {}
+
+
+def test_parse_list_shipping_methods_metadata_is_none(app):
+    # given
+    response_data_with_meta = [
+        {
+            "id": 123,
+            "amount": 10,
+            "currency": "USD",
+            "name": "shipping",
+            "description": "Description",
+            "maximum_delivery_days": 10,
+            "minimum_delivery_days": 2,
+            "metadata": None,
+        }
+    ]
+    # when
+    response = parse_list_shipping_methods_response(response_data_with_meta, app)
+    # then
+    assert response[0].metadata == {}

@@ -39,6 +39,7 @@ from ..discount.utils.checkout import (
 from ..discount.utils.promotion import (
     delete_gift_line,
 )
+from ..discount.utils.shared import discount_info_for_logs
 from ..discount.utils.voucher import (
     get_discounted_lines,
     get_products_voucher_discount,
@@ -66,8 +67,9 @@ if TYPE_CHECKING:
     from measurement.measures import Weight
 
     from ..account.models import Address
+    from ..core.models import ModelWithMetadata
     from ..core.pricing.interface import LineInfo
-    from ..order.models import Order
+    from ..order.models import Order, OrderLine
     from .fetch import CheckoutInfo, CheckoutLineInfo
 
 
@@ -76,7 +78,7 @@ PRIVATE_META_APP_SHIPPING_ID = "external_app_shipping_id"
 
 def invalidate_checkout(
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     manager: "PluginsManager",
     *,
     recalculate_discount: bool = True,
@@ -92,7 +94,7 @@ def invalidate_checkout(
 
 def recalculate_checkout_discounts(
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     manager: "PluginsManager",
 ):
     """Recalculate checkout discounts.
@@ -229,7 +231,7 @@ def add_variant_to_checkout(
     return checkout
 
 
-def calculate_checkout_quantity(lines: Iterable["CheckoutLineInfo"]):
+def calculate_checkout_quantity(lines: list["CheckoutLineInfo"]):
     return sum([line_info.line.quantity for line_info in lines])
 
 
@@ -305,6 +307,7 @@ def add_variants_to_checkout(
 def _get_line_if_exist(line_data, lines_by_ids):
     if line_data.line_id and line_data.line_id in lines_by_ids:
         return lines_by_ids[line_data.line_id]
+    return None
 
 
 def _append_line_to_update(to_update, to_delete, line_data, replace, line):
@@ -396,7 +399,7 @@ def change_billing_address_in_checkout(checkout, address) -> list[str]:
 def change_shipping_address_in_checkout(
     checkout_info: "CheckoutInfo",
     address: "Address",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     manager: "PluginsManager",
     shipping_channel_listings: Iterable["ShippingMethodChannelListing"],
 ):
@@ -430,7 +433,7 @@ def change_shipping_address_in_checkout(
 def _get_shipping_voucher_discount_for_checkout(
     voucher: Voucher,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
 ):
     """Calculate discount value for a voucher of shipping type."""
@@ -486,7 +489,7 @@ def get_voucher_discount_for_checkout(
     manager: PluginsManager,
     voucher: Voucher,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
 ) -> Money:
     """Calculate discount value depending on voucher and discount types.
@@ -518,7 +521,7 @@ def get_voucher_discount_for_checkout(
 
 def _get_products_voucher_discount(
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     voucher,
 ):
     """Calculate products discount value for a voucher, depending on its type."""
@@ -604,7 +607,7 @@ def check_voucher_for_checkout(
     voucher: Voucher,
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
 ):
     checkout = checkout_info.checkout
     address = checkout_info.shipping_address or checkout_info.billing_address
@@ -626,7 +629,7 @@ def check_voucher_for_checkout(
 def recalculate_checkout_discount(
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
 ):
     """Recalculate `checkout.discount` based on the voucher.
 
@@ -682,7 +685,7 @@ def recalculate_checkout_discount(
 def add_promo_code_to_checkout(
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     promo_code: str,
 ):
     """Add gift card or voucher data to checkout.
@@ -711,7 +714,7 @@ def add_promo_code_to_checkout(
 def add_voucher_code_to_checkout(
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     voucher_code: str,
 ):
     """Add voucher data to checkout by code.
@@ -723,7 +726,7 @@ def add_voucher_code_to_checkout(
         add_voucher_to_checkout(
             manager, checkout_info, lines, code_instance.voucher, code_instance
         )
-    except NotApplicable:
+    except NotApplicable as e:
         raise ValidationError(
             {
                 "promo_code": ValidationError(
@@ -731,13 +734,13 @@ def add_voucher_code_to_checkout(
                     code=CheckoutErrorCode.VOUCHER_NOT_APPLICABLE.value,
                 )
             }
-        )
+        ) from e
 
 
 def add_voucher_to_checkout(
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     voucher: Voucher,
     voucher_code: VoucherCode,
 ):
@@ -837,7 +840,7 @@ def remove_voucher_from_checkout(checkout: Checkout):
 
 def get_valid_internal_shipping_methods_for_checkout(
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     subtotal: "Money",
     shipping_channel_listings: Iterable["ShippingMethodChannelListing"],
     country_code: Optional[str] = None,
@@ -874,7 +877,7 @@ def get_valid_internal_shipping_methods_for_checkout(
 
 
 def get_valid_collection_points_for_checkout(
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     channel_id: int,
     quantity_check: bool = True,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
@@ -931,7 +934,7 @@ def clear_delivery_method(checkout_info: "CheckoutInfo"):
 def is_fully_paid(
     manager: PluginsManager,
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ):
     """Check if provided payment methods cover the checkout's total amount.
@@ -966,12 +969,12 @@ def activate_payments(payment_ids: list[int]) -> None:
     Payment.objects.filter(id__in=payment_ids).update(is_active=True)
 
 
-def is_shipping_required(lines: Iterable["CheckoutLineInfo"]):
+def is_shipping_required(lines: list["CheckoutLineInfo"]):
     """Check if shipping is required for given checkout lines."""
     return any(line_info.product_type.is_shipping_required for line_info in lines)
 
 
-def validate_variants_in_checkout_lines(lines: Iterable["CheckoutLineInfo"]):
+def validate_variants_in_checkout_lines(lines: list["CheckoutLineInfo"]):
     variants_listings_map = {line.variant.id: line.channel_listing for line in lines}
 
     not_available_variants = [
@@ -1004,11 +1007,12 @@ def set_external_shipping_id(checkout: Checkout, app_shipping_id: str):
 
 
 def get_external_shipping_id(container: Union["Checkout", "Order"]):
-    if type(container) is Checkout:
-        container = get_checkout_metadata(container)
-    return container.get_value_from_private_metadata(  # type:ignore
-        PRIVATE_META_APP_SHIPPING_ID
-    )
+    metadata_object: ModelWithMetadata
+    if isinstance(container, Checkout):
+        metadata_object = get_checkout_metadata(container)
+    else:
+        metadata_object = container
+    return metadata_object.get_value_from_private_metadata(PRIVATE_META_APP_SHIPPING_ID)
 
 
 def delete_external_shipping_id(checkout: Checkout, save: bool = False):
@@ -1031,11 +1035,10 @@ def get_checkout_metadata(checkout: "Checkout"):
     if hasattr(checkout, "metadata_storage"):
         # TODO: load metadata_storage with dataloader and pass as an argument
         return checkout.metadata_storage
-    else:
-        return CheckoutMetadata(checkout=checkout)
+    return CheckoutMetadata(checkout=checkout)
 
 
-def calculate_checkout_weight(lines: Iterable["CheckoutLineInfo"]) -> "Weight":
+def calculate_checkout_weight(lines: list["CheckoutLineInfo"]) -> "Weight":
     weights = zero_weight()
     for checkout_line_info in lines:
         variant = checkout_line_info.variant
@@ -1070,3 +1073,84 @@ def get_address_for_checkout_taxes(
 ) -> Optional["Address"]:
     shipping_address = checkout_info.delivery_method_info.shipping_address
     return shipping_address or checkout_info.billing_address
+
+
+def checkout_info_for_logs(
+    checkout_info: "CheckoutInfo",
+    checkout_lines_info: list["CheckoutLineInfo"],
+):
+    checkout = checkout_info.checkout
+    checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
+    tax_configuration = checkout_info.tax_configuration
+    channel = checkout.channel
+
+    return {
+        "checkout_id": checkout_id,
+        "checkoutId": checkout_id,
+        "checkout": {
+            "currency": checkout.currency,
+            "total_net_amount": checkout.total_net_amount,
+            "total_gross_amount": checkout.total_gross_amount,
+            "base_total_amount": checkout.base_total_amount,
+            "subtotal_net_amount": checkout.subtotal_net_amount,
+            "subtotal_gross_amount": checkout.subtotal_gross_amount,
+            "base_subtotal_amount": checkout.base_subtotal_amount,
+            "shipping_price_net_amount": checkout.shipping_price_net_amount,
+            "shipping_price_gross_amount": checkout.shipping_price_gross_amount,
+            "discount_amount": checkout.discount_amount,
+            "has_voucher_code": bool(checkout.voucher_code),
+            "tax_exemption": checkout.tax_exemption,
+            "tax_error": checkout.tax_error,
+        },
+        "tax_configuration": {
+            "charge_taxes": tax_configuration.charge_taxes,
+            "tax_calculation_strategy": tax_configuration.tax_calculation_strategy,
+            "prices_entered_with_tax": tax_configuration.prices_entered_with_tax,
+            "tax_app_id": tax_configuration.tax_app_id,
+        },
+        "discounts": discount_info_for_logs(checkout_info.discounts),
+        "lines": [
+            {
+                "id": graphene.Node.to_global_id("CheckoutLine", line_info.line.pk),
+                "variant_id": graphene.Node.to_global_id(
+                    "ProductVariant", line_info.line.variant_id
+                ),
+                "quantity": line_info.line.quantity,
+                "is_gift": line_info.line.is_gift,
+                "price_override": line_info.line.price_override,
+                "total_price_net_amount": line_info.line.total_price_net_amount,
+                "total_price_gross_amount": line_info.line.total_price_gross_amount,
+                "variant_listing_price": line_info.channel_listing.price_amount,
+                "variant_listing_discounted_price": line_info.channel_listing.discounted_price_amount,
+                "product_listing_discounted_price": line_info.product.channel_listings.get(
+                    channel=channel
+                ).discounted_price_amount,
+                "product_discounted_price_dirty": line_info.product.channel_listings.get(
+                    channel=channel
+                ).discounted_price_dirty,
+                "discounts": discount_info_for_logs(line_info.discounts),
+            }
+            for line_info in checkout_lines_info
+        ],
+    }
+
+
+def log_unknown_discount_reason(
+    order_lines: Iterable["OrderLine"],
+    checkout_info: "CheckoutInfo",
+    checkout_lines_info: list["CheckoutLineInfo"],
+    logger,
+):
+    prices_entered_with_tax = checkout_info.tax_configuration.prices_entered_with_tax
+    for line in order_lines:
+        discount_price = line.undiscounted_unit_price - line.unit_price
+        if prices_entered_with_tax:
+            discount_amount = discount_price.gross
+        else:
+            discount_amount = discount_price.net
+        if discount_amount.amount > 0 and not line.unit_discount_reason:
+            logger.warning(
+                "Unknown discount reason",
+                extra=checkout_info_for_logs(checkout_info, checkout_lines_info),
+            )
+            return

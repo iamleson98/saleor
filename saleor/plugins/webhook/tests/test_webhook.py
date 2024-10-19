@@ -1,5 +1,5 @@
+import datetime
 import json
-from datetime import datetime
 from decimal import Decimal
 from functools import partial
 from unittest import mock
@@ -14,7 +14,6 @@ from celery.exceptions import Retry as CeleryTaskRetryError
 from django.contrib.auth.tokens import default_token_generator
 from django.contrib.sites.models import Site
 from django.core.serializers import serialize
-from django.utils import timezone
 from freezegun import freeze_time
 from kombu.asynchronous.aws.sqs.connection import AsyncSQSConnection
 from requests import RequestException
@@ -867,6 +866,7 @@ def test_product_variant_out_of_stock(
         legacy_data_generator=ANY,
         allow_replica=False,
     )
+    assert callable(mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"])
     assert isinstance(
         mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"], partial
     )
@@ -896,6 +896,38 @@ def test_product_variant_back_in_stock(
         legacy_data_generator=ANY,
         allow_replica=False,
     )
+    assert callable(mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"])
+    assert isinstance(
+        mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"], partial
+    )
+
+
+@freeze_time("2014-06-28 10:50")
+@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
+@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async")
+def test_product_variant_stock_updated(
+    mocked_webhook_trigger,
+    mocked_get_webhooks_for_event,
+    any_webhook,
+    settings,
+    variant_with_many_stocks,
+):
+    variant = variant_with_many_stocks.stocks.first()
+    mocked_get_webhooks_for_event.return_value = [any_webhook]
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    manager = get_plugins_manager(allow_replica=False)
+    manager.product_variant_stock_updated(variant)
+
+    mocked_webhook_trigger.assert_called_once_with(
+        None,
+        WebhookEventAsyncType.PRODUCT_VARIANT_STOCK_UPDATED,
+        [any_webhook],
+        variant,
+        None,
+        legacy_data_generator=ANY,
+        allow_replica=False,
+    )
+    assert callable(mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"])
     assert isinstance(
         mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"], partial
     )
@@ -1637,9 +1669,7 @@ def test_notify_user(
     mocked_get_webhooks_for_event.return_value = [any_webhook]
     settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
     manager = get_plugins_manager(True, lambda: customer_user)
-    timestamp = timezone.make_aware(
-        datetime.strptime("2020-03-18 12:00", "%Y-%m-%d %H:%M"), timezone.utc
-    ).isoformat()
+    timestamp = datetime.datetime(2020, 3, 18, 12, 0, tzinfo=datetime.UTC).isoformat()
 
     redirect_url = "http://redirect.com/"
     send_account_confirmation(customer_user, redirect_url, manager, channel_USD.slug)

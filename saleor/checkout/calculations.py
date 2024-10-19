@@ -10,7 +10,13 @@ from prices import Money, TaxedMoney
 from ..checkout import base_calculations
 from ..core.db.connection import allow_writer
 from ..core.prices import quantize_price
-from ..core.taxes import TaxData, TaxEmptyData, zero_money, zero_taxed_money
+from ..core.taxes import (
+    TaxData,
+    TaxDataError,
+    TaxDataErrorMessage,
+    zero_money,
+    zero_taxed_money,
+)
 from ..discount.utils.checkout import (
     create_or_update_discount_objects_from_promotion_for_checkout,
 )
@@ -23,6 +29,7 @@ from ..tax.utils import (
     get_tax_app_identifier_for_checkout,
     get_tax_calculation_strategy_for_checkout,
     normalize_tax_rate_for_db,
+    validate_tax_data,
 )
 from .fetch import find_checkout_line_info
 from .models import Checkout
@@ -40,7 +47,7 @@ def checkout_shipping_price(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -67,7 +74,7 @@ def checkout_shipping_tax_rate(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ) -> Decimal:
@@ -89,7 +96,7 @@ def checkout_subtotal(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -115,7 +122,7 @@ def checkout_subtotal(
 def calculate_checkout_total_with_gift_cards(
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -138,7 +145,7 @@ def checkout_total(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -168,7 +175,7 @@ def checkout_line_total(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     checkout_line_info: "CheckoutLineInfo",
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -197,7 +204,7 @@ def checkout_line_unit_price(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     checkout_line_info: "CheckoutLineInfo",
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
@@ -227,7 +234,7 @@ def checkout_line_tax_rate(
     *,
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     checkout_line_info: "CheckoutLineInfo",
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ) -> Decimal:
@@ -250,12 +257,12 @@ def checkout_line_tax_rate(
 def _fetch_checkout_prices_if_expired(
     checkout_info: "CheckoutInfo",
     manager: "PluginsManager",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"] = None,
     force_update: bool = False,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: Optional[dict] = None,
-) -> tuple["CheckoutInfo", Iterable["CheckoutLineInfo"]]:
+) -> tuple["CheckoutInfo", list["CheckoutLineInfo"]]:
     """Fetch checkout prices with taxes.
 
     First calculate and apply all checkout prices with taxes separately,
@@ -264,6 +271,8 @@ def _fetch_checkout_prices_if_expired(
     Prices can be updated only if force_update == True, or if time elapsed from the
     last price update is greater than settings.CHECKOUT_PRICES_TTL.
     """
+    from .utils import checkout_info_for_logs
+
     if pregenerated_subscription_payloads is None:
         pregenerated_subscription_payloads = {}
 
@@ -307,7 +316,11 @@ def _fetch_checkout_prices_if_expired(
                 database_connection_name=database_connection_name,
                 pregenerated_subscription_payloads=pregenerated_subscription_payloads,
             )
-        except TaxEmptyData as e:
+        except TaxDataError as e:
+            if str(e) != TaxDataErrorMessage.EMPTY:
+                logger.warning(
+                    str(e), extra=checkout_info_for_logs(checkout_info, lines)
+                )
             _set_checkout_base_prices(checkout, checkout_info, lines)
             checkout.tax_error = str(e)
 
@@ -334,7 +347,11 @@ def _fetch_checkout_prices_if_expired(
                     database_connection_name=database_connection_name,
                     pregenerated_subscription_payloads=pregenerated_subscription_payloads,
                 )
-            except TaxEmptyData as e:
+            except TaxDataError as e:
+                if str(e) != TaxDataErrorMessage.EMPTY:
+                    logger.warning(
+                        str(e), extra=checkout_info_for_logs(checkout_info, lines)
+                    )
                 _set_checkout_base_prices(checkout, checkout_info, lines)
                 checkout.tax_error = str(e)
         else:
@@ -383,7 +400,7 @@ def _calculate_and_add_tax(
     checkout: "Checkout",
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     prices_entered_with_tax: bool,
     address: Optional["Address"] = None,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
@@ -411,6 +428,7 @@ def _calculate_and_add_tax(
             )
             if not tax_data:
                 log_address_if_validation_skipped_for_checkout(checkout_info, logger)
+            validate_tax_data(tax_data, lines, allow_empty_tax_data=True)
             _apply_tax_data(checkout, lines, tax_data)
         else:
             _call_plugin_or_tax_app(
@@ -439,7 +457,7 @@ def _call_plugin_or_tax_app(
     checkout: "Checkout",
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"] = None,
     pregenerated_subscription_payloads: Optional[dict] = None,
 ):
@@ -456,7 +474,7 @@ def _call_plugin_or_tax_app(
             plugin_ids=plugin_ids,
         )
         if not plugins:
-            raise TaxEmptyData("Empty tax data.")
+            raise TaxDataError(TaxDataErrorMessage.EMPTY)
         _apply_tax_data_from_plugins(
             checkout,
             manager,
@@ -466,7 +484,7 @@ def _call_plugin_or_tax_app(
             plugin_ids=plugin_ids,
         )
         if checkout.tax_error:
-            raise TaxEmptyData("Empty tax data.")
+            raise TaxDataError(checkout.tax_error)
     else:
         tax_data = manager.get_taxes_for_checkout(
             checkout_info,
@@ -476,7 +494,7 @@ def _call_plugin_or_tax_app(
         )
         if tax_data is None:
             log_address_if_validation_skipped_for_checkout(checkout_info, logger)
-            raise TaxEmptyData("Empty tax data.")
+        validate_tax_data(tax_data, lines)
         _apply_tax_data(checkout, lines, tax_data)
 
 
@@ -511,7 +529,7 @@ def _calculate_checkout_subtotal(lines, currency):
 
 def _apply_tax_data(
     checkout: "Checkout",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     tax_data: Optional[TaxData],
 ) -> None:
     if not tax_data:
@@ -546,7 +564,7 @@ def _apply_tax_data_from_plugins(
     checkout: "Checkout",
     manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"],
     plugin_ids: Optional[list[str]] = None,
 ) -> None:
@@ -591,7 +609,7 @@ def _apply_tax_data_from_plugins(
 def _set_checkout_base_prices(
     checkout: "Checkout",
     checkout_info: "CheckoutInfo",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
 ) -> None:
     currency = checkout_info.checkout.currency
     subtotal = zero_money(currency)
@@ -632,7 +650,7 @@ def _set_checkout_base_prices(
 def fetch_checkout_data(
     checkout_info: "CheckoutInfo",
     manager: "PluginsManager",
-    lines: Iterable["CheckoutLineInfo"],
+    lines: list["CheckoutLineInfo"],
     address: Optional["Address"] = None,
     force_update: bool = False,
     checkout_transactions: Optional[Iterable["TransactionItem"]] = None,
