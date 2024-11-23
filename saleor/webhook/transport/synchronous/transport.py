@@ -14,6 +14,7 @@ from ....core.db.connection import allow_writer
 from ....core.models import EventDelivery, EventPayload
 from ....core.tracing import webhooks_opentracing_trace
 from ....core.utils import get_domain
+from ....core.utils.url import sanitize_url_for_logging
 from ....graphql.webhook.subscription_payload import (
     generate_payload_from_subscription,
     initialize_request,
@@ -96,6 +97,7 @@ def _send_webhook_request_sync(
     parts = urlparse(webhook.target_url)
     domain = get_domain()
     message = data.encode("utf-8")
+    payload_size = len(message)
     signature = signature_for_payload(message, webhook.secret_key)
 
     if parts.scheme.lower() not in [WebhookSchemes.HTTP, WebhookSchemes.HTTPS]:
@@ -104,7 +106,7 @@ def _send_webhook_request_sync(
 
     logger.debug(
         "[Webhook] Sending payload to %r for event %r.",
-        webhook.target_url,
+        sanitize_url_for_logging(webhook.target_url),
         delivery.event_type,
     )
     if attempt is None:
@@ -114,7 +116,7 @@ def _send_webhook_request_sync(
 
     try:
         with webhooks_opentracing_trace(
-            delivery.event_type, domain, sync=True, app=webhook.app
+            delivery.event_type, domain, payload_size, sync=True, app=webhook.app
         ):
             response = send_webhook_using_http(
                 webhook.target_url,
@@ -131,7 +133,7 @@ def _send_webhook_request_sync(
         logger.info(
             "[Webhook] Failed parsing JSON response from %r: %r."
             "ID of failed DeliveryAttempt: %r . ",
-            webhook.target_url,
+            sanitize_url_for_logging(webhook.target_url),
             e,
             attempt.id,
         )
@@ -141,7 +143,7 @@ def _send_webhook_request_sync(
             logger.info(
                 "[Webhook] Failed request to %r: %r. "
                 "ID of failed DeliveryAttempt: %r . ",
-                webhook.target_url,
+                sanitize_url_for_logging(webhook.target_url),
                 response.content,
                 attempt.id,
             )
@@ -149,7 +151,7 @@ def _send_webhook_request_sync(
             logger.debug(
                 "[Webhook] Success response from %r."
                 "Successful DeliveryAttempt id: %r",
-                webhook.target_url,
+                sanitize_url_for_logging(webhook.target_url),
                 attempt.id,
             )
 

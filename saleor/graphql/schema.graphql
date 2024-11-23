@@ -5520,7 +5520,39 @@ type Product implements Node & ObjectWithMetadata @doc(category: "Products") {
   """
   List of variants for the product. Requires the following permissions to include the unpublished items: MANAGE_ORDERS, MANAGE_DISCOUNTS, MANAGE_PRODUCTS.
   """
-  variants: [ProductVariant!]
+  variants: [ProductVariant!] @deprecated(reason: "This field will be removed in Saleor 4.0. Use `productVariants` field instead.")
+
+  """
+  List of variants for the product. Requires the following permissions to include the unpublished items: MANAGE_ORDERS, MANAGE_DISCOUNTS, MANAGE_PRODUCTS.
+  
+  Added in Saleor 3.21.
+  """
+  productVariants(
+    """Filtering options for product variant."""
+    filter: ProductVariantFilterInput
+
+    """Where filtering options."""
+    where: ProductVariantWhereInput
+
+    """Sort products variants."""
+    sortBy: ProductVariantSortingInput
+
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): ProductVariantCountableConnection
 
   """List of media for the product."""
   media(
@@ -7643,6 +7675,55 @@ type Margin @doc(category: "Products") {
   stop: Int
 }
 
+type ProductVariantCountableConnection @doc(category: "Products") {
+  """Pagination data for this connection."""
+  pageInfo: PageInfo!
+  edges: [ProductVariantCountableEdge!]!
+
+  """A total count of items in the collection."""
+  totalCount: Int
+}
+
+type ProductVariantCountableEdge @doc(category: "Products") {
+  """The item at the end of the edge."""
+  node: ProductVariant!
+
+  """A cursor for use in pagination."""
+  cursor: String!
+}
+
+input ProductVariantFilterInput @doc(category: "Products") {
+  search: String
+  sku: [String!]
+  metadata: [MetadataFilter!]
+  isPreorder: Boolean
+  updatedAt: DateTimeRangeInput
+}
+
+input ProductVariantWhereInput @doc(category: "Products") {
+  metadata: [MetadataFilter!]
+  ids: [ID!]
+
+  """List of conditions that must be met."""
+  AND: [ProductVariantWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [ProductVariantWhereInput!]
+}
+
+input ProductVariantSortingInput @doc(category: "Products") {
+  """Specifies the direction in which to sort productVariants."""
+  direction: OrderDirection!
+
+  """Sort productVariants by the selected field."""
+  field: ProductVariantSortField!
+}
+
+enum ProductVariantSortField @doc(category: "Products") {
+  """Sort products variants by last modified at."""
+  LAST_MODIFIED_AT
+}
+
 input MediaSortingInput @doc(category: "Products") {
   """Specifies the direction in which to sort media."""
   direction: OrderDirection!
@@ -8638,23 +8719,6 @@ type CollectionCountableConnection @doc(category: "Products") {
 type CollectionCountableEdge @doc(category: "Products") {
   """The item at the end of the edge."""
   node: Collection!
-
-  """A cursor for use in pagination."""
-  cursor: String!
-}
-
-type ProductVariantCountableConnection @doc(category: "Products") {
-  """Pagination data for this connection."""
-  pageInfo: PageInfo!
-  edges: [ProductVariantCountableEdge!]!
-
-  """A total count of items in the collection."""
-  totalCount: Int
-}
-
-type ProductVariantCountableEdge @doc(category: "Products") {
-  """The item at the end of the edge."""
-  node: ProductVariant!
 
   """A cursor for use in pagination."""
   cursor: String!
@@ -12381,38 +12445,6 @@ enum ProductTypeSortField @doc(category: "Products") {
   SHIPPING_REQUIRED
 }
 
-input ProductVariantFilterInput @doc(category: "Products") {
-  search: String
-  sku: [String!]
-  metadata: [MetadataFilter!]
-  isPreorder: Boolean
-  updatedAt: DateTimeRangeInput
-}
-
-input ProductVariantWhereInput @doc(category: "Products") {
-  metadata: [MetadataFilter!]
-  ids: [ID!]
-
-  """List of conditions that must be met."""
-  AND: [ProductVariantWhereInput!]
-
-  """A list of conditions of which at least one must be met."""
-  OR: [ProductVariantWhereInput!]
-}
-
-input ProductVariantSortingInput @doc(category: "Products") {
-  """Specifies the direction in which to sort productVariants."""
-  direction: OrderDirection!
-
-  """Sort productVariants by the selected field."""
-  field: ProductVariantSortField!
-}
-
-enum ProductVariantSortField @doc(category: "Products") {
-  """Sort products variants by last modified at."""
-  LAST_MODIFIED_AT
-}
-
 type PaymentCountableConnection @doc(category: "Payments") {
   """Pagination data for this connection."""
   pageInfo: PageInfo!
@@ -15352,7 +15384,9 @@ type Mutation {
     """The ID of the transaction. One of field id or token is required."""
     id: ID
 
-    """The message related to the event."""
+    """
+    The message related to the event. The maximum length is 512 characters; any text exceeding this limit will be truncated.
+    """
     message: String
 
     """PSP Reference of the event to report."""
@@ -18152,9 +18186,7 @@ type Mutation {
   - STAFF_SET_PASSWORD_REQUESTED (async): Setting a new password for the staff account is requested.
   """
   requestPasswordReset(
-    """
-    Slug of a channel which will be used for notify user. Optional when only one channel exists.
-    """
+    """Slug of a channel which will be used for notify user."""
     channel: String
 
     """Email of the user that will be used for password recovery."""

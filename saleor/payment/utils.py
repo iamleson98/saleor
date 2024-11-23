@@ -879,6 +879,16 @@ def parse_transaction_event_data(
         logger.warning(missing_msg, "result")
         error_field_msg.append(missing_msg % "result")
 
+    message = event_data.get("message", "")
+    if len(message) > 512:
+        message = truncate_message(message)
+        field_limit_exceeded_msg = (
+            "Value for field: %s in response of transaction action webhook "
+            "exceeds the character field limit. Message has been truncated."
+        )
+        logger.warning(field_limit_exceeded_msg, "message")
+    parsed_event_data["message"] = message
+
     amount_data = event_data.get("amount")
     parse_transaction_event_amount(
         amount_data,
@@ -904,7 +914,6 @@ def parse_transaction_event_data(
         parsed_event_data["time"] = timezone.now()
 
     parsed_event_data["external_url"] = event_data.get("externalUrl", "")
-    parsed_event_data["message"] = event_data.get("message", "")
 
 
 error_msg = str
@@ -949,14 +958,13 @@ def parse_transaction_action_data(
         # error field msg can contain details of the value returned by payment app
         # which means that we need to confirm that we don't exceed the field limit.
         msg = "\n".join(error_field_msg)
-        if len(msg) >= 512:
-            msg = msg[:509] + "..."
+        msg = truncate_message(msg)
         return None, msg
 
     request_event_type = parsed_event_data.get("type", request_type)
     if not psp_reference and request_event_type not in OPTIONAL_PSP_REFERENCE_EVENTS:
         msg = f"Providing `pspReference` is required for {request_event_type.upper()}."
-        logger.error(msg)
+        logger.warning(msg)
         return None, msg
 
     return (
@@ -969,6 +977,10 @@ def parse_transaction_action_data(
         ),
         None,
     )
+
+
+def truncate_message(message: str):
+    return message[:509] + "..." if len(message) > 512 else message
 
 
 def get_failed_transaction_event_type_for_request_event(
@@ -1091,7 +1103,7 @@ def deduplicate_event(
                 "authorization amount."
             )
     if error_message:
-        logger.error(
+        logger.warning(
             msg=error_message,
             extra={
                 "transaction_id": event.transaction_id,
@@ -1313,9 +1325,10 @@ def create_transaction_event_from_request_and_webhook_response(
         return failure_event
 
     psp_reference = transaction_request_response.psp_reference
-    request_event.psp_reference = psp_reference
-    request_event.include_in_calculations = True
-    request_event.save(update_fields=["psp_reference", "include_in_calculations"])
+    if psp_reference is not None:
+        request_event.psp_reference = psp_reference
+        request_event.include_in_calculations = True
+        request_event.save(update_fields=["psp_reference", "include_in_calculations"])
     event = None
     if response_event := transaction_request_response.event:
         event, error_msg = _create_event_from_response(
