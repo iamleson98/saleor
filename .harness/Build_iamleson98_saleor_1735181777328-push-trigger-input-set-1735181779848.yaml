@@ -1,0 +1,14 @@
+inputSet:
+  name: Build_iamleson98_saleor_1735181777328-push-trigger-input-set
+  identifier: Build_iamleson98_saleor_1735181777328pushtriggerinputset
+  orgIdentifier: default
+  projectIdentifier: default_project
+  pipeline:
+    identifier: Build_iamleson98_saleor_1735181777328
+    properties:
+      ci:
+        codebase:
+          build:
+            type: branch
+            spec:
+              branch: <+trigger.branch>
