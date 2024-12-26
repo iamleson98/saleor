@@ -24,6 +24,7 @@ from .....payment.interface import (
     TransactionSessionResult,
 )
 from .....payment.models import Payment, TransactionItem
+from .....webhook.event_types import WebhookEventSyncType
 from ....channel.enums import TransactionFlowStrategyEnum
 from ....core.enums import TransactionInitializeErrorCode
 from ....core.utils import to_global_id_or_none
@@ -2728,3 +2729,238 @@ def test_for_checkout_too_long_message_in_response(
         "Value for field: message in response of transaction action webhook "
         "exceeds the character field limit. Message has been truncated."
     ) in [record.message for record in caplog.records]
+
+
+@mock.patch("saleor.plugins.manager.PluginsManager.transaction_initialize_session")
+def test_for_checkout_empty_message(
+    mocked_initialize,
+    user_api_client,
+    checkout_with_prices,
+    webhook_app,
+    transaction_session_response,
+    caplog,
+):
+    # given
+    checkout = checkout_with_prices
+    expected_app_identifier = "webhook.app.identifier"
+    webhook_app.identifier = expected_app_identifier
+    webhook_app.save()
+
+    expected_amount = Decimal("10.00")
+    expected_psp_reference = "ppp-123"
+    expected_response = transaction_session_response.copy()
+    expected_response["result"] = "CHARGE_SUCCESS"
+    expected_response["message"] = None
+    expected_response["pspReference"] = expected_psp_reference
+    mocked_initialize.return_value = TransactionSessionResult(
+        app_identifier=expected_app_identifier, response=expected_response
+    )
+
+    variables = {
+        "action": None,
+        "amount": expected_amount,
+        "id": to_global_id_or_none(checkout),
+        "paymentGateway": {"id": expected_app_identifier, "data": None},
+    }
+
+    # when
+    response = user_api_client.post_graphql(TRANSACTION_INITIALIZE, variables)
+
+    # then
+    content = get_graphql_content(response)
+    checkout.refresh_from_db()
+    _assert_fields(
+        content=content,
+        source_object=checkout,
+        expected_amount=expected_amount,
+        expected_psp_reference=expected_psp_reference,
+        response_event_type=TransactionEventType.CHARGE_SUCCESS,
+        app_identifier=webhook_app.identifier,
+        mocked_initialize=mocked_initialize,
+        charged_value=expected_amount,
+        returned_data=expected_response["data"],
+        expected_message=expected_response["message"],
+    )
+    assert checkout.charge_status == CheckoutChargeStatus.PARTIAL
+    assert checkout.authorize_status == CheckoutAuthorizeStatus.PARTIAL
+
+
+@mock.patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
+@override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+def test_for_checkout_with_shipping_app(
+    mocked_send_webhook_request_sync,
+    app_api_client,
+    checkout_with_prices,
+    permission_manage_payments,
+    shipping_app_with_subscription,
+    transaction_initialize_session_app,
+    transaction_session_response,
+    caplog,
+):
+    # given
+    mocked_send_webhook_request_sync.return_value = transaction_session_response
+
+    shipping_webhook = shipping_app_with_subscription.webhooks.first()
+    shipping_webhook.subscription_query = """
+        subscription {
+            event {
+                ... on ShippingListMethodsForCheckout {
+                    checkout {
+                        email
+                        token
+                    }
+                }
+            }
+        }
+    """
+    shipping_webhook.save(update_fields=["subscription_query"])
+
+    checkout = checkout_with_prices
+
+    variables = {
+        "action": TransactionFlowStrategyEnum.AUTHORIZATION.name,
+        "amount": Decimal("10.00"),
+        "id": to_global_id_or_none(checkout),
+        "paymentGateway": {
+            "id": transaction_initialize_session_app.identifier,
+            "data": None,
+        },
+    }
+
+    # when
+    response = app_api_client.post_graphql(
+        TRANSACTION_INITIALIZE, variables, permissions=[permission_manage_payments]
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert not content["data"]["transactionInitialize"]["errors"]
+
+    assert "No payload was generated with subscription for event" not in "".join(
+        caplog.messages
+    )
+
+    # gather called event types
+    event_types = {
+        call.args[0].event_type for call in mocked_send_webhook_request_sync.mock_calls
+    }
+    assert len(event_types) == 2
+    assert WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT in event_types
+    assert WebhookEventSyncType.TRANSACTION_INITIALIZE_SESSION in event_types
+
+    for call in mocked_send_webhook_request_sync.mock_calls:
+        delivery = call.args[0]
+        assert delivery.payload.get_payload()
+
+
+@mock.patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
+@override_settings(
+    PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"],
+    CHECKOUT_PRICES_TTL=datetime.timedelta(0),
+)
+def test_for_checkout_with_tax_app(
+    mocked_send_webhook_request_sync,
+    app_api_client,
+    checkout_with_prices,
+    permission_manage_payments,
+    transaction_initialize_session_app,
+    tax_app,
+    transaction_session_response,
+    caplog,
+):
+    # given
+    mocked_send_webhook_request_sync.return_value = transaction_session_response
+
+    checkout = checkout_with_prices
+    variables = {
+        "action": TransactionFlowStrategyEnum.AUTHORIZATION.name,
+        "amount": Decimal("10.00"),
+        "id": to_global_id_or_none(checkout),
+        "paymentGateway": {
+            "id": transaction_initialize_session_app.identifier,
+            "data": None,
+        },
+    }
+
+    # when
+    response = app_api_client.post_graphql(
+        TRANSACTION_INITIALIZE, variables, permissions=[permission_manage_payments]
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert not content["data"]["transactionInitialize"]["errors"]
+
+    assert "No payload was generated with subscription for event" not in "".join(
+        caplog.messages
+    )
+
+    # gather called event types
+    event_types = {
+        call.args[0].event_type for call in mocked_send_webhook_request_sync.mock_calls
+    }
+    assert len(event_types) == 2
+    assert WebhookEventSyncType.CHECKOUT_CALCULATE_TAXES in event_types
+    assert WebhookEventSyncType.TRANSACTION_INITIALIZE_SESSION in event_types
+
+    for call in mocked_send_webhook_request_sync.mock_calls:
+        delivery = call.args[0]
+        assert delivery.payload.get_payload()
+
+
+@mock.patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
+@override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+def test_for_order_with_tax_app(
+    mocked_send_webhook_request_sync,
+    app_api_client,
+    permission_manage_payments,
+    draft_order,
+    tax_app,
+    transaction_initialize_session_app,
+    transaction_session_response,
+    caplog,
+):
+    # given
+    mocked_send_webhook_request_sync.return_value = transaction_session_response
+
+    order = draft_order
+    order.should_refresh_prices = True
+    order.save(update_fields=["should_refresh_prices"])
+
+    variables = {
+        "action": TransactionFlowStrategyEnum.AUTHORIZATION.name,
+        "amount": Decimal("10.00"),
+        "id": to_global_id_or_none(draft_order),
+        "paymentGateway": {
+            "id": transaction_initialize_session_app.identifier,
+            "data": None,
+        },
+    }
+
+    # when
+    response = app_api_client.post_graphql(
+        TRANSACTION_INITIALIZE,
+        variables,
+        permissions=[permission_manage_payments],
+        check_no_permissions=False,
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert not content["data"]["transactionInitialize"]["errors"]
+
+    assert "No payload was generated with subscription for event" not in "".join(
+        caplog.messages
+    )
+
+    # gather called event types
+    event_types = {
+        call.args[0].event_type for call in mocked_send_webhook_request_sync.mock_calls
+    }
+    assert len(event_types) == 2
+    assert WebhookEventSyncType.ORDER_CALCULATE_TAXES in event_types
+    assert WebhookEventSyncType.TRANSACTION_INITIALIZE_SESSION in event_types
+
+    for call in mocked_send_webhook_request_sync.mock_calls:
+        delivery = call.args[0]
+        assert delivery.payload.get_payload()

@@ -2478,22 +2478,22 @@ class PluginsManager(PaymentInterface):
         )
         return response
 
-    def translation_created(self, translation: "Translation", webhooks=None):
+    def translations_created(self, translations: list["Translation"], webhooks=None):
         default_value = None
         return self.__run_method_on_plugins(
-            "translation_created",
+            "translations_created",
             default_value,
-            translation,
+            translations,
             channel_slug=None,
             webhooks=webhooks,
         )
 
-    def translation_updated(self, translation: "Translation", webhooks=None):
+    def translations_updated(self, translations: list["Translation"], webhooks=None):
         default_value = None
         return self.__run_method_on_plugins(
-            "translation_updated",
+            "translations_updated",
             default_value,
-            translation,
+            translations,
             channel_slug=None,
             webhooks=webhooks,
         )
@@ -2880,12 +2880,16 @@ class PluginsManager(PaymentInterface):
         checkout: "Checkout",
         channel: "Channel",
         available_shipping_methods: list["ShippingMethodData"],
+        pregenerated_subscription_payloads: Optional[dict] = None,
     ) -> list[ExcludedShippingMethod]:
+        if pregenerated_subscription_payloads is None:
+            pregenerated_subscription_payloads = {}
         return self.__run_method_on_plugins(
             "excluded_shipping_methods_for_checkout",
             [],
             checkout,
             available_shipping_methods,
+            pregenerated_subscription_payloads=pregenerated_subscription_payloads,
             channel_slug=channel.slug,
         )
 

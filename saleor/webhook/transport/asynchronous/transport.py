@@ -317,6 +317,14 @@ def trigger_webhooks_async_for_multiple_objects(
     :param allow_replica: use a replica database.
     :param queue: defines the queue to which the event should be sent.
     """
+    if transaction.get_connection().in_atomic_block:
+        # Async webhooks should be delivered after the transaction is committed.
+        # Otherwise the delivery task may not be able to fetch all the required data and
+        # the delivery may fail.
+        logger.warning(
+            "Async webhook was triggered inside a transaction: %s", event_type
+        )
+
     legacy_webhooks, subscription_webhooks = group_webhooks_by_subscription(webhooks)
 
     is_deferred_payload = WebhookEventAsyncType.EVENT_MAP.get(event_type, {}).get(
@@ -470,7 +478,9 @@ def generate_deferred_payloads(
     deferred_payload_data: dict,
     send_webhook_queue: Optional[str] = None,
 ):
-    deliveries = list(get_multiple_deliveries_for_webhooks(event_delivery_ids).values())
+    deliveries = list(
+        get_multiple_deliveries_for_webhooks(event_delivery_ids)[0].values()
+    )
     args_obj = DeferredPayloadData(**deferred_payload_data)
     requestor = None
     if args_obj.requestor_object_id and args_obj.requestor_model_name in (
@@ -560,8 +570,10 @@ def generate_deferred_payloads(
 )
 @allow_writer()
 def send_webhook_request_async(self, event_delivery_id) -> None:
-    delivery = get_delivery_for_webhook(event_delivery_id)
+    delivery, not_found = get_delivery_for_webhook(event_delivery_id)
     if not delivery:
+        if not_found:
+            raise self.retry(countdown=1)
         return
 
     webhook = delivery.webhook

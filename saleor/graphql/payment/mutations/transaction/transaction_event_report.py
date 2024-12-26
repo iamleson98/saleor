@@ -26,7 +26,7 @@ from .....payment.utils import (
     create_failed_transaction_event,
     get_already_existing_event,
     get_transaction_event_amount,
-    truncate_message,
+    truncate_transaction_event_message,
 )
 from .....permission.auth_filters import AuthorizationFilters
 from .....permission.enums import PaymentPermissions
@@ -318,7 +318,9 @@ class TransactionEventReport(ModelMutation):
                 psp_reference, transaction
             )
 
-        message = truncate_message(message) if message is not None else ""
+        message = (
+            truncate_transaction_event_message(message) if message is not None else ""
+        )
         transaction_event_data = {
             "psp_reference": psp_reference,
             "type": type,
@@ -356,6 +358,12 @@ class TransactionEventReport(ModelMutation):
             # The mutation can be called multiple times by the app. That can cause a
             # thread race. We need to be sure, that we will always create a single event
             # on our side for specific action.
+            _transaction = (
+                payment_models.TransactionItem.objects.filter(pk=transaction.pk)
+                .select_for_update(of=("self",))
+                .first()
+            )
+
             existing_event = get_already_existing_event(transaction_event)
             if existing_event and existing_event.amount != transaction_event.amount:
                 error_code = TransactionEventReportErrorCode.INCORRECT_DETAILS.value
