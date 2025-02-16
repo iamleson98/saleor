@@ -3,16 +3,17 @@ FROM python:3.12 AS build-python
 
 RUN apt-get -y update \
   && apt-get install -y gettext \
+  libcurl4-openssl-dev libssl-dev \
   # Cleanup apt cache
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
 WORKDIR /app
-RUN --mount=type=cache,mode=0755,target=/root/.cache/pip pip install poetry==1.8.4
+RUN --mount=type=cache,mode=0755,target=/root/.cache/pip pip install poetry==2.0.1
 RUN poetry config virtualenvs.create false
 COPY poetry.lock pyproject.toml /app/
-RUN --mount=type=cache,mode=0755,target=/root/.cache/pypoetry poetry install --no-root
+RUN --mount=type=cache,mode=0755,target=/root/.cache/pypoetry poetry install
 
 ### Final image
 FROM python:3.12-slim
@@ -30,6 +31,7 @@ RUN apt-get update \
   libtiff6 \
   libwebp7 \
   libpq5 \
+  libcurl4 \
   shared-mime-info \
   mime-support \
   && apt-get clean \
