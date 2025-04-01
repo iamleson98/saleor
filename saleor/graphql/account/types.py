@@ -10,15 +10,11 @@ from promise import Promise
 from ...account import models
 from ...checkout.utils import get_user_checkout
 from ...core.exceptions import PermissionDenied
-from ...graphql.meta.inputs import MetadataInput
+from ...graphql.meta.inputs import MetadataInput, MetadataInputDescription
 from ...order import OrderStatus
 from ...payment.interface import ListStoredPaymentMethodsRequestData
 from ...permission.auth_filters import AuthorizationFilters
-from ...permission.enums import (
-    AccountPermissions,
-    AppPermission,
-    OrderPermissions,
-)
+from ...permission.enums import AccountPermissions, AppPermission, OrderPermissions
 from ...plugins.manager import PluginsManager
 from ...thumbnail.utils import (
     get_image_or_proxy_url,
@@ -33,13 +29,13 @@ from ..channel.types import Channel
 from ..checkout.dataloaders import CheckoutByUserAndChannelLoader, CheckoutByUserLoader
 from ..checkout.types import Checkout, CheckoutCountableConnection
 from ..core import ResolveInfo
-from ..core.connection import CountableConnection, create_connection_slice
-from ..core.context import get_database_connection_name
-from ..core.descriptions import (
-    ADDED_IN_319,
-    DEPRECATED_IN_3X_FIELD,
-    PREVIEW_FEATURE,
+from ..core.connection import (
+    CountableConnection,
+    create_connection_slice,
+    create_connection_slice_for_sync_webhook_control_context,
 )
+from ..core.context import SyncWebhookControlContext, get_database_connection_name
+from ..core.descriptions import ADDED_IN_319, PREVIEW_FEATURE
 from ..core.doc_category import DOC_CATEGORY_USERS
 from ..core.enums import LanguageCodeEnum
 from ..core.federation import federated_entity, resolve_federation_references
@@ -60,7 +56,7 @@ from ..core.types import (
 from ..core.utils import from_global_id_or_error, str_to_enum, to_global_id_or_none
 from ..giftcard.dataloaders import GiftCardsByUserLoader
 from ..meta.types import ObjectWithMetadata
-from ..order.dataloaders import OrderLineByIdLoader, OrdersByUserLoader
+from ..order.dataloaders import OrderByIdLoader, OrderLineByIdLoader, OrdersByUserLoader
 from ..payment.types import StoredPaymentMethod
 from ..plugins.dataloaders import get_plugin_manager_promise
 from ..utils import format_permissions_for_display, get_user_or_app_from_context
@@ -96,7 +92,9 @@ class AddressInput(BaseInputObjectType):
     )
     metadata = graphene.List(
         graphene.NonNull(MetadataInput),
-        description="Address public metadata.",
+        description=(
+            f"Address public metadata. {MetadataInputDescription.PUBLIC_METADATA_INPUT}"
+        ),
         required=False,
     )
     skip_validation = graphene.Boolean(
@@ -276,10 +274,31 @@ class CustomerEvent(ModelObjectType[models.CustomerEvent]):
         return root.parameters.get("count", None)
 
     @staticmethod
+    def resolve_order(root: models.CustomerEvent, info: ResolveInfo):
+        def _wrap_with_sync_webhook_control_context(order):
+            return SyncWebhookControlContext(node=order, allow_sync_webhooks=False)
+
+        if root.order_id:
+            return (
+                OrderByIdLoader(info.context)
+                .load(root.order_id)
+                .then(_wrap_with_sync_webhook_control_context)
+            )
+        return None
+
+    @staticmethod
     def resolve_order_line(root: models.CustomerEvent, info: ResolveInfo):
         if "order_line_pk" in root.parameters:
-            return OrderLineByIdLoader(info.context).load(
-                uuid.UUID(root.parameters["order_line_pk"])
+
+            def _wrap_with_sync_webhook_control_context(line):
+                if not line:
+                    return None
+                return SyncWebhookControlContext(node=line, allow_sync_webhooks=False)
+
+            return (
+                OrderLineByIdLoader(info.context)
+                .load(uuid.UUID(root.parameters["order_line_pk"]))
+                .then(_wrap_with_sync_webhook_control_context)
             )
         return None
 
@@ -337,10 +356,7 @@ class User(ModelObjectType[models.User]):
     checkout = graphene.Field(
         Checkout,
         description="Returns the last open checkout of this user.",
-        deprecation_reason=(
-            f"{DEPRECATED_IN_3X_FIELD} "
-            "Use the `checkoutTokens` field to fetch the user checkouts."
-        ),
+        deprecation_reason="Use the `checkoutTokens` field to fetch the user checkouts.",
     )
     checkout_tokens = NonNullList(
         UUID,
@@ -348,7 +364,7 @@ class User(ModelObjectType[models.User]):
         channel=graphene.String(
             description="Slug of a channel for which the data should be returned."
         ),
-        deprecation_reason=(f"{DEPRECATED_IN_3X_FIELD} Use `checkoutIds` instead."),
+        deprecation_reason="Use `checkoutIds` instead.",
     )
     checkout_ids = NonNullList(
         graphene.ID,
@@ -359,7 +375,12 @@ class User(ModelObjectType[models.User]):
     )
     checkouts = ConnectionField(
         CheckoutCountableConnection,
-        description="Returns checkouts assigned to this user.",
+        description=(
+            "Returns checkouts assigned to this user. The query will not initiate any "
+            "external requests, including fetching external shipping methods, "
+            "filtering available shipping methods, or performing external tax "
+            "calculations."
+        ),
         channel=graphene.String(
             description="Slug of a channel for which the data should be returned."
         ),
@@ -376,7 +397,10 @@ class User(ModelObjectType[models.User]):
     orders = ConnectionField(
         "saleor.graphql.order.types.OrderCountableConnection",
         description=(
-            "List of user's orders. Requires one of the following permissions: "
+            "List of user's orders. The query will not initiate any external requests, "
+            "including filtering available shipping methods, or performing external "
+            "tax calculations. Requires one of the following"
+            " permissions: "
             f"{AccountPermissions.MANAGE_STAFF.name}, "
             f"{AuthorizationFilters.OWNER.name}."
         ),
@@ -473,9 +497,12 @@ class User(ModelObjectType[models.User]):
     @staticmethod
     def resolve_checkout(root: models.User, info: ResolveInfo):
         database_connection_name = get_database_connection_name(info.context)
-        return get_user_checkout(
+        checkout = get_user_checkout(
             root, database_connection_name=database_connection_name
         )
+        if not checkout:
+            return None
+        return SyncWebhookControlContext(node=checkout)
 
     @staticmethod
     @traced_resolver
@@ -526,8 +553,12 @@ class User(ModelObjectType[models.User]):
     @staticmethod
     def resolve_checkouts(root: models.User, info: ResolveInfo, **kwargs):
         def _resolve_checkouts(checkouts):
-            return create_connection_slice(
-                checkouts, info, kwargs, CheckoutCountableConnection
+            return create_connection_slice_for_sync_webhook_control_context(
+                checkouts,
+                info,
+                kwargs,
+                CheckoutCountableConnection,
+                allow_sync_webhooks=False,
             )
 
         if channel := kwargs.get("channel"):
@@ -620,8 +651,12 @@ class User(ModelObjectType[models.User]):
                     order for order in orders if order.channel_id in accessible_channels
                 ]
 
-            return create_connection_slice(
-                orders, info, kwargs, OrderCountableConnection
+            return create_connection_slice_for_sync_webhook_control_context(
+                orders,
+                info,
+                kwargs,
+                OrderCountableConnection,
+                allow_sync_webhooks=False,
             )
 
         to_fetch = [OrdersByUserLoader(info.context).load(root.id)]

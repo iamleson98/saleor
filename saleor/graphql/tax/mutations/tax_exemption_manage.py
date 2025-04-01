@@ -10,6 +10,7 @@ from ....order.models import Order
 from ....permission.enums import CheckoutPermissions
 from ....tax import error_codes
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.doc_category import DOC_CATEGORY_TAXES
 from ...core.types import Error
 from ...core.types.taxes import TaxSourceObject
@@ -103,4 +104,4 @@ class TaxExemptionManage(BaseMutation):
                 update_fields=["tax_exemption", "should_refresh_prices", "updated_at"]
             )
 
-        return TaxExemptionManage(taxable_object=obj)
+        return TaxExemptionManage(taxable_object=SyncWebhookControlContext(node=obj))

@@ -23,6 +23,7 @@ from ...plugins.manager import get_plugins_manager
 from ...plugins.tests.sample_plugins import PluginSample
 from ...tax import TaxCalculationStrategy
 from ...tax.calculations.order import update_order_prices_with_flat_rates
+from ...tax.utils import get_tax_calculation_strategy_for_order
 from .. import OrderStatus, calculations
 from ..interface import OrderTaxedPricesData
 
@@ -627,7 +628,7 @@ def test_recalculate_with_plugin_prices_entered_with_taxes(
         assert tax_rate == line.tax_rate
 
 
-def test_recalculate_prices_total_shipping_price_changed(
+def test_calculate_prices_total_shipping_price_changed(
     draft_order, order_lines, shipping_method_weight_based
 ):
     """Test that discounts are properly updated when shipping price changes."""
@@ -667,9 +668,7 @@ def test_recalculate_prices_total_shipping_price_changed(
     )
 
     # when
-    calculations._recalculate_prices(
-        order, get_plugins_manager(allow_replica=True), order_lines
-    )
+    calculations.calculate_prices(order, order_lines)
 
     # then
     order_discount.refresh_from_db()
@@ -679,7 +678,7 @@ def test_recalculate_prices_total_shipping_price_changed(
     assert order_discount.amount == order.undiscounted_total.net
 
 
-def test_recalculate_prices_line_quantity_changed(
+def test_calculate_prices_line_quantity_changed(
     draft_order, order_lines, shipping_method_weight_based
 ):
     """Test that discounts are properly updated when line quantities change."""
@@ -701,9 +700,7 @@ def test_recalculate_prices_line_quantity_changed(
     line.save(update_fields=["quantity"])
 
     # when
-    calculations._recalculate_prices(
-        order, get_plugins_manager(allow_replica=True), order_lines
-    )
+    calculations.calculate_prices(order, order_lines)
 
     # then
     order_discount.refresh_from_db()
@@ -975,6 +972,99 @@ def test_fetch_order_prices_if_expired_webhooks_success(
         assert order_line.unit_price == line_total / order_line.quantity
         assert order_line.tax_rate == tax_line.tax_rate / 100
     assert order_with_lines.total == subtotal + shipping_price
+
+
+def test_fetch_order_prices_if_expired_plugins_with_allow_sync_webhooks_to_false(
+    plugins_manager,
+    fetch_kwargs_with_lines,
+    order_with_lines,
+    tax_data,
+):
+    # given
+    plugins_manager.calculate_order_line_unit = Mock(side_effect=None)
+    plugins_manager.calculate_order_line_total = Mock(side_effect=None)
+    plugins_manager.get_order_line_tax_rate = Mock(side_effect=None)
+    plugins_manager.calculate_order_shipping = Mock(return_value=None)
+    plugins_manager.get_order_shipping_tax_rate = Mock(return_value=None)
+    plugins_manager.get_taxes_for_order = Mock(return_value=None)
+    plugins_manager.calculate_order_total = Mock(return_value=None)
+
+    fetch_kwargs_with_lines["allow_sync_webhooks"] = False
+    order_from_input = fetch_kwargs_with_lines["order"]
+    lines_from_input = fetch_kwargs_with_lines["lines"]
+
+    # when
+    order, lines = calculations.fetch_order_prices_if_expired(**fetch_kwargs_with_lines)
+
+    # then
+    assert order_from_input == order
+    assert lines_from_input == lines
+
+    plugins_manager.calculate_order_line_unit.assert_not_called()
+    plugins_manager.calculate_order_line_total.assert_not_called()
+    plugins_manager.get_order_line_tax_rate.assert_not_called()
+    plugins_manager.calculate_order_shipping.assert_not_called()
+    plugins_manager.get_order_shipping_tax_rate.assert_not_called()
+    plugins_manager.get_taxes_for_order.assert_not_called()
+    plugins_manager.calculate_order_total.assert_not_called()
+
+
+@patch(
+    "saleor.order.calculations.update_order_prices_with_flat_rates",
+    wraps=update_order_prices_with_flat_rates,
+)
+@pytest.mark.parametrize("prices_entered_with_tax", [True, False])
+def test_fetch_order_prices_if_expired_flat_rates_with_allow_sync_webhook_set_to_false(
+    mocked_update_order_prices_with_flat_rates,
+    order_with_lines,
+    fetch_kwargs,
+    prices_entered_with_tax,
+):
+    # given
+    order = order_with_lines
+    tc = order.channel.tax_configuration
+    tc.country_exceptions.all().delete()
+    tc.prices_entered_with_tax = prices_entered_with_tax
+    tc.tax_calculation_strategy = TaxCalculationStrategy.FLAT_RATES
+    tc.save()
+
+    fetch_kwargs["allow_sync_webhooks"] = False
+
+    # when
+    calculations.fetch_order_prices_if_expired(**fetch_kwargs)
+    order.refresh_from_db()
+    line = order.lines.first()
+
+    # then
+    mocked_update_order_prices_with_flat_rates.assert_called_once_with(
+        order,
+        list(order.lines.all()),
+        prices_entered_with_tax,
+        database_connection_name=order.lines.db,
+    )
+    assert line.tax_rate == Decimal("0.2300")
+    assert order.shipping_tax_rate == Decimal("0.2300")
+
+
+def test_fetch_order_prices_tax_app_with_allow_sync_webhook_set_to_false(
+    plugins_manager,
+    fetch_kwargs_with_lines,
+    order_with_lines,
+):
+    # given
+    plugins_manager.get_taxes_for_order = Mock(return_value=None)
+
+    fetch_kwargs_with_lines["allow_sync_webhooks"] = False
+    order_from_input = fetch_kwargs_with_lines["order"]
+    lines_from_input = fetch_kwargs_with_lines["lines"]
+
+    # when
+    order, lines = calculations.fetch_order_prices_if_expired(**fetch_kwargs_with_lines)
+
+    # then
+    assert order_from_input == order
+    assert lines_from_input == lines
+    plugins_manager.get_taxes_for_order.assert_not_called()
 
 
 @pytest.mark.parametrize("prices_entered_with_tax", [True, False])
@@ -1478,7 +1568,7 @@ def test_fetch_order_data_calls_inactive_plugin(
 
 
 @pytest.mark.parametrize("tax_app_id", [None, "test.app"])
-def test_recalculate_prices_empty_tax_data_logging_address(
+def test_calculate_taxes_empty_tax_data_logging_address(
     tax_app_id, draft_order, order_lines, address, caplog
 ):
     # given
@@ -1509,9 +1599,10 @@ def test_recalculate_prices_empty_tax_data_logging_address(
         "get_taxes_for_order": Mock(return_value=None),
     }
     manager = Mock(**manager_methods)
+    tax_calculation_strategy = get_tax_calculation_strategy_for_order(order)
 
     # when
-    calculations._recalculate_prices(order, manager, order_lines)
+    calculations.calculate_taxes(order, manager, order_lines, tax_calculation_strategy)
 
     # then
     assert (

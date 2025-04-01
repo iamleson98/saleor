@@ -7,9 +7,12 @@ from ...order import models
 from ...permission.enums import OrderPermissions
 from ...permission.utils import has_one_of_permissions
 from ..core import ResolveInfo
-from ..core.connection import create_connection_slice, filter_connection_queryset
+from ..core.connection import (
+    create_connection_slice_for_sync_webhook_control_context,
+    filter_connection_queryset,
+)
 from ..core.context import get_database_connection_name
-from ..core.descriptions import DEPRECATED_IN_3X_FIELD
+from ..core.descriptions import DEFAULT_DEPRECATION_REASON
 from ..core.doc_category import DOC_CATEGORY_ORDERS
 from ..core.enums import ReportingPeriod
 from ..core.fields import (
@@ -100,7 +103,7 @@ class OrderQueries(graphene.ObjectType):
         permissions=[
             OrderPermissions.MANAGE_ORDERS,
         ],
-        deprecation_reason=DEPRECATED_IN_3X_FIELD,
+        deprecation_reason=DEFAULT_DEPRECATION_REASON,
     )
     order = BaseField(
         Order,
@@ -122,7 +125,11 @@ class OrderQueries(graphene.ObjectType):
         channel=graphene.String(
             description="Slug of a channel for which the data should be returned."
         ),
-        description="List of orders.",
+        description=(
+            "List of orders. The query will not initiate any external requests, "
+            "including filtering available shipping methods, or performing external "
+            "tax calculations."
+        ),
         permissions=[
             OrderPermissions.MANAGE_ORDERS,
         ],
@@ -132,7 +139,11 @@ class OrderQueries(graphene.ObjectType):
         OrderCountableConnection,
         sort_by=OrderSortingInput(description="Sort draft orders."),
         filter=OrderDraftFilterInput(description="Filtering options for draft orders."),
-        description="List of draft orders.",
+        description=(
+            "List of draft orders. The query will not initiate any external requests, "
+            "including filtering available shipping methods, or performing external "
+            "tax calculations."
+        ),
         permissions=[
             OrderPermissions.MANAGE_ORDERS,
         ],
@@ -150,12 +161,12 @@ class OrderQueries(graphene.ObjectType):
             OrderPermissions.MANAGE_ORDERS,
         ],
         doc_category=DOC_CATEGORY_ORDERS,
-        deprecation_reason=DEPRECATED_IN_3X_FIELD,
+        deprecation_reason=DEFAULT_DEPRECATION_REASON,
     )
     order_by_token = BaseField(
         Order,
         description="Look up an order by token.",
-        deprecation_reason=DEPRECATED_IN_3X_FIELD,
+        deprecation_reason=DEFAULT_DEPRECATION_REASON,
         token=graphene.Argument(UUID, description="The order's token.", required=True),
         doc_category=DOC_CATEGORY_ORDERS,
     )
@@ -163,7 +174,9 @@ class OrderQueries(graphene.ObjectType):
     @staticmethod
     def resolve_homepage_events(_root, info: ResolveInfo, **kwargs):
         qs = resolve_homepage_events(info)
-        return create_connection_slice(qs, info, kwargs, OrderEventCountableConnection)
+        return create_connection_slice_for_sync_webhook_control_context(
+            qs, info, kwargs, OrderEventCountableConnection, allow_sync_webhooks=False
+        )
 
     @staticmethod
     def resolve_order(_root, info: ResolveInfo, *, external_reference=None, id=None):
@@ -204,7 +217,9 @@ class OrderQueries(graphene.ObjectType):
         qs = filter_connection_queryset(
             qs, kwargs, allow_replica=info.context.allow_replica
         )
-        return create_connection_slice(qs, info, kwargs, OrderCountableConnection)
+        return create_connection_slice_for_sync_webhook_control_context(
+            qs, info, kwargs, OrderCountableConnection, allow_sync_webhooks=False
+        )
 
     @staticmethod
     def resolve_draft_orders(_root, info: ResolveInfo, **kwargs):
@@ -225,7 +240,9 @@ class OrderQueries(graphene.ObjectType):
         qs = filter_connection_queryset(
             qs, kwargs, allow_replica=info.context.allow_replica
         )
-        return create_connection_slice(qs, info, kwargs, OrderCountableConnection)
+        return create_connection_slice_for_sync_webhook_control_context(
+            qs, info, kwargs, OrderCountableConnection, allow_sync_webhooks=False
+        )
 
     @staticmethod
     def resolve_orders_total(_root, info: ResolveInfo, *, period, channel=None):
@@ -242,12 +259,12 @@ class OrderMutations(graphene.ObjectType):
     draft_order_delete = DraftOrderDelete.Field()
     draft_order_bulk_delete = DraftOrderBulkDelete.Field()
     draft_order_lines_bulk_delete = DraftOrderLinesBulkDelete.Field(
-        deprecation_reason=DEPRECATED_IN_3X_FIELD
+        deprecation_reason=DEFAULT_DEPRECATION_REASON
     )
     draft_order_update = DraftOrderUpdate.Field()
 
     order_add_note = OrderAddNote.Field(
-        deprecation_reason=(f"{DEPRECATED_IN_3X_FIELD} Use `orderNoteAdd` instead.")
+        deprecation_reason="Use `orderNoteAdd` instead."
     )
     order_cancel = OrderCancel.Field()
     order_capture = OrderCapture.Field()

@@ -7,6 +7,7 @@ from ....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ....checkout.utils import invalidate_checkout
 from ....webhook.event_types import WebhookEventAsyncType
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.descriptions import DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_CHECKOUT
 from ...core.mutations import BaseMutation
@@ -99,8 +100,13 @@ class CheckoutLinesDelete(BaseMutation):
 
         manager = get_plugin_manager_promise(info.context).get()
         checkout_info = fetch_checkout_info(checkout, lines, manager)
-        update_checkout_shipping_method_if_invalid(checkout_info, lines)
-        invalidate_checkout(checkout_info, lines, manager, save=True)
+        shipping_update_fields = update_checkout_shipping_method_if_invalid(
+            checkout_info, lines
+        )
+        invalidate_update_fields = invalidate_checkout(
+            checkout_info, lines, manager, save=False
+        )
+        checkout.save(update_fields=shipping_update_fields + invalidate_update_fields)
         call_checkout_info_event(
             manager,
             event_name=WebhookEventAsyncType.CHECKOUT_UPDATED,
@@ -108,4 +114,4 @@ class CheckoutLinesDelete(BaseMutation):
             lines=lines,
         )
 
-        return CheckoutLinesDelete(checkout=checkout)
+        return CheckoutLinesDelete(checkout=SyncWebhookControlContext(node=checkout))

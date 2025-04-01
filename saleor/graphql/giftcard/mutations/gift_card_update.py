@@ -15,6 +15,7 @@ from ...core.scalars import PositiveDecimal
 from ...core.types import GiftCardError, NonNullList
 from ...core.utils import WebhookEventInfo
 from ...core.validators import validate_price_precision
+from ...meta.inputs import MetadataInput
 from ...plugins.dataloaders import get_plugin_manager_promise
 from ...utils.validators import check_for_duplicates
 from ..types import GiftCard
@@ -55,6 +56,8 @@ class GiftCardUpdate(GiftCardCreate):
                 description="A gift card was updated.",
             )
         ]
+        support_meta_field = True
+        support_private_meta_field = True
 
     @classmethod
     def clean_expiry_date(cls, cleaned_input, instance):
@@ -101,13 +104,30 @@ class GiftCardUpdate(GiftCardCreate):
                 old_instance.tags.order_by("name").values_list("name", flat=True)
             )
 
+        metadata_list: list[MetadataInput] = cleaned_input.pop("metadata", None)
+        private_metadata_list: list[MetadataInput] = cleaned_input.pop(
+            "private_metadata", None
+        )
+
+        metadata_collection = cls.create_metadata_from_graphql_input(
+            metadata_list, error_field_name="metadata"
+        )
+        private_metadata_collection = cls.create_metadata_from_graphql_input(
+            private_metadata_list, error_field_name="private_metadata"
+        )
+
         instance = cls.construct_instance(instance, cleaned_input)
+
+        cls.validate_and_update_metadata(
+            instance, metadata_collection, private_metadata_collection
+        )
         cls.clean_instance(info, instance)
         cls.save(info, instance, cleaned_input)
         cls._save_m2m(info, instance, cleaned_input)
 
         user = info.context.user
         app = get_app_promise(info.context).get()
+
         if "initial_balance_amount" in cleaned_input:
             events.gift_card_balance_reset_event(instance, old_instance, user, app)
         if "expiry_date" in cleaned_input:
@@ -116,8 +136,11 @@ class GiftCardUpdate(GiftCardCreate):
             )
         if tags_updated:
             events.gift_card_tags_updated_event(instance, old_tags, user, app)
+
         manager = get_plugin_manager_promise(info.context).get()
+
         cls.call_event(manager.gift_card_updated, instance)
+
         return cls.success_response(instance)
 
     @classmethod

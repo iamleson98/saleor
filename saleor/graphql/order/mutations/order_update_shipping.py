@@ -1,14 +1,17 @@
+from typing import cast
+
 import graphene
 from django.core.exceptions import ValidationError
 
-from ....order import OrderStatus, models
+from ....order import models
 from ....order.actions import call_order_event
 from ....order.error_codes import OrderErrorCode
 from ....permission.enums import OrderPermissions
 from ....shipping import models as shipping_models
-from ....shipping.utils import convert_to_shipping_method_data
+from ....webhook.deprecated_event_types import WebhookEventType
 from ....webhook.event_types import WebhookEventAsyncType
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.doc_category import DOC_CATEGORY_ORDERS
 from ...core.mutations import BaseMutation
 from ...core.types import BaseInputObjectType, OrderError
@@ -19,7 +22,6 @@ from .utils import (
     SHIPPING_METHOD_UPDATE_FIELDS,
     EditableOrderValidationMixin,
     ShippingMethodUpdateMixin,
-    clean_order_update_shipping,
 )
 
 
@@ -34,9 +36,7 @@ class OrderUpdateShippingInput(BaseInputObjectType):
         doc_category = DOC_CATEGORY_ORDERS
 
 
-class OrderUpdateShipping(
-    EditableOrderValidationMixin, ShippingMethodUpdateMixin, BaseMutation
-):
+class OrderUpdateShipping(EditableOrderValidationMixin, BaseMutation):
     order = graphene.Field(Order, description="Order with updated shipping method.")
 
     class Arguments:
@@ -65,7 +65,7 @@ class OrderUpdateShipping(
     def perform_mutation(  # type: ignore[override]
         cls, _root, info: ResolveInfo, /, *, id: str, input
     ):
-        order = cls.get_node_or_error(
+        _untyped_order = cls.get_node_or_error(
             info,
             id,
             only_type=Order,
@@ -73,8 +73,21 @@ class OrderUpdateShipping(
                 "lines", "channel__shipping_method_listings"
             ),
         )
+
+        order = cast(models.Order, _untyped_order)
+
         cls.check_channel_permissions(info, [order.channel_id])
         cls.validate_order(order)
+
+        is_draft_order = order.is_draft()
+
+        event_to_emit = (
+            WebhookEventAsyncType.DRAFT_ORDER_UPDATED
+            if is_draft_order
+            else WebhookEventType.ORDER_UPDATED
+        )
+
+        manager = get_plugin_manager_promise(info.context).get()
 
         if "shipping_method" not in input:
             raise ValidationError(
@@ -87,7 +100,7 @@ class OrderUpdateShipping(
             )
 
         if not input.get("shipping_method"):
-            if not order.is_draft() and order.is_shipping_required():
+            if not is_draft_order and order.is_shipping_required():
                 raise ValidationError(
                     {
                         "shipping_method": ValidationError(
@@ -108,9 +121,12 @@ class OrderUpdateShipping(
                     }
                 )
 
-            cls.clear_shipping_method_from_order(order)
+            ShippingMethodUpdateMixin.clear_shipping_method_from_order(order)
             order.save(update_fields=SHIPPING_METHOD_UPDATE_FIELDS)
-            return OrderUpdateShipping(order=order)
+
+            call_order_event(manager, event_to_emit, order)
+
+            return OrderUpdateShipping(order=SyncWebhookControlContext(order))
 
         method_id: str = input["shipping_method"]
         method: shipping_models.ShippingMethod = cls.get_node_or_error(
@@ -122,19 +138,13 @@ class OrderUpdateShipping(
                 "postal_code_rules"
             ),
         )
-        shipping_channel_listing = cls.validate_shipping_channel_listing(method, order)
-
-        shipping_method_data = convert_to_shipping_method_data(
-            method,
-            shipping_channel_listing,
-        )
         manager = get_plugin_manager_promise(info.context).get()
-        if order.status != OrderStatus.DRAFT:
-            clean_order_update_shipping(order, shipping_method_data, manager)
-        cls.update_shipping_method(order, method, shipping_channel_listing)
-        cls._update_shipping_price(order, shipping_channel_listing)
-
+        ShippingMethodUpdateMixin.process_shipping_method(
+            order, method, manager, update_shipping_discount=True
+        )
         order.save(update_fields=SHIPPING_METHOD_UPDATE_FIELDS)
         # Post-process the results
-        call_order_event(manager, WebhookEventAsyncType.ORDER_UPDATED, order)
-        return OrderUpdateShipping(order=order)
+
+        call_order_event(manager, event_to_emit, order)
+
+        return OrderUpdateShipping(order=SyncWebhookControlContext(order))

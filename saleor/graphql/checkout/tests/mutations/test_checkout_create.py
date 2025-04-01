@@ -592,7 +592,10 @@ def test_checkout_create(api_client, stock, graphql_address_data, channel_USD):
     checkout_line = new_checkout.lines.first()
     assert checkout_line.variant == variant
     assert checkout_line.quantity == 1
+    assert new_checkout.billing_address is not None
     assert new_checkout.shipping_address is not None
+    assert new_checkout.save_shipping_address is True
+    assert new_checkout.save_billing_address is True
     assert (
         new_checkout.shipping_address.first_name == shipping_address_data["firstName"]
     )
@@ -2791,3 +2794,327 @@ def test_checkout_create_triggers_webhooks(
     assert WebhookEventSyncType.CHECKOUT_CALCULATE_TAXES in sync_deliveries
     tax_delivery = sync_deliveries[WebhookEventSyncType.CHECKOUT_CALCULATE_TAXES]
     assert tax_delivery.webhook_id == tax_webhook.id
+
+
+@pytest.mark.parametrize(
+    ("save_shipping_address", "save_billing_address"),
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_checkout_create_with_save_addresses_setting_provided(
+    save_shipping_address,
+    save_billing_address,
+    api_client,
+    stock,
+    graphql_address_data,
+    channel_USD,
+):
+    variant = stock.product_variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.id)
+    # given input with provided shipping, billing addresses with save settings
+    shipping_address_data = graphql_address_data.copy()
+    billing_address_data = graphql_address_data.copy()
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [{"quantity": 1, "variantId": variant_id}],
+            "shippingAddress": shipping_address_data,
+            "billingAddress": billing_address_data,
+            "saveShippingAddress": save_shipping_address,
+            "saveBillingAddress": save_billing_address,
+        }
+    }
+    assert not Checkout.objects.exists()
+
+    # when checkout create is called with provided variables
+    response = api_client.post_graphql(MUTATION_CHECKOUT_CREATE, variables)
+
+    # then the addresses with save settings are set
+    content = get_graphql_content(response)["data"]["checkoutCreate"]
+    assert not content["errors"]
+    new_checkout = Checkout.objects.first()
+    assert new_checkout is not None
+    checkout_data = content["checkout"]
+    assert checkout_data["token"] == str(new_checkout.token)
+    assert new_checkout.billing_address is not None
+    assert new_checkout.shipping_address is not None
+    assert new_checkout.save_billing_address == save_billing_address
+    assert new_checkout.save_shipping_address == save_shipping_address
+    assert not Reservation.objects.exists()
+
+    assert new_checkout.billing_address.validation_skipped is False
+    assert new_checkout.shipping_address.validation_skipped is False
+
+
+@pytest.mark.parametrize("save_shipping_address", [True, False])
+def test_checkout_create_no_shipping_address_providing_save_address_raising_error(
+    save_shipping_address, api_client, graphql_address_data, channel_USD, stock
+):
+    variant = stock.product_variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.id)
+    # given input with save shipping address and shipping method not provided
+    billing_address_data = graphql_address_data.copy()
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [{"quantity": 1, "variantId": variant_id}],
+            "billingAddress": billing_address_data,
+            "saveShippingAddress": save_shipping_address,
+        }
+    }
+    assert not Checkout.objects.exists()
+
+    # when checkout create is called with provided variables
+    response = api_client.post_graphql(MUTATION_CHECKOUT_CREATE, variables)
+
+    # then the error is raised
+    data = get_graphql_content(response)["data"]["checkoutCreate"]
+    assert not data["checkout"]
+    errors = data["errors"]
+    assert len(errors) == 1
+
+    error = errors[0]
+    assert error["field"] == "saveShippingAddress"
+    assert error["code"] == CheckoutErrorCode.MISSING_ADDRESS_DATA.name
+
+
+@pytest.mark.parametrize("save_billing_address", [True, False])
+def test_checkout_create_no_billing_address_providing_save_address_raising_error(
+    save_billing_address, api_client, graphql_address_data, channel_USD, stock
+):
+    variant = stock.product_variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.id)
+    # given input with save shipping address and shipping method not provided
+    shipping_address_data = graphql_address_data.copy()
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [{"quantity": 1, "variantId": variant_id}],
+            "shippingAddress": shipping_address_data,
+            "saveBillingAddress": save_billing_address,
+        }
+    }
+    assert not Checkout.objects.exists()
+
+    # when checkout create is called with provided variables
+    response = api_client.post_graphql(MUTATION_CHECKOUT_CREATE, variables)
+
+    # then the error is raised
+    data = get_graphql_content(response)["data"]["checkoutCreate"]
+    assert not data["checkout"]
+    errors = data["errors"]
+    assert len(errors) == 1
+
+    error = errors[0]
+    assert error["field"] == "saveBillingAddress"
+    assert error["code"] == CheckoutErrorCode.MISSING_ADDRESS_DATA.name
+
+
+def test_checkout_create_with_metadata_and_private_metadata(
+    staff_api_client, graphql_address_data, channel_USD, permission_manage_checkouts
+):
+    # Given
+    test_email = "test@example.com"
+
+    metadata_key = "metadata_key"
+    metadata_key_2 = "metadata_key_2"
+    metadata_value = "metadata_value"
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [],
+            "email": test_email,
+            "metadata": [{"key": metadata_key, "value": metadata_value}],
+            # Make it more diverse, set 2 keys
+            "privateMetadata": [
+                {"key": metadata_key, "value": metadata_value},
+                {"key": metadata_key_2, "value": metadata_value},
+            ],
+        }
+    }
+
+    assert not Checkout.objects.exists()
+
+    # When
+    staff_api_client.post_graphql(
+        MUTATION_CHECKOUT_CREATE, variables, permissions=[permission_manage_checkouts]
+    )
+
+    # Then
+    new_checkout = Checkout.objects.first()
+
+    assert new_checkout is not None
+
+    metadata_storage = new_checkout.metadata_storage
+    metadata = metadata_storage.metadata
+    private_metadata = metadata_storage.private_metadata
+
+    assert len(metadata) == 1
+    assert len(private_metadata) == 2
+
+    assert metadata[metadata_key] == metadata_value
+    assert private_metadata[metadata_key] == metadata_value
+    assert private_metadata[metadata_key_2] == metadata_value
+
+
+def test_checkout_create_with_public_metadata(
+    api_client, graphql_address_data, channel_USD
+):
+    # Given
+    test_email = "test@example.com"
+
+    metadata_key = "metadata_key"
+    metadata_value = "metadata_value"
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [],
+            "email": test_email,
+            "metadata": [{"key": metadata_key, "value": metadata_value}],
+        }
+    }
+
+    assert not Checkout.objects.exists()
+
+    # When
+    api_client.post_graphql(MUTATION_CHECKOUT_CREATE, variables)
+
+    # Then
+    new_checkout = Checkout.objects.first()
+
+    assert new_checkout is not None
+
+    metadata_storage = new_checkout.metadata_storage
+    metadata = metadata_storage.metadata
+
+    assert len(metadata) == 1
+
+    assert metadata[metadata_key] == metadata_value
+
+
+def test_checkout_create_with_private_metadata(
+    staff_api_client, graphql_address_data, channel_USD, permission_manage_checkouts
+):
+    # Given
+    test_email = "test@example.com"
+
+    metadata_key = "metadata_key"
+    metadata_value = "metadata_value"
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [],
+            "email": test_email,
+            "privateMetadata": [
+                {"key": metadata_key, "value": metadata_value},
+            ],
+        }
+    }
+
+    assert not Checkout.objects.exists()
+
+    # When
+    response = staff_api_client.post_graphql(
+        MUTATION_CHECKOUT_CREATE, variables, permissions=[permission_manage_checkouts]
+    )
+
+    # Then
+    new_checkout = Checkout.objects.first()
+
+    content = get_graphql_content(response)
+
+    assert not content["data"]["checkoutCreate"]["errors"]
+
+    assert new_checkout is not None
+
+    metadata_storage = new_checkout.metadata_storage
+    private_metadata = metadata_storage.private_metadata
+
+    assert len(private_metadata) == 1
+
+    assert private_metadata[metadata_key] == metadata_value
+
+
+def test_checkout_create_with_private_metadata_without_permission_is_denied(
+    # Act as staff user
+    staff_api_client,
+    graphql_address_data,
+    channel_USD,
+):
+    # Given
+    test_email = "test@example.com"
+
+    metadata_key = "metadata_key"
+    metadata_value = "metadata_value"
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [],
+            "email": test_email,
+            "privateMetadata": [
+                {"key": metadata_key, "value": metadata_value},
+            ],
+        }
+    }
+
+    assert not Checkout.objects.exists()
+
+    # When
+    response = staff_api_client.post_graphql(
+        MUTATION_CHECKOUT_CREATE,
+        variables,
+        # Do not set permissions
+        permissions=[],
+    )
+
+    # Then
+    new_checkout = Checkout.objects.first()
+
+    assert new_checkout is None
+
+    assert_no_permission(response)
+
+
+def test_checkout_create_with_private_metadata_customer_is_denied(
+    # Act as staff user
+    user_api_client,
+    graphql_address_data,
+    channel_USD,
+):
+    # Given
+    test_email = "test@example.com"
+
+    metadata_key = "metadata_key"
+    metadata_value = "metadata_value"
+
+    variables = {
+        "checkoutInput": {
+            "channel": channel_USD.slug,
+            "lines": [],
+            "email": test_email,
+            "privateMetadata": [
+                {"key": metadata_key, "value": metadata_value},
+            ],
+        }
+    }
+
+    assert not Checkout.objects.exists()
+
+    # When
+    response = user_api_client.post_graphql(
+        MUTATION_CHECKOUT_CREATE,
+        variables,
+    )
+
+    # Then
+    new_checkout = Checkout.objects.first()
+
+    assert new_checkout is None
+
+    assert_no_permission(response)

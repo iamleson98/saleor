@@ -25,8 +25,10 @@ from pytimeparse import parse
 from sentry_sdk.integrations.celery import CeleryIntegration
 from sentry_sdk.integrations.django import DjangoIntegration
 from sentry_sdk.integrations.logging import ignore_logger
+from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScrubber
 
 from . import PatchedSubscriberExecutionContext, __version__
+from .account.i18n_rules_override import i18n_rules_override
 from .core.languages import LANGUAGES as CORE_LANGUAGES
 from .core.schedules import initiated_promotion_webhook_schedule
 from .graphql.executor import patch_executor
@@ -35,7 +37,7 @@ django_stubs_ext.monkeypatch()
 
 
 def get_list(text):
-    return [item.strip() for item in text.split(",")]
+    return [item.strip() for item in text.split(",") if item]
 
 
 def get_bool_from_env(name, default_value):
@@ -354,6 +356,15 @@ LOGGING = {
                 "[PID:%(process)d:%(threadName)s]"
             )
         },
+        "verbose_breaker": {
+            "format": (
+                "%(asctime)s %(levelname)s %(name)s %(message)s "
+                "App name: %(app_name)s, total webhooks %(webhooks_total_count)s, "
+                "errors count %(webhooks_errors_count)s, "
+                "Cooldown is %(webhooks_cooldown_seconds)s seconds. "
+                "[PID:%(process)d:%(threadName)s]"
+            )
+        },
     },
     "handlers": {
         "default": {
@@ -375,6 +386,11 @@ LOGGING = {
             "level": "INFO",
             "class": "logging.StreamHandler",
             "formatter": "verbose" if DEBUG else "celery_task_json",
+        },
+        "breaker_board": {
+            "level": "INFO",
+            "class": "logging.StreamHandler",
+            "formatter": "verbose_breaker" if DEBUG else "json",
         },
         "null": {
             "class": "logging.NullHandler",
@@ -400,6 +416,11 @@ LOGGING = {
         "saleor": {"level": "DEBUG", "propagate": True},
         "saleor.graphql.errors.handled": {
             "handlers": ["default"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "breaker_board": {
+            "handlers": ["breaker_board"],
             "level": "INFO",
             "propagate": False,
         },
@@ -745,7 +766,28 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
     Will only be called if SENTRY_DSN is not None, during core start, can be
     overriden in separate settings file.
     """
-    sentry_sdk.init(dsn, release=__version__, **sentry_opts)
+
+    SALEOR_DENYLIST = DEFAULT_DENYLIST + ["private_metadata"]
+    SALEOR_PII_DENYLIST = DEFAULT_PII_DENYLIST + [
+        "first_name",
+        "last_name",
+        "email",
+        "company_name",
+        "street_address",
+        "street_address_1",
+        "street_address_2",
+        "user_email",
+    ]
+
+    sentry_sdk.init(
+        dsn,
+        release=__version__,
+        send_default_pii=False,
+        event_scrubber=EventScrubber(
+            denylist=SALEOR_DENYLIST, pii_denylist=SALEOR_PII_DENYLIST
+        ),
+        **sentry_opts,
+    )
     ignore_logger("graphql.execution.utils")
     ignore_logger("graphql.execution.executor")
 
@@ -769,7 +811,6 @@ BUILTIN_PLUGINS = [
     "saleor.plugins.webhook.plugin.WebhookPlugin",
     "saleor.payment.gateways.dummy.plugin.DummyGatewayPlugin",
     "saleor.payment.gateways.dummy_credit_card.plugin.DummyCreditCardGatewayPlugin",
-    "saleor.payment.gateways.stripe.deprecated.plugin.DeprecatedStripeGatewayPlugin",
     "saleor.payment.gateways.stripe.plugin.StripeGatewayPlugin",
     "saleor.payment.gateways.braintree.plugin.BraintreeGatewayPlugin",
     "saleor.payment.gateways.razorpay.plugin.RazorpayGatewayPlugin",
@@ -837,8 +878,11 @@ if JAEGER_HOST:
 
 # Some cloud providers (Heroku) export REDIS_URL variable instead of CACHE_URL
 REDIS_URL = os.environ.get("REDIS_URL")
-if REDIS_URL:
-    CACHE_URL = os.environ.setdefault("CACHE_URL", REDIS_URL)
+CACHE_URL = (
+    os.environ.setdefault("CACHE_URL", REDIS_URL)
+    if REDIS_URL
+    else os.environ.get("CACHE_URL")
+)
 CACHES = {"default": django_cache_url.config()}
 CACHES["default"]["TIMEOUT"] = parse(os.environ.get("CACHE_TIMEOUT", "7 days"))
 
@@ -991,3 +1035,27 @@ TRANSACTION_ITEMS_LIMIT = 100
 # Disable Django warnings regarding too long cache keys being incompatible with
 # memcached to avoid leaking key values.
 warnings.filterwarnings("ignore", category=CacheKeyWarning)
+
+
+# Breaker board configuration
+BREAKER_BOARD_ENABLED = get_bool_from_env("BREAKER_BOARD_ENABLED", False)
+# Storage class string for the breaker board, for example:
+# "saleor.webhook.circuit_breaker.storage.RedisStorage"
+BREAKER_BOARD_STORAGE_CLASS = "saleor.webhook.circuit_breaker.storage.RedisStorage"
+if BREAKER_BOARD_ENABLED and (CACHE_URL is None or not CACHE_URL.startswith("redis")):
+    raise ImproperlyConfigured(
+        "Redis storage cannot be used when Redis cache is not configured."
+    )
+# List of lowercase sync webhook events that should be monitored by the breaker board, for ex:
+# "checkout_calculate_taxes, shipping_list_methods_for_checkout".
+BREAKER_BOARD_SYNC_EVENTS = get_list(os.environ.get("BREAKER_BOARD_SYNC_EVENTS", ""))
+
+# Subset of BREAKER_BOARD_SYNC_EVENTS that should be monitored by the breaker board,
+# but should not be disabled in case of exceeding failure thresholds
+BREAKER_BOARD_DRY_RUN_SYNC_EVENTS = get_list(
+    os.environ.get("BREAKER_BOARD_DRY_RUN_SYNC_EVENTS", "")
+)
+
+# Library `google-i18n-address` use `AddressValidationMetadata` form Google to provide address validation rules.
+# Patch `i18n` module to allows to override the default address rules.
+i18n_rules_override()

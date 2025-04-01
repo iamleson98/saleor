@@ -1,4 +1,5 @@
 import base64
+import datetime
 
 import graphene
 
@@ -18,15 +19,15 @@ from ...thumbnail.utils import (
     get_thumbnail_format,
     get_thumbnail_size,
 )
+from ...webhook.circuit_breaker.breaker_board import (
+    initialize_breaker_board,
+)
 from ..account.utils import is_owner_or_has_one_of_perms
 from ..core import ResolveInfo, SaleorContext
 from ..core.connection import CountableConnection
 from ..core.context import get_database_connection_name
 from ..core.dataloaders import DataLoader
-from ..core.descriptions import (
-    ADDED_IN_319,
-    DEPRECATED_IN_3X_FIELD,
-)
+from ..core.descriptions import ADDED_IN_319, ADDED_IN_321
 from ..core.doc_category import DOC_CATEGORY_APPS
 from ..core.federation import federated_entity, resolve_federation_references
 from ..core.scalars import DateTime
@@ -52,12 +53,21 @@ from .dataloaders import (
     ThumbnailByAppInstallationIdSizeAndFormatLoader,
     app_promise_callback,
 )
-from .enums import AppExtensionMountEnum, AppExtensionTargetEnum, AppTypeEnum
+from .enums import (
+    AppExtensionMountEnum,
+    AppExtensionTargetEnum,
+    AppTypeEnum,
+    CircuitBreakerState,
+    CircuitBreakerStateEnum,
+)
 from .resolvers import (
     resolve_access_token_for_app,
     resolve_access_token_for_app_extension,
     resolve_app_extension_url,
 )
+
+breaker_board = initialize_breaker_board()
+
 
 # Maximal thumbnail size for manifest preview
 MANIFEST_THUMBNAIL_MAX_SIZE = 512
@@ -377,7 +387,7 @@ class Manifest(BaseObjectType):
     app_url = graphene.String(description="App website rendered in the dashboard.")
     configuration_url = graphene.String(
         description="URL to iframe with the configuration for the app.",
-        deprecation_reason=f"{DEPRECATED_IN_3X_FIELD} Use `appUrl` instead.",
+        deprecation_reason="Use `appUrl` instead.",
     )
     token_target_url = graphene.String(
         description=(
@@ -387,7 +397,7 @@ class Manifest(BaseObjectType):
     )
     data_privacy = graphene.String(
         description="Description of the data privacy defined for this app.",
-        deprecation_reason=f"{DEPRECATED_IN_3X_FIELD} Use `dataPrivacyUrl` instead.",
+        deprecation_reason="Use `dataPrivacyUrl` instead.",
     )
     data_privacy_url = graphene.String(description="URL to the full privacy policy.")
     homepage_url = graphene.String(description="External URL to the app homepage.")
@@ -495,7 +505,7 @@ class App(ModelObjectType[models.App]):
 
     data_privacy = graphene.String(
         description="Description of the data privacy defined for this app.",
-        deprecation_reason=f"{DEPRECATED_IN_3X_FIELD} Use `dataPrivacyUrl` instead.",
+        deprecation_reason="Use `dataPrivacyUrl` instead.",
     )
     data_privacy_url = graphene.String(
         description="URL to details about the privacy policy on the app owner page."
@@ -504,7 +514,7 @@ class App(ModelObjectType[models.App]):
     support_url = graphene.String(description="Support page for the app.")
     configuration_url = graphene.String(
         description="URL to iframe with the configuration for the app.",
-        deprecation_reason=f"{DEPRECATED_IN_3X_FIELD} Use `appUrl` instead.",
+        deprecation_reason="Use `appUrl` instead.",
     )
     app_url = graphene.String(description="URL to iframe with the app.")
     manifest_url = graphene.String(
@@ -521,6 +531,15 @@ class App(ModelObjectType[models.App]):
         required=True,
     )
     brand = graphene.Field(AppBrand, description="App's brand data.")
+    breaker_state = CircuitBreakerStateEnum(
+        description="Circuit breaker state, if open, sync webhooks operation is disrupted."
+        + ADDED_IN_321,
+        required=True,
+    )
+    breaker_last_state_change = DateTime(
+        description="Circuit breaker last state change date." + ADDED_IN_321,
+        required=False,
+    )
 
     class Meta:
         description = "Represents app data."
@@ -592,6 +611,21 @@ class App(ModelObjectType[models.App]):
     def resolve_brand(root: models.App, _info: ResolveInfo):
         if root.brand_logo_default:
             return root
+        return None
+
+    @staticmethod
+    def resolve_breaker_state(root: models.App, _info: ResolveInfo):
+        if breaker_board:
+            state, _ = breaker_board.storage.get_app_state(root.id)
+            return state
+        return CircuitBreakerState.CLOSED
+
+    @staticmethod
+    def resolve_breaker_last_state_change(root: models.App, _info: ResolveInfo):
+        if breaker_board:
+            _, changed_at = breaker_board.storage.get_app_state(root.id)
+            if changed_at:
+                return datetime.datetime.fromtimestamp(changed_at, tz=datetime.UTC)
         return None
 
 

@@ -260,24 +260,6 @@ class PluginsManager(PaymentInterface):
             "check_payment_balance", None, details, channel_slug=channel_slug
         )
 
-    def change_user_address(
-        self,
-        address: "Address",
-        address_type: str | None,
-        user: Optional["User"],
-        save: bool = True,
-    ) -> "Address":
-        default_value = address
-        return self.__run_method_on_plugins(
-            "change_user_address",
-            default_value,
-            address,
-            address_type,
-            user,
-            save,
-            channel_slug=None,
-        )
-
     def calculate_checkout_total(
         self,
         checkout_info: "CheckoutInfo",
@@ -646,7 +628,7 @@ class PluginsManager(PaymentInterface):
             or default_value
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def get_taxes_for_checkout(
         self,
@@ -666,7 +648,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=checkout_info.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def get_taxes_for_order(self, order: "Order", app_identifier) -> TaxData | None:
         return self.__run_plugin_method_until_first_success(
@@ -690,7 +672,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=checkout_info.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def customer_created(self, customer: "User"):
         default_value = None
@@ -698,7 +680,7 @@ class PluginsManager(PaymentInterface):
             "customer_created", default_value, customer, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def customer_deleted(self, customer: "User", webhooks=None):
         default_value = None
@@ -710,7 +692,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def customer_updated(self, customer: "User", webhooks=None):
         default_value = None
@@ -722,7 +704,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def customer_metadata_updated(self, customer: "User", webhooks=None):
         default_value = None
@@ -734,7 +716,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def collection_created(self, collection: "Collection"):
         default_value = None
@@ -742,7 +724,7 @@ class PluginsManager(PaymentInterface):
             "collection_created", default_value, collection, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def collection_updated(self, collection: "Collection"):
         default_value = None
@@ -750,7 +732,7 @@ class PluginsManager(PaymentInterface):
             "collection_updated", default_value, collection, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def collection_deleted(self, collection: "Collection", webhooks=None):
         default_value = None
@@ -762,7 +744,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def collection_metadata_updated(self, collection: "Collection"):
         default_value = None
@@ -770,7 +752,7 @@ class PluginsManager(PaymentInterface):
             "collection_metadata_updated", default_value, collection, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_created(self, product: "Product", webhooks=None):
         default_value = None
@@ -782,7 +764,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_updated(self, product: "Product", webhooks=None):
         default_value = None
@@ -794,7 +776,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_deleted(self, product: "Product", variants: list[int], webhooks=None):
         default_value = None
@@ -807,7 +789,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_media_created(self, media: "ProductMedia"):
         default_value = None
@@ -815,7 +797,7 @@ class PluginsManager(PaymentInterface):
             "product_media_created", default_value, media, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_media_updated(self, media: "ProductMedia"):
         default_value = None
@@ -823,7 +805,7 @@ class PluginsManager(PaymentInterface):
             "product_media_updated", default_value, media, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_media_deleted(self, media: "ProductMedia"):
         default_value = None
@@ -831,7 +813,7 @@ class PluginsManager(PaymentInterface):
             "product_media_deleted", default_value, media, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_metadata_updated(self, product: "Product"):
         default_value = None
@@ -839,7 +821,7 @@ class PluginsManager(PaymentInterface):
             "product_metadata_updated", default_value, product, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_created(self, product_variant: "ProductVariant", webhooks=None):
         default_value = None
@@ -851,7 +833,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_updated(
         self, product_variant: "ProductVariant", webhooks=None, **kwargs
@@ -866,7 +848,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_deleted(self, product_variant: "ProductVariant", webhooks=None):
         default_value = None
@@ -878,7 +860,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_out_of_stock(self, stock: "Stock", webhooks=None):
         default_value = None
@@ -890,7 +872,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_back_in_stock(self, stock: "Stock", webhooks=None):
         default_value = None
@@ -902,7 +884,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_stocks_updated(self, stocks: list["Stock"], webhooks=None):
         default_value = None
@@ -914,7 +896,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_metadata_updated(self, product_variant: "ProductVariant"):
         default_value = None
@@ -925,7 +907,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_export_completed(self, export: "ExportFile"):
         default_value = None
@@ -933,7 +915,7 @@ class PluginsManager(PaymentInterface):
             "product_export_completed", default_value, export, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_created(self, order: "Order", webhooks=None):
         default_value = None
@@ -945,7 +927,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def event_delivery_retry(self, event_delivery: "EventDelivery"):
         default_value = None
@@ -963,7 +945,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def draft_order_created(self, order: "Order", webhooks=None):
         default_value = None
@@ -975,7 +957,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def draft_order_updated(self, order: "Order", webhooks=None):
         default_value = None
@@ -987,7 +969,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def draft_order_deleted(self, order: "Order", webhooks=None):
         default_value = None
@@ -999,7 +981,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def sale_created(self, sale: "Promotion", current_catalogue):
         default_value = None
@@ -1007,7 +989,7 @@ class PluginsManager(PaymentInterface):
             "sale_created", default_value, sale, current_catalogue, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def sale_deleted(self, sale: "Promotion", previous_catalogue, webhooks=None):
         default_value = None
@@ -1020,7 +1002,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def sale_updated(self, sale: "Promotion", previous_catalogue, current_catalogue):
         default_value = None
@@ -1044,7 +1026,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_created(self, promotion: "Promotion"):
         default_value = None
@@ -1052,7 +1034,7 @@ class PluginsManager(PaymentInterface):
             "promotion_created", default_value, promotion, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_updated(self, promotion: "Promotion"):
         default_value = None
@@ -1060,7 +1042,7 @@ class PluginsManager(PaymentInterface):
             "promotion_updated", default_value, promotion, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_deleted(self, promotion: "Promotion", webhooks=None):
         default_value = None
@@ -1072,7 +1054,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_started(self, promotion: "Promotion", webhooks=None):
         default_value = None
@@ -1084,7 +1066,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_ended(self, promotion: "Promotion", webhooks=None):
         default_value = None
@@ -1096,7 +1078,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_rule_created(self, promotion_rule: "PromotionRule"):
         default_value = None
@@ -1104,7 +1086,7 @@ class PluginsManager(PaymentInterface):
             "promotion_rule_created", default_value, promotion_rule, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_rule_updated(self, promotion_rule: "PromotionRule"):
         default_value = None
@@ -1112,7 +1094,7 @@ class PluginsManager(PaymentInterface):
             "promotion_rule_updated", default_value, promotion_rule, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def promotion_rule_deleted(self, promotion_rule: "PromotionRule"):
         default_value = None
@@ -1131,7 +1113,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=order.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def invoice_delete(self, invoice: "Invoice"):
         default_value = None
@@ -1143,7 +1125,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def invoice_sent(self, invoice: "Invoice", email: str):
         default_value = None
@@ -1156,7 +1138,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_fully_paid(self, order: "Order", webhooks=None):
         default_value = None
@@ -1168,7 +1150,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_paid(self, order: "Order", webhooks=None):
         default_value = None
@@ -1180,7 +1162,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_fully_refunded(self, order: "Order", webhooks=None):
         default_value = None
@@ -1192,7 +1174,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_refunded(self, order: "Order", webhooks=None):
         default_value = None
@@ -1204,7 +1186,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_updated(self, order: "Order", webhooks=None):
         default_value = None
@@ -1216,7 +1198,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_cancelled(self, order: "Order", webhooks=None):
         default_value = None
@@ -1228,7 +1210,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_expired(self, order: "Order", webhooks=None):
         default_value = None
@@ -1240,7 +1222,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_fulfilled(self, order: "Order", webhooks=None):
         default_value = None
@@ -1252,7 +1234,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_metadata_updated(self, order: "Order", webhooks=None):
         default_value = None
@@ -1264,7 +1246,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def order_bulk_created(self, orders: list["Order"]):
         default_value = None
@@ -1272,7 +1254,7 @@ class PluginsManager(PaymentInterface):
             "order_bulk_created", default_value, orders, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_created(
         self, fulfillment: "Fulfillment", notify_customer: bool | None = True
@@ -1286,7 +1268,7 @@ class PluginsManager(PaymentInterface):
             notify_customer=notify_customer,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_canceled(self, fulfillment: "Fulfillment"):
         default_value = None
@@ -1297,7 +1279,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=fulfillment.order.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_approved(
         self, fulfillment: "Fulfillment", notify_customer: bool | None = True
@@ -1311,7 +1293,7 @@ class PluginsManager(PaymentInterface):
             notify_customer=notify_customer,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_metadata_updated(self, fulfillment: "Fulfillment"):
         default_value = None
@@ -1331,7 +1313,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=fulfillment.order.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def checkout_created(self, checkout: "Checkout", webhooks=None):
         default_value = None
@@ -1343,7 +1325,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def checkout_updated(self, checkout: "Checkout", webhooks=None):
         default_value = None
@@ -1355,7 +1337,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def checkout_fully_paid(self, checkout: "Checkout", webhooks=None):
         default_value = None
@@ -1367,7 +1349,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def checkout_metadata_updated(self, checkout: "Checkout", webhooks=None):
         default_value = None
@@ -1379,7 +1361,7 @@ class PluginsManager(PaymentInterface):
             webhooks=webhooks,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_created(self, page: "Page"):
         default_value = None
@@ -1387,7 +1369,7 @@ class PluginsManager(PaymentInterface):
             "page_created", default_value, page, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_updated(self, page: "Page"):
         default_value = None
@@ -1395,7 +1377,7 @@ class PluginsManager(PaymentInterface):
             "page_updated", default_value, page, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_deleted(self, page: "Page"):
         default_value = None
@@ -1403,7 +1385,7 @@ class PluginsManager(PaymentInterface):
             "page_deleted", default_value, page, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_type_created(self, page_type: "PageType"):
         default_value = None
@@ -1411,7 +1393,7 @@ class PluginsManager(PaymentInterface):
             "page_type_created", default_value, page_type, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_type_updated(self, page_type: "PageType"):
         default_value = None
@@ -1419,7 +1401,7 @@ class PluginsManager(PaymentInterface):
             "page_type_updated", default_value, page_type, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def page_type_deleted(self, page_type: "PageType", webhooks=None):
         default_value = None
@@ -1431,7 +1413,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def permission_group_created(self, group: "Group"):
         default_value = None
@@ -1439,7 +1421,7 @@ class PluginsManager(PaymentInterface):
             "permission_group_created", default_value, group, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def permission_group_updated(self, group: "Group"):
         default_value = None
@@ -1447,7 +1429,7 @@ class PluginsManager(PaymentInterface):
             "permission_group_updated", default_value, group, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def permission_group_deleted(self, group: "Group"):
         default_value = None
@@ -1455,7 +1437,7 @@ class PluginsManager(PaymentInterface):
             "permission_group_deleted", default_value, group, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_charge_requested(
         self, payment_data: "TransactionActionData", channel_slug: str
@@ -1468,7 +1450,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_refund_requested(
         self, payment_data: "TransactionActionData", channel_slug: str
@@ -1481,7 +1463,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_cancelation_requested(
         self, payment_data: "TransactionActionData", channel_slug: str
@@ -1494,7 +1476,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def payment_gateway_initialize_session(
         self,
@@ -1512,7 +1494,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=source_object.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_initialize_session(
         self,
@@ -1526,7 +1508,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=transaction_session_data.source_object.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_process_session(
         self,
@@ -1540,7 +1522,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=transaction_session_data.source_object.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def transaction_item_metadata_updated(self, transaction_item: "TransactionItem"):
         default_value = None
@@ -1551,7 +1533,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_confirmed(self, user: "User"):
         default_value = None
@@ -1559,7 +1541,7 @@ class PluginsManager(PaymentInterface):
             "account_confirmed", default_value, user, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_confirmation_requested(
         self, user: "User", channel_slug: str, token: str, redirect_url: str | None
@@ -1575,7 +1557,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_change_email_requested(
         self,
@@ -1597,7 +1579,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_email_changed(
         self,
@@ -1611,7 +1593,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_set_password_requested(
         self,
@@ -1631,7 +1613,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_delete_requested(
         self, user: "User", channel_slug: str, token: str, redirect_url: str
@@ -1647,7 +1629,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def account_deleted(self, user: "User"):
         default_value = None
@@ -1655,7 +1637,7 @@ class PluginsManager(PaymentInterface):
             "account_deleted", default_value, user, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def address_created(self, address: "Address"):
         default_value = None
@@ -1663,7 +1645,7 @@ class PluginsManager(PaymentInterface):
             "address_created", default_value, address, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def address_updated(self, address: "Address"):
         default_value = None
@@ -1671,7 +1653,7 @@ class PluginsManager(PaymentInterface):
             "address_updated", default_value, address, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def address_deleted(self, address: "Address"):
         default_value = None
@@ -1679,7 +1661,7 @@ class PluginsManager(PaymentInterface):
             "address_deleted", default_value, address, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def app_installed(self, app: "App"):
         default_value = None
@@ -1687,7 +1669,7 @@ class PluginsManager(PaymentInterface):
             "app_installed", default_value, app, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def app_updated(self, app: "App"):
         default_value = None
@@ -1695,7 +1677,7 @@ class PluginsManager(PaymentInterface):
             "app_updated", default_value, app, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def app_deleted(self, app: "App"):
         default_value = None
@@ -1703,7 +1685,7 @@ class PluginsManager(PaymentInterface):
             "app_deleted", default_value, app, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def app_status_changed(self, app: "App"):
         default_value = None
@@ -1711,7 +1693,7 @@ class PluginsManager(PaymentInterface):
             "app_status_changed", default_value, app, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_created(self, attribute: "Attribute", webhooks=None):
         default_value = None
@@ -1723,7 +1705,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_updated(self, attribute: "Attribute", webhooks=None):
         default_value = None
@@ -1735,7 +1717,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_deleted(self, attribute: "Attribute", webhooks=None):
         default_value = None
@@ -1747,7 +1729,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_value_created(self, attribute_value: "AttributeValue", webhooks=None):
         default_value = None
@@ -1759,7 +1741,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_value_updated(self, attribute_value: "AttributeValue"):
         default_value = None
@@ -1767,7 +1749,7 @@ class PluginsManager(PaymentInterface):
             "attribute_value_updated", default_value, attribute_value, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def attribute_value_deleted(self, attribute_value: "AttributeValue", webhooks=None):
         default_value = None
@@ -1779,7 +1761,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def category_created(self, category: "Category"):
         default_value = None
@@ -1787,7 +1769,7 @@ class PluginsManager(PaymentInterface):
             "category_created", default_value, category, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def category_updated(self, category: "Category"):
         default_value = None
@@ -1795,7 +1777,7 @@ class PluginsManager(PaymentInterface):
             "category_updated", default_value, category, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def category_deleted(self, category: "Category", webhooks=None):
         default_value = None
@@ -1807,7 +1789,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def channel_created(self, channel: "Channel"):
         default_value = None
@@ -1815,7 +1797,7 @@ class PluginsManager(PaymentInterface):
             "channel_created", default_value, channel, channel_slug=channel.slug
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def channel_updated(self, channel: "Channel", webhooks=None):
         default_value = None
@@ -1827,7 +1809,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def channel_deleted(self, channel: "Channel"):
         default_value = None
@@ -1835,7 +1817,7 @@ class PluginsManager(PaymentInterface):
             "channel_deleted", default_value, channel, channel_slug=None
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def channel_status_changed(self, channel: "Channel"):
         default_value = None
@@ -1843,7 +1825,7 @@ class PluginsManager(PaymentInterface):
             "channel_status_changed", default_value, channel, channel_slug=channel.slug
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def channel_metadata_updated(self, channel: "Channel"):
         default_value = None
@@ -1854,7 +1836,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_created(self, gift_card: "GiftCard", webhooks=None):
         default_value = None
@@ -1866,7 +1848,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_updated(self, gift_card: "GiftCard"):
         default_value = None
@@ -1877,7 +1859,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_deleted(self, gift_card: "GiftCard", webhooks=None):
         default_value = None
@@ -1900,7 +1882,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_status_changed(self, gift_card: "GiftCard", webhooks=None):
         default_value = None
@@ -1912,7 +1894,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_metadata_updated(self, gift_card: "GiftCard"):
         default_value = None
@@ -1923,7 +1905,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def gift_card_export_completed(self, export: "ExportFile"):
         default_value = None
@@ -1934,7 +1916,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_created(self, menu: "Menu"):
         default_value = None
@@ -1945,7 +1927,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_updated(self, menu: "Menu"):
         default_value = None
@@ -1956,7 +1938,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_deleted(self, menu: "Menu", webhooks=None):
         default_value = None
@@ -1968,7 +1950,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_item_created(self, menu_item: "MenuItem"):
         default_value = None
@@ -1979,7 +1961,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_item_updated(self, menu_item: "MenuItem"):
         default_value = None
@@ -1990,7 +1972,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def menu_item_deleted(self, menu_item: "MenuItem", webhooks=None):
         default_value = None
@@ -2002,7 +1984,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_price_created(self, shipping_method: "ShippingMethod"):
         default_value = None
@@ -2013,7 +1995,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_price_updated(self, shipping_method: "ShippingMethod"):
         default_value = None
@@ -2024,7 +2006,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_price_deleted(self, shipping_method: "ShippingMethod", webhooks=None):
         default_value = None
@@ -2036,7 +2018,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_zone_created(self, shipping_zone: "ShippingZone"):
         default_value = None
@@ -2047,7 +2029,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_zone_updated(self, shipping_zone: "ShippingZone"):
         default_value = None
@@ -2058,7 +2040,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_zone_deleted(self, shipping_zone: "ShippingZone", webhooks=None):
         default_value = None
@@ -2070,7 +2052,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shipping_zone_metadata_updated(self, shipping_zone: "ShippingZone"):
         default_value = None
@@ -2081,7 +2063,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def staff_created(self, staff_user: "User"):
         default_value = None
@@ -2092,7 +2074,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def staff_updated(self, staff_user: "User"):
         default_value = None
@@ -2103,7 +2085,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def staff_deleted(self, staff_user: "User", webhooks=None):
         default_value = None
@@ -2115,7 +2097,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def staff_set_password_requested(
         self, user: "User", channel_slug: str, token: str, redirect_url: str
@@ -2131,7 +2113,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=channel_slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def thumbnail_created(
         self,
@@ -2145,7 +2127,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def warehouse_created(self, warehouse: "Warehouse"):
         default_value = None
@@ -2156,7 +2138,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def warehouse_updated(self, warehouse: "Warehouse"):
         default_value = None
@@ -2167,7 +2149,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def warehouse_deleted(self, warehouse: "Warehouse"):
         default_value = None
@@ -2178,7 +2160,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def warehouse_metadata_updated(self, warehouse: "Warehouse"):
         default_value = None
@@ -2189,7 +2171,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_created(self, voucher: "Voucher", code: str):
         default_value = None
@@ -2201,7 +2183,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_updated(self, voucher: "Voucher", code: str):
         default_value = None
@@ -2213,7 +2195,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_deleted(self, voucher: "Voucher", code: str, webhooks=None):
         default_value = None
@@ -2226,7 +2208,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_codes_created(self, voucher_codes: list["VoucherCode"], webhooks=None):
         default_value = None
@@ -2238,7 +2220,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_codes_deleted(self, voucher_codes: list["VoucherCode"], webhooks=None):
         default_value = None
@@ -2250,7 +2232,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_metadata_updated(self, voucher: "Voucher"):
         default_value = None
@@ -2261,7 +2243,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def voucher_code_export_completed(self, export: "ExportFile"):
         default_value = None
@@ -2272,7 +2254,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def shop_metadata_updated(self, shop: "SiteSettings"):
         default_value = None
@@ -2383,7 +2365,7 @@ class PluginsManager(PaymentInterface):
             )
         raise Exception(f"Payment plugin {gateway} is inaccessible!")
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def list_stored_payment_methods(
         self,
@@ -2397,7 +2379,7 @@ class PluginsManager(PaymentInterface):
             channel_slug=list_stored_payment_methods_data.channel.slug,
         )
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def stored_payment_method_request_delete(
         self,
@@ -2415,7 +2397,7 @@ class PluginsManager(PaymentInterface):
         )
         return response
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def payment_gateway_initialize_tokenization(
         self,
@@ -2435,7 +2417,7 @@ class PluginsManager(PaymentInterface):
         )
         return response
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def payment_method_initialize_tokenization(
         self,
@@ -2455,7 +2437,7 @@ class PluginsManager(PaymentInterface):
         )
         return response
 
-    # Note: this method is deprecated in Saleor 3.20 and will be removed in Saleor 3.21.
+    # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules..
     # Any webhook-related functionality will be moved from plugin to core modules.
     def payment_method_process_tokenization(
@@ -2583,7 +2565,12 @@ class PluginsManager(PaymentInterface):
                 # https://github.com/python/mypy/issues/9975
                 getattr(plugin, "get_shipping_methods_for_checkout")(checkout, None)
             )
-        return shipping_methods
+        return list(
+            filter(
+                lambda method: method.price.currency == checkout.currency,
+                shipping_methods,
+            )
+        )
 
     def get_shipping_method(
         self,

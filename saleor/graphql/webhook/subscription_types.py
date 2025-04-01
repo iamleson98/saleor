@@ -42,7 +42,7 @@ from ..channel import ChannelContext
 from ..channel.dataloaders import ChannelByIdLoader
 from ..channel.enums import TransactionFlowStrategyEnum
 from ..core import ResolveInfo
-from ..core.context import get_database_connection_name
+from ..core.context import SyncWebhookControlContext, get_database_connection_name
 from ..core.descriptions import (
     ADDED_IN_318,
     ADDED_IN_319,
@@ -516,7 +516,7 @@ class OrderBase(AbstractType):
     @staticmethod
     def resolve_order(root, info: ResolveInfo):
         _, order = root
-        return order
+        return SyncWebhookControlContext(order)
 
 
 class OrderCreated(SubscriptionObjectType, OrderBase):
@@ -618,7 +618,7 @@ class OrderBulkCreated(SubscriptionObjectType):
     @staticmethod
     def resolve_orders(root, _info: ResolveInfo):
         _, orders = root
-        return orders
+        return [SyncWebhookControlContext(order) for order in orders]
 
     class Meta:
         root_type = None
@@ -1240,7 +1240,15 @@ class InvoiceBase(AbstractType):
     @staticmethod
     def resolve_order(root, _info):
         _, invoice = root
-        return OrderByIdLoader(_info.context).load(invoice.order_id)
+
+        def _wrap_with_sync_webhook_control_context(order):
+            return SyncWebhookControlContext(order)
+
+        return (
+            OrderByIdLoader(_info.context)
+            .load(invoice.order_id)
+            .then(_wrap_with_sync_webhook_control_context)
+        )
 
 
 class InvoiceRequested(SubscriptionObjectType, InvoiceBase):
@@ -1286,12 +1294,12 @@ class FulfillmentBase(AbstractType):
     @staticmethod
     def resolve_fulfillment(root, _info: ResolveInfo):
         _, fulfillment = root
-        return fulfillment
+        return SyncWebhookControlContext(node=fulfillment)
 
     @staticmethod
     def resolve_order(root, info: ResolveInfo):
         _, fulfillment = root
-        return fulfillment.order
+        return SyncWebhookControlContext(node=fulfillment.order)
 
 
 class FulfillmentTrackingNumberUpdated(SubscriptionObjectType, FulfillmentBase):
@@ -1319,12 +1327,12 @@ class FulfillmentCreated(SubscriptionObjectType, FulfillmentBase):
     @staticmethod
     def resolve_fulfillment(root, info: ResolveInfo):
         _, data = root
-        return data["fulfillment"]
+        return SyncWebhookControlContext(node=data["fulfillment"])
 
     @staticmethod
     def resolve_order(root, info: ResolveInfo):
         _, data = root
-        return data["fulfillment"].order
+        return SyncWebhookControlContext(node=data["fulfillment"].order)
 
     @staticmethod
     def resolve_notify_customer(root, _info: ResolveInfo):
@@ -1356,12 +1364,12 @@ class FulfillmentApproved(SubscriptionObjectType, FulfillmentBase):
     @staticmethod
     def resolve_fulfillment(root, info: ResolveInfo):
         _, data = root
-        return data["fulfillment"]
+        return SyncWebhookControlContext(node=data["fulfillment"])
 
     @staticmethod
     def resolve_order(root, info: ResolveInfo):
         _, data = root
-        return data["fulfillment"].order
+        return SyncWebhookControlContext(node=data["fulfillment"].order)
 
     @staticmethod
     def resolve_notify_customer(root, _info: ResolveInfo):
@@ -1469,7 +1477,7 @@ class CheckoutBase(AbstractType):
     @staticmethod
     def resolve_checkout(root, _info: ResolveInfo):
         _, checkout = root
-        return checkout
+        return SyncWebhookControlContext(node=checkout)
 
 
 class CheckoutCreated(SubscriptionObjectType, CheckoutBase):
@@ -1829,7 +1837,7 @@ class TransactionRefundRequested(TransactionActionBase, SubscriptionObjectType):
     def resolve_granted_refund(root, _info: ResolveInfo):
         _, transaction_action_data = root
         transaction_action_data: TransactionActionData
-        return transaction_action_data.granted_refund
+        return SyncWebhookControlContext(transaction_action_data.granted_refund)
 
 
 class TransactionCancelationRequested(TransactionActionBase, SubscriptionObjectType):
@@ -1865,7 +1873,7 @@ class PaymentGatewayInitializeSession(SubscriptionObjectType):
     def resolve_source_object(root, _info: ResolveInfo):
         _, objects = root
         source_object, _, _ = objects
-        return source_object
+        return SyncWebhookControlContext(node=source_object)
 
     @staticmethod
     def resolve_data(root, _info: ResolveInfo):
@@ -1933,7 +1941,7 @@ class TransactionSessionBase(SubscriptionObjectType, AbstractType):
         cls, root: tuple[str, TransactionSessionData], _info: ResolveInfo
     ):
         _, transaction_session_data = root
-        return transaction_session_data.source_object
+        return SyncWebhookControlContext(node=transaction_session_data.source_object)
 
     @classmethod
     def resolve_data(cls, root: tuple[str, TransactionSessionData], _info: ResolveInfo):

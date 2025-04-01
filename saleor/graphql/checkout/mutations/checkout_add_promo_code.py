@@ -11,6 +11,7 @@ from ....checkout.fetch import (
 from ....checkout.utils import add_promo_code_to_checkout, invalidate_checkout
 from ....webhook.event_types import WebhookEventAsyncType
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.descriptions import DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_CHECKOUT
 from ...core.mutations import BaseMutation
@@ -113,14 +114,17 @@ class CheckoutAddPromoCode(BaseMutation):
             shipping_channel_listings=shipping_channel_listings,
         )
 
-        update_checkout_shipping_method_if_invalid(checkout_info, lines)
-        invalidate_checkout(
+        shipping_update_fields = update_checkout_shipping_method_if_invalid(
+            checkout_info, lines
+        )
+        invalidate_update_fields = invalidate_checkout(
             checkout_info,
             lines,
             manager,
             recalculate_discount=False,
-            save=True,
+            save=False,
         )
+        checkout.save(update_fields=shipping_update_fields + invalidate_update_fields)
         call_checkout_info_event(
             manager=manager,
             event_name=WebhookEventAsyncType.CHECKOUT_UPDATED,
@@ -128,4 +132,4 @@ class CheckoutAddPromoCode(BaseMutation):
             lines=lines,
         )
 
-        return CheckoutAddPromoCode(checkout=checkout)
+        return CheckoutAddPromoCode(checkout=SyncWebhookControlContext(node=checkout))

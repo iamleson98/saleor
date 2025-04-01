@@ -15,13 +15,14 @@ from ....permission.enums import GiftcardPermissions
 from ....webhook.event_types import WebhookEventAsyncType
 from ...app.dataloaders import get_app_promise
 from ...core import ResolveInfo
-from ...core.descriptions import DEPRECATED_IN_3X_INPUT
+from ...core.descriptions import ADDED_IN_321, DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_GIFT_CARDS
-from ...core.mutations import ModelMutation
+from ...core.mutations import DeprecatedModelMutation
 from ...core.scalars import Date
 from ...core.types import BaseInputObjectType, GiftCardError, NonNullList, PriceInput
 from ...core.utils import WebhookEventInfo
 from ...core.validators import validate_price_precision
+from ...meta.inputs import MetadataInput, MetadataInputDescription
 from ...plugins.dataloaders import get_plugin_manager_promise
 from ..types import GiftCard
 
@@ -32,6 +33,21 @@ class GiftCardInput(BaseInputObjectType):
         description="The gift card tags to add.",
     )
     expiry_date = Date(description="The gift card expiry date.")
+
+    metadata = NonNullList(
+        MetadataInput,
+        description=(
+            f"Gift Card public metadata. {ADDED_IN_321} "
+            f"{MetadataInputDescription.PUBLIC_METADATA_INPUT}"
+        ),
+        required=False,
+    )
+    private_metadata = NonNullList(
+        MetadataInput,
+        description=f"Gift Card private metadata. {ADDED_IN_321} "
+        f"{MetadataInputDescription.PRIVATE_METADATA_INPUT}",
+        required=False,
+    )
 
     # DEPRECATED
     start_date = Date(
@@ -78,7 +94,7 @@ class GiftCardCreateInput(GiftCardInput):
         doc_category = DOC_CATEGORY_GIFT_CARDS
 
 
-class GiftCardCreate(ModelMutation):
+class GiftCardCreate(DeprecatedModelMutation):
     class Arguments:
         input = GiftCardCreateInput(
             required=True, description="Fields required to create a gift card."
@@ -101,6 +117,8 @@ class GiftCardCreate(ModelMutation):
                 description="A notification for created gift card.",
             ),
         ]
+        support_meta_field = True
+        support_private_meta_field = True
 
     @classmethod
     def clean_input(cls, info: ResolveInfo, instance, data, **kwargs):

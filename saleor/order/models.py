@@ -1,3 +1,4 @@
+import copy
 from decimal import Decimal
 from operator import attrgetter
 from re import match
@@ -11,6 +12,7 @@ from django.core.validators import MinValueValidator
 from django.db import connection, models
 from django.db.models import F, JSONField, Max
 from django.db.models.expressions import Exists, OuterRef
+from django.forms.models import model_to_dict
 from django.utils.timezone import now
 from django_measurement.models import MeasurementField
 from django_prices.models import MoneyField, TaxedMoneyField
@@ -153,6 +155,10 @@ class Order(ModelWithMetadata, ModelWithExternalReference):
         null=True,
         on_delete=models.SET_NULL,
     )
+    # The flag is only applicable to draft orders and should be null for orders
+    # with a status other than `DRAFT`.
+    draft_save_billing_address = models.BooleanField(null=True, blank=True)
+    draft_save_shipping_address = models.BooleanField(null=True, blank=True)
     user_email = models.EmailField(blank=True, default="")
     original = models.ForeignKey(
         "self", null=True, blank=True, on_delete=models.SET_NULL
@@ -388,6 +394,27 @@ class Order(ModelWithMetadata, ModelWithExternalReference):
             BTreeIndex(fields=["checkout_token"], name="checkout_token_btree_idx"),
         ]
 
+    @property
+    def comparison_fields(self):
+        return [
+            "discount",
+            "voucher",
+            "voucher_code",
+            "customer_note",
+            "redirect_url",
+            "external_reference",
+            "user",
+            "user_email",
+            "channel",
+            "metadata",
+            "private_metadata",
+            "draft_save_billing_address",
+            "draft_save_shipping_address",
+        ]
+
+    def serialize_for_comparison(self):
+        return copy.deepcopy(model_to_dict(self, fields=self.comparison_fields))
+
     def is_fully_paid(self):
         return self.total_charged >= self.total.gross
 
@@ -440,8 +467,13 @@ class Order(ModelWithMetadata, ModelWithExternalReference):
     def get_subtotal(self):
         return get_subtotal(self.lines.all(), self.currency)
 
-    def is_shipping_required(self):
-        return any(line.is_shipping_required for line in self.lines.all())
+    def is_shipping_required(
+        self, database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME
+    ):
+        return any(
+            line.is_shipping_required
+            for line in self.lines.using(database_connection_name).all()
+        )
 
     def get_total_quantity(self):
         return sum([line.quantity for line in self.lines.all()])
@@ -709,6 +741,10 @@ class OrderLine(ModelWithMetadata):
 
     # Fulfilled when sale was applied to product in the line
     sale_id = models.CharField(max_length=255, null=True, blank=True)
+
+    # The date time when the line should refresh its prices.
+    # It depends on channel.draft_order_line_price_freeze_period setting.
+    draft_base_price_expire_at = models.DateTimeField(blank=True, null=True)
 
     objects = OrderLineManager()
 

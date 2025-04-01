@@ -12,11 +12,20 @@ mutation DraftOrderUpdate($input: DraftOrderInput!, $id: ID!) {
       id
       lines {
         id
-        totalPrice {
-          ...BaseTaxedMoney
+        undiscountedUnitPrice {
+          ... BaseTaxedMoney
         }
         unitPrice {
-          ...BaseTaxedMoney
+          ... BaseTaxedMoney
+        }
+        undiscountedTotalPrice {
+          ... BaseTaxedMoney
+        }
+        totalPrice {
+          ... BaseTaxedMoney
+        }
+        unitDiscount {
+            amount
         }
         unitDiscountReason
       }
@@ -127,6 +136,20 @@ fragment BaseTaxedMoney on TaxedMoney {
   currency
 }
 """
+
+
+def raw_draft_order_update(api_client, id, input):
+    variables = {"id": id, "input": input}
+
+    response = api_client.post_graphql(
+        DRAFT_ORDER_UPDATE_MUTATION,
+        variables=variables,
+    )
+    content = get_graphql_content(response)
+
+    data = content["data"]["draftOrderUpdate"]
+
+    return data
 
 
 def draft_order_update(

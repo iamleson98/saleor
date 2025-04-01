@@ -11,11 +11,12 @@ from ....permission.enums import CheckoutPermissions
 from ....webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
 from ...app.dataloaders import get_app_promise
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.doc_category import DOC_CATEGORY_ORDERS
 from ...core.mutations import BaseMutation
 from ...core.types import Error, NonNullList
 from ...core.utils import CHECKOUT_CALCULATE_TAXES_MESSAGE, WebhookEventInfo
-from ...meta.inputs import MetadataInput
+from ...meta.inputs import MetadataInput, MetadataInputDescription
 from ...order.types import Order
 from ...plugins.dataloaders import get_plugin_manager_promise
 from ..enums import OrderCreateFromCheckoutErrorCode
@@ -59,12 +60,14 @@ class OrderCreateFromCheckout(BaseMutation):
         )
         private_metadata = NonNullList(
             MetadataInput,
-            description=("Fields required to update the checkout private metadata."),
+            description="Fields required to update the checkout private metadata. "
+            f"{MetadataInputDescription.PRIVATE_METADATA_INPUT}",
             required=False,
         )
         metadata = NonNullList(
             MetadataInput,
-            description=("Fields required to update the checkout metadata."),
+            description="Fields required to update the checkout metadata. "
+            f"{MetadataInputDescription.PUBLIC_METADATA_INPUT}",
             required=False,
         )
 
@@ -166,10 +169,14 @@ class OrderCreateFromCheckout(BaseMutation):
 
         if cls._meta.support_meta_field and metadata is not None:
             cls.check_metadata_permissions(info, id)
-            cls.validate_metadata_keys(metadata)
+            cls.create_metadata_from_graphql_input(
+                metadata, error_field_name="metadata"
+            )
         if cls._meta.support_private_meta_field and private_metadata is not None:
             cls.check_metadata_permissions(info, id, private=True)
-            cls.validate_metadata_keys(private_metadata)
+            cls.create_metadata_from_graphql_input(
+                metadata, error_field_name="private_metadata"
+            )
 
         manager = get_plugin_manager_promise(info.context).get()
         checkout_lines, unavailable_variant_pks = fetch_checkout_lines(checkout)
@@ -213,4 +220,4 @@ class OrderCreateFromCheckout(BaseMutation):
                 code=OrderCreateFromCheckoutErrorCode.TAX_ERROR.value,
             ) from e
 
-        return OrderCreateFromCheckout(order=order)
+        return OrderCreateFromCheckout(order=SyncWebhookControlContext(order))

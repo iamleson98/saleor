@@ -14,6 +14,7 @@ from ..app.dataloaders import ActiveAppsByAppIdentifierLoader, AppByIdLoader
 from ..checkout.dataloaders import CheckoutByTokenLoader
 from ..core import ResolveInfo
 from ..core.connection import CountableConnection
+from ..core.context import SyncWebhookControlContext
 from ..core.doc_category import DOC_CATEGORY_PAYMENTS
 from ..core.fields import JSONString, PermissionsField
 from ..core.scalars import JSON, DateTime
@@ -275,10 +276,36 @@ class Payment(ModelObjectType[models.Payment]):
         return resolve_metadata(root.metadata)
 
     @staticmethod
+    def resolve_order(root: models.Payment, info):
+        if not root.order_id:
+            return None
+
+        def _wrap_with_webhook_sync_control(order):
+            if not order:
+                return None
+            return SyncWebhookControlContext(node=order)
+
+        return (
+            OrderByIdLoader(info.context)
+            .load(root.order_id)
+            .then(_wrap_with_webhook_sync_control)
+        )
+
+    @staticmethod
     def resolve_checkout(root: models.Payment, info):
         if not root.checkout_id:
             return None
-        return CheckoutByTokenLoader(info.context).load(root.checkout_id)
+
+        def _wrap_with_webhook_sync_control(checkout):
+            if not checkout:
+                return None
+            return SyncWebhookControlContext(node=checkout)
+
+        return (
+            CheckoutByTokenLoader(info.context)
+            .load(root.checkout_id)
+            .then(_wrap_with_webhook_sync_control)
+        )
 
 
 class PaymentCountableConnection(CountableConnection):
@@ -536,13 +563,33 @@ class TransactionItem(ModelObjectType[models.TransactionItem]):
     def resolve_order(root: models.TransactionItem, info):
         if not root.order_id:
             return None
-        return OrderByIdLoader(info.context).load(root.order_id)
+
+        def _wrap_with_webhook_sync_control(order):
+            if not order:
+                return None
+            return SyncWebhookControlContext(node=order)
+
+        return (
+            OrderByIdLoader(info.context)
+            .load(root.order_id)
+            .then(_wrap_with_webhook_sync_control)
+        )
 
     @staticmethod
     def resolve_checkout(root: models.TransactionItem, info):
         if not root.checkout_id:
             return None
-        return CheckoutByTokenLoader(info.context).load(root.checkout_id)
+
+        def _wrap_with_webhook_sync_control(checkout):
+            if not checkout:
+                return None
+            return SyncWebhookControlContext(node=checkout)
+
+        return (
+            CheckoutByTokenLoader(info.context)
+            .load(root.checkout_id)
+            .then(_wrap_with_webhook_sync_control)
+        )
 
     @staticmethod
     def resolve_events(root: models.TransactionItem, info):

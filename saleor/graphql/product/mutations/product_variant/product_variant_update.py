@@ -16,6 +16,7 @@ from ....core.mutations import ModelWithExtRefMutation
 from ....core.types import ProductError
 from ....core.utils import ext_ref_to_global_id_or_error
 from ....core.validators import validate_one_of_args_is_in_mutation
+from ....meta.inputs import MetadataInput
 from ....plugins.dataloaders import get_plugin_manager_promise
 from ...types import ProductVariant
 from ...utils import get_used_attribute_values_for_variant
@@ -142,6 +143,10 @@ class ProductVariantUpdate(ProductVariantCreate, ModelWithExtRefMutation):
 
     @classmethod
     def _save(cls, info: ResolveInfo, instance, cleaned_input, changed_fields) -> bool:
+        metadata_changed = (
+            "metadata" in changed_fields or "private_metadata" in changed_fields
+        )
+
         refresh_product_search_index = False
         with traced_atomic_transaction():
             if changed_fields:
@@ -168,6 +173,10 @@ class ProductVariantUpdate(ProductVariantCreate, ModelWithExtRefMutation):
             if changed_fields or stocks or attributes:
                 manager = get_plugin_manager_promise(info.context).get()
                 cls.call_event(manager.product_variant_updated, instance)
+
+                if metadata_changed:
+                    cls.call_event(manager.product_variant_metadata_updated, instance)
+
                 return True
 
             return False
@@ -205,16 +214,27 @@ class ProductVariantUpdate(ProductVariantCreate, ModelWithExtRefMutation):
         )
         old_instance_data = instance.serialize_for_comparison()  # type: ignore[union-attr]
         cleaned_input = cls.clean_input(info, instance, input)  # type: ignore[arg-type]
-        metadata_list = cleaned_input.pop("metadata", None)
-        private_metadata_list = cleaned_input.pop("private_metadata", None)
+        metadata_list: list[MetadataInput] = cleaned_input.pop("metadata", None)
+        private_metadata_list: list[MetadataInput] = cleaned_input.pop(
+            "private_metadata", None
+        )
 
-        instance = cls.construct_instance(instance, cleaned_input)
-        cls.validate_and_update_metadata(instance, metadata_list, private_metadata_list)
-        cls.clean_instance(info, instance)
-        new_instance_data = instance.serialize_for_comparison()
+        metadata_collection = cls.create_metadata_from_graphql_input(
+            metadata_list, error_field_name="metadata"
+        )
+        private_metadata_collection = cls.create_metadata_from_graphql_input(
+            private_metadata_list, error_field_name="private_metadata"
+        )
+
+        new_instance = cls.construct_instance(instance, cleaned_input)
+        cls.validate_and_update_metadata(
+            new_instance, metadata_collection, private_metadata_collection
+        )
+        cls.clean_instance(info, new_instance)
+        new_instance_data = new_instance.serialize_for_comparison()
 
         changed_fields = cls.diff_instance_data_fields(
-            instance.comparison_fields,
+            new_instance.comparison_fields,
             old_instance_data,
             new_instance_data,
         )

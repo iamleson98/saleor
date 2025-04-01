@@ -10,7 +10,6 @@ from graphene.types.resolver import get_default_resolver
 from promise import Promise
 
 from ...channel import models
-from ...core.models import ModelWithMetadata
 from ...permission.auth_filters import AuthorizationFilters
 from ...permission.enums import (
     ChannelPermissions,
@@ -23,7 +22,8 @@ from ..core import ResolveInfo
 from ..core.descriptions import (
     ADDED_IN_318,
     ADDED_IN_320,
-    DEPRECATED_IN_3X_FIELD,
+    ADDED_IN_321,
+    DEPRECATED_IN_3X_INPUT,
     PREVIEW_FEATURE,
 )
 from ..core.doc_category import (
@@ -34,7 +34,7 @@ from ..core.doc_category import (
     DOC_CATEGORY_TAXES,
 )
 from ..core.fields import PermissionsField
-from ..core.scalars import Day, Minute
+from ..core.scalars import Day, Hour, Minute
 from ..core.types import BaseObjectType, CountryDisplay, ModelObjectType, NonNullList
 from ..meta.types import ObjectWithMetadata
 from ..tax.dataloaders import TaxConfigurationByChannelId
@@ -103,65 +103,6 @@ class ChannelContextType(ChannelContextTypeForObjectType[T]):
         return model == cls._meta.model
 
 
-TM = TypeVar("TM", bound=ModelWithMetadata)
-
-
-class ChannelContextTypeWithMetadataForObjectType(ChannelContextTypeForObjectType[TM]):
-    """A Graphene type for that uses ChannelContext as root in resolvers.
-
-    Same as ChannelContextType, but for types that implement ObjectWithMetadata
-    interface.
-    """
-
-    class Meta:
-        abstract = True
-
-    @staticmethod
-    def resolve_metadata(root: ChannelContext[TM], info: ResolveInfo):
-        # Used in metadata API to resolve metadata fields from an instance.
-        return ObjectWithMetadata.resolve_metadata(root.node, info)
-
-    @staticmethod
-    def resolve_metafield(root: ChannelContext[TM], info: ResolveInfo, *, key: str):
-        # Used in metadata API to resolve metadata fields from an instance.
-        return ObjectWithMetadata.resolve_metafield(root.node, info, key=key)
-
-    @staticmethod
-    def resolve_metafields(root: ChannelContext[TM], info: ResolveInfo, *, keys=None):
-        # Used in metadata API to resolve metadata fields from an instance.
-        return ObjectWithMetadata.resolve_metafields(root.node, info, keys=keys)
-
-    @staticmethod
-    def resolve_private_metadata(root: ChannelContext[TM], info: ResolveInfo):
-        # Used in metadata API to resolve private metadata fields from an instance.
-        return ObjectWithMetadata.resolve_private_metadata(root.node, info)
-
-    @staticmethod
-    def resolve_private_metafield(
-        root: ChannelContext[TM], info: ResolveInfo, *, key: str
-    ):
-        # Used in metadata API to resolve private metadata fields from an instance.
-        return ObjectWithMetadata.resolve_private_metafield(root.node, info, key=key)
-
-    @staticmethod
-    def resolve_private_metafields(
-        root: ChannelContext[TM], info: ResolveInfo, *, keys=None
-    ):
-        # Used in metadata API to resolve private metadata fields from an instance.
-        return ObjectWithMetadata.resolve_private_metafields(root.node, info, keys=keys)
-
-
-class ChannelContextTypeWithMetadata(ChannelContextTypeWithMetadataForObjectType[TM]):
-    """A Graphene type for that uses ChannelContext as root in resolvers.
-
-    Same as ChannelContextType, but for types that implement ObjectWithMetadata
-    interface.
-    """
-
-    class Meta:
-        abstract = True
-
-
 class StockSettings(BaseObjectType):
     allocation_strategy = AllocationStrategyEnum(
         description=(
@@ -188,7 +129,7 @@ class CheckoutSettings(ObjectType):
             "Some of the `problems` can block the finalizing checkout process. "
             "The legacy flow will be removed in Saleor 4.0. "
             "The flow with `checkout.problems` will be the default one."
-            + DEPRECATED_IN_3X_FIELD
+            + DEPRECATED_IN_3X_INPUT
         ),
     )
     automatically_complete_fully_paid_checkouts = graphene.Boolean(
@@ -259,6 +200,14 @@ class OrderSettings(ObjectType):
         description=(
             "Determine if voucher applied on draft order should be count toward "
             "voucher usage." + ADDED_IN_318 + PREVIEW_FEATURE
+        ),
+    )
+    draft_order_line_price_freeze_period = Hour(
+        required=False,
+        description=(
+            "Time in hours after which the draft order line price will be refreshed."
+            + ADDED_IN_321
+            + PREVIEW_FEATURE
         ),
     )
 
@@ -557,7 +506,10 @@ class Channel(ModelObjectType):
             include_draft_order_in_voucher_usage=(
                 root.include_draft_order_in_voucher_usage
             ),
-            allow_unpaid_orders=(root.allow_unpaid_orders),
+            allow_unpaid_orders=root.allow_unpaid_orders,
+            draft_order_line_price_freeze_period=(
+                root.draft_order_line_price_freeze_period
+            ),
         )
 
     @staticmethod

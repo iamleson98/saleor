@@ -16,13 +16,19 @@ from ....order.actions import order_created
 from ....order.calculations import fetch_order_prices_if_expired
 from ....order.error_codes import OrderErrorCode
 from ....order.fetch import OrderInfo, OrderLineInfo
+from ....order.models import OrderLine
 from ....order.search import prepare_order_search_vector_value
-from ....order.utils import get_order_country, update_order_display_gross_prices
+from ....order.utils import (
+    get_order_country,
+    store_user_addresses_from_draft_order,
+    update_order_display_gross_prices,
+)
 from ....permission.enums import OrderPermissions
 from ....warehouse.management import allocate_preorders, allocate_stocks
 from ....warehouse.reservations import is_reservation_enabled
 from ...app.dataloaders import get_app_promise
 from ...core import ResolveInfo
+from ...core.context import SyncWebhookControlContext
 from ...core.doc_category import DOC_CATEGORY_ORDERS
 from ...core.mutations import BaseMutation
 from ...core.types import OrderError
@@ -51,14 +57,18 @@ class DraftOrderComplete(BaseMutation):
         error_type_field = "order_errors"
 
     @classmethod
-    def update_user_fields(cls, order):
+    def update_user_fields(cls, order: models.Order):
+        update_fields = []
         if order.user:
             order.user_email = order.user.email
+            update_fields.append("user_email")
         elif order.user_email:
             try:
                 order.user = User.objects.get(email=order.user_email)
             except User.DoesNotExist:
                 order.user = None
+            update_fields.append("user_id")
+        return update_fields
 
     @classmethod
     def validate_order(cls, order):
@@ -113,7 +123,14 @@ class DraftOrderComplete(BaseMutation):
         country = get_order_country(order)
         validate_draft_order(order, order.lines.all(), country, manager)
         with traced_atomic_transaction():
-            cls.update_user_fields(order)
+            update_fields = [
+                "status",
+                "search_vector",
+                "display_gross_prices",
+                "updated_at",
+            ]
+            update_user_fields = cls.update_user_fields(order)
+            update_fields.extend(update_user_fields)
             channel = order.channel
             order.status = (
                 OrderStatus.UNFULFILLED
@@ -127,16 +144,25 @@ class DraftOrderComplete(BaseMutation):
                 if order.shipping_address:
                     order.shipping_address.delete()
                     order.shipping_address = None
+                update_fields.extend(
+                    [
+                        "shipping_method_name",
+                        "shipping_price_net_amount",
+                        "shipping_price_gross_amount",
+                        "shipping_address_id",
+                    ]
+                )
 
             order.search_vector = FlatConcatSearchVector(
                 *prepare_order_search_vector_value(order)
             )
             update_order_display_gross_prices(order)
-            order.save()
+            order.save(update_fields=update_fields)
 
             cls.setup_voucher_customer(order, channel)
             order_lines_info = []
-            for line in order.lines.all():
+            lines = order.lines.all()
+            for line in lines:
                 if not line.variant:
                     # we only care about stock for variants that still exist
                     continue
@@ -168,6 +194,10 @@ class DraftOrderComplete(BaseMutation):
                         errors = prepare_insufficient_stock_order_validation_errors(e)
                         raise ValidationError({"lines": errors}) from e
 
+                # clear draft base price expiration time
+                line.draft_base_price_expire_at = None
+                OrderLine.objects.bulk_update(lines, ["draft_base_price_expire_at"])
+
             order_info = OrderInfo(
                 order=order,
                 customer_email=order.get_customer_email(),
@@ -177,6 +207,12 @@ class DraftOrderComplete(BaseMutation):
             )
             app = get_app_promise(info.context).get()
             transaction.on_commit(
+                lambda: store_user_addresses_from_draft_order(
+                    order=order,
+                    manager=manager,
+                )
+            )
+            transaction.on_commit(
                 lambda: order_created(
                     order_info=order_info,
                     user=user,
@@ -185,4 +221,4 @@ class DraftOrderComplete(BaseMutation):
                     from_draft=True,
                 )
             )
-        return DraftOrderComplete(order=order)
+        return DraftOrderComplete(order=SyncWebhookControlContext(node=order))
