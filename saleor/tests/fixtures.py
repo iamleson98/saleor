@@ -17,6 +17,7 @@ from ..account.models import Address, Group, StaffNotificationRecipient
 from ..core import JobStatus
 from ..core.models import EventDelivery, EventDeliveryAttempt, EventPayload
 from ..core.payments import PaymentInterface
+from ..core.telemetry import initialize_telemetry, meter, tracer
 from ..csv.events import ExportEvents
 from ..csv.models import ExportEvent, ExportFile
 from ..discount import PromotionEvents
@@ -92,6 +93,36 @@ def _assert_num_queries(context, *, config, num, exact=True, info=None):
     else:
         msg += " (add -v option to show queries)"
     pytest.fail(msg)
+
+
+@pytest.fixture(scope="session")
+def initialize_test_telemetry():
+    initialize_telemetry()
+
+
+@pytest.fixture
+def trace_context_propagation(initialize_test_telemetry):
+    tracer._tracer._inject_context = True
+    yield
+    tracer._tracer._inject_context = False
+
+
+@pytest.fixture
+def get_test_spans(initialize_test_telemetry):
+    # Clear any existing spans from the buffer before test execution
+    tracer._tracer.span_exporter.clear()
+    yield tracer._tracer.span_exporter.get_finished_spans
+    # Clean up by clearing the buffer after test completion
+    tracer._tracer.span_exporter.clear()
+
+
+@pytest.fixture
+def get_test_metrics_data(initialize_test_telemetry):
+    # Clear any existing metrics data from the buffer before test execution
+    meter._meter.metric_reader.get_metrics_data()
+    yield meter._meter.metric_reader.get_metrics_data
+    # Clean up by clearing the buffer after test completion
+    meter._meter.metric_reader.get_metrics_data()
 
 
 @pytest.fixture
@@ -689,18 +720,32 @@ def tax_line_data_response():
 
 
 @pytest.fixture
-def tax_data_response(tax_line_data_response):
-    return {
-        "currency": "PLN",
-        "total_net_amount": 12.34,
-        "total_gross_amount": 12.34,
-        "subtotal_net_amount": 12.34,
-        "subtotal_gross_amount": 12.34,
-        "shipping_price_gross_amount": 12.34,
-        "shipping_price_net_amount": 12.34,
-        "shipping_tax_rate": 23,
-        "lines": [tax_line_data_response] * 5,
-    }
+def tax_data_response(tax_data_response_factory):
+    return tax_data_response_factory()
+
+
+@pytest.fixture
+def tax_data_response_factory(tax_line_data_response):
+    def factory(
+        shipping_price_gross_amount=12.34,
+        shipping_price_net_amount=12.34,
+        shipping_tax_rate=23,
+        lines_length=5,
+    ):
+        lines = [tax_line_data_response] * lines_length
+        return {
+            "currency": "PLN",
+            "total_net_amount": 12.34,
+            "total_gross_amount": 12.34,
+            "subtotal_net_amount": 12.34,
+            "subtotal_gross_amount": 12.34,
+            "shipping_price_gross_amount": shipping_price_gross_amount,
+            "shipping_price_net_amount": shipping_price_net_amount,
+            "shipping_tax_rate": shipping_tax_rate,
+            "lines": lines,
+        }
+
+    return factory
 
 
 @pytest.fixture

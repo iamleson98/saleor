@@ -84,12 +84,10 @@ class OrderGrantRefundCreateInput(BaseInputObjectType):
             "be equal or greater than provided `amount`."
             "If `amount` is not provided in the input and calculated automatically by "
             "Saleor, the `min(calculatedAmount, transaction.chargedAmount)` will be "
-            "used."
-            "Field will be required starting from Saleor 3.21."
-            + ADDED_IN_320
-            + PREVIEW_FEATURE
+            "used. "
+            "Field required starting from Saleor 3.21." + ADDED_IN_320 + PREVIEW_FEATURE
         ),
-        required=False,
+        required=True,
     )
 
     class Meta:
@@ -195,7 +193,7 @@ class OrderGrantRefundCreate(BaseMutation):
         reason = input.get("reason") or ""
         transaction_id = input.get("transaction_id")
         input_lines = input.get("lines", [])
-        grant_refund_for_shipping = input.get("grant_refund_for_shipping", None)
+        grant_refund_for_shipping = input.get("grant_refund_for_shipping", False)
 
         cls.validate_input(input)
 

@@ -12,7 +12,7 @@ from ...core.utils.translations import Translation
 from ...page.models import Page, PageType
 from ...permission.enums import PageTypePermissions, ProductTypePermissions
 from ...permission.utils import has_one_of_permissions
-from ...product.models import Product, ProductType, ProductVariant
+from ...product.models import Category, Collection, Product, ProductType, ProductVariant
 from .. import AttributeEntityType, AttributeInputType, AttributeType
 
 if TYPE_CHECKING:
@@ -243,7 +243,7 @@ class AttributeValueManager(models.Manager):
         query = self._prepare_query_for_bulk_operation(objects_data)
 
         # iterate over all records in db and check if they match any of objects data
-        for record in query.iterator():
+        for record in query.iterator(chunk_size=1000):
             # iterate over all objects data and check if they match any of records in db
             for index, obj in objects_enumerated:
                 if self._is_correct_record(record, obj):
@@ -282,7 +282,7 @@ class AttributeValueManager(models.Manager):
         query = self._prepare_query_for_bulk_operation(objects_data)
 
         # iterate over all records in db and check if they match any of objects data
-        for record in query.iterator():
+        for record in query.iterator(chunk_size=1000):
             # iterate over all objects data and check if they match any of records in db
             for index, obj in objects_enumerated:
                 if self._is_correct_record(record, obj):
@@ -321,7 +321,7 @@ class AttributeValueManager(models.Manager):
         if objects_to_be_updated:
             self.bulk_update(
                 objects_to_be_updated,
-                fields=update_fields,  # type: ignore[arg-type]
+                fields=update_fields,
             )
 
         return results
@@ -372,9 +372,26 @@ class AttributeValue(ModelWithExternalReference):
         blank=True,
     )
 
+    reference_collection = models.ForeignKey(
+        Collection,
+        related_name="references",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+
+    reference_category = models.ForeignKey(
+        Category,
+        related_name="references",
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+    )
+
     reference_page = models.ForeignKey(
         Page, related_name="references", on_delete=models.CASCADE, null=True, blank=True
     )
+
     sort_order = models.IntegerField(editable=False, db_index=True, null=True)
 
     objects = AttributeValueManager()

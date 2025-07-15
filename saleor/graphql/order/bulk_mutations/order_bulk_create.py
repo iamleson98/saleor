@@ -11,12 +11,14 @@ from uuid import UUID
 import graphene
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from graphql import GraphQLError
 from prices import Money
 
 from ....account.models import Address, User
+from ....account.utils import update_user_orders_count
 from ....app.models import App
 from ....channel.models import Channel
 from ....core import JobStatus
@@ -24,7 +26,12 @@ from ....core.prices import quantize_price
 from ....core.tracing import traced_atomic_transaction
 from ....core.utils.url import validate_storefront_url
 from ....core.weight import zero_weight
-from ....discount.models import OrderDiscount, VoucherCode
+from ....discount.models import (
+    DiscountType,
+    OrderDiscount,
+    OrderLineDiscount,
+    VoucherCode,
+)
 from ....discount.utils.manual_discount import apply_discount_to_value
 from ....giftcard.models import GiftCard
 from ....invoice.models import Invoice
@@ -42,9 +49,9 @@ from ....order.utils import update_order_display_gross_prices, updates_amounts_f
 from ....payment import TransactionEventType
 from ....payment.models import TransactionEvent, TransactionItem
 from ....permission.enums import OrderPermissions
-from ....product.models import ProductVariant
+from ....product.models import Product, ProductVariant
 from ....shipping.models import ShippingMethod, ShippingMethodChannelListing
-from ....tax.models import TaxClass
+from ....tax.models import TaxClass, TaxConfiguration
 from ....warehouse.management import stock_bulk_update
 from ....warehouse.models import Stock, Warehouse
 from ...account.i18n import I18nMixin
@@ -102,6 +109,7 @@ class OrderBulkFulfillment:
 @dataclass
 class OrderBulkOrderLine:
     line: OrderLine
+    line_discount: OrderLineDiscount | None
     warehouse: Warehouse
 
 
@@ -125,6 +133,7 @@ class OrderBulkCreateData:
     user: User | None = None
     billing_address: Address | None = None
     channel: Channel | None = None
+    tax_configuration: TaxConfiguration | None = None
     shipping_address: Address | None = None
     voucher_code: VoucherCode | None = None
     # error which ignores error policy and disqualify order
@@ -163,6 +172,14 @@ class OrderBulkCreateData:
     @property
     def all_order_lines(self) -> list[OrderLine]:
         return [order_line.line for order_line in self.lines]
+
+    @property
+    def all_order_line_discounts(self) -> list[OrderLineDiscount]:
+        return [
+            order_line.line_discount
+            for order_line in self.lines
+            if order_line.line_discount
+        ]
 
     @property
     def all_fulfillment_lines(self) -> list[FulfillmentLine]:
@@ -276,6 +293,8 @@ class LineAmounts:
     total_net: Decimal
     unit_gross: Decimal
     unit_net: Decimal
+    base_unit_price: Decimal
+    undiscounted_base_unit_price: Decimal
     unit_discount_value: Decimal
     unit_discount_type: str | None
     unit_discount_reason: str | None
@@ -765,6 +784,9 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             | Q(external_reference__in=identifiers.variant_external_references.keys)
         )
         channels = Channel.objects.filter(slug__in=identifiers.channel_slugs.keys)
+        tax_configurations = TaxConfiguration.objects.filter(
+            channel_id__in=channels.values("id")
+        )
         voucher_codes = VoucherCode.objects.filter(
             code__in=identifiers.voucher_codes.keys
         ).select_related("voucher")
@@ -779,6 +801,12 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         gift_cards = GiftCard.objects.filter(code__in=identifiers.gift_card_codes.keys)
         orders = Order.objects.filter(
             external_reference__in=identifiers.order_external_references.keys
+        )
+        product_ids = {variant.product_id for variant in variants}
+        product_id_to_product_type_id_map = dict(
+            Product.objects.filter(pk__in=product_ids).values_list(
+                "id", "product_type_id"
+            )
         )
 
         # Create dictionary
@@ -803,6 +831,11 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         for channel in channels:
             object_storage[f"Channel.slug.{channel.slug}"] = channel
 
+        for tax_configuration in tax_configurations:
+            object_storage[
+                f"TaxConfiguration.channel_id.{tax_configuration.channel_id}"
+            ] = tax_configuration
+
         for voucher_code in voucher_codes:
             object_storage[f"VoucherCode.code.{voucher_code.code}"] = voucher_code
 
@@ -816,6 +849,10 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
 
         for object in [*warehouses, *shipping_methods, *tax_classes, *apps]:
             object_storage[f"{object.__class__.__name__}.id.{object.pk}"] = object
+
+        object_storage["product_id_to_product_type_id_map"] = (
+            product_id_to_product_type_id_map
+        )
 
         return object_storage
 
@@ -1039,6 +1076,12 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             object_storage=object_storage,
         )
 
+        tax_configuration = None
+        if channel:
+            tax_configuration = object_storage.get(
+                f"TaxConfiguration.channel_id.{channel.id}"
+            )
+
         billing_address: Address | None = None
         billing_address_input = order_input["billing_address"]
         metadata_list: list[MetadataInput] = billing_address_input.pop("metadata", None)
@@ -1125,6 +1168,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
 
         order_data.user = user
         order_data.channel = channel
+        order_data.tax_configuration = tax_configuration
         order_data.billing_address = billing_address
         order_data.shipping_address = shipping_address
         order_data.voucher_code = voucher_code
@@ -1238,11 +1282,26 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
                 )
             )
 
+        prices_entered_with_tax = True
+        if tax_configuration := order_data.tax_configuration:
+            prices_entered_with_tax = tax_configuration.prices_entered_with_tax
+
+        undiscounted_base_unit_price_amount = (
+            undiscounted_unit_price_gross_amount
+            if prices_entered_with_tax
+            else undiscounted_unit_price_net_amount
+        )
+        base_unit_price = undiscounted_base_unit_price_amount
+        if unit_discount_amount:
+            base_unit_price -= unit_discount_amount
+
         return LineAmounts(
             total_gross=gross_amount,
             total_net=net_amount,
             unit_gross=unit_price_gross_amount,
             unit_net=unit_price_net_amount,
+            base_unit_price=base_unit_price,
+            undiscounted_base_unit_price=undiscounted_base_unit_price_amount,
             unit_discount_reason=unit_discount_reason,
             unit_discount_type=unit_discount_type,
             unit_discount_value=unit_discount_value,
@@ -1252,7 +1311,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             undiscounted_unit_net=undiscounted_unit_price_net_amount,
             unit_discount_amount=unit_discount_amount,
             quantity=quantity,
-            tax_rate=tax_rate,
+            tax_rate=tax_rate,  # type: ignore[arg-type]
         )
 
     @classmethod
@@ -1709,10 +1768,15 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
                     code=OrderBulkCreateErrorCode.FUTURE_DATE,
                 )
             )
-
+        product_type_id = None
+        if variant:
+            product_type_id = object_storage.get(
+                "product_id_to_product_type_id_map"
+            ).get(variant.product_id)
         order_line = OrderLine(
             order=order_data.order,
             variant=variant,
+            product_type_id=product_type_id,
             product_name=order_line_input.get("product_name") or variant.product.name,
             variant_name=order_line_input.get("variant_name")
             or (variant.name if variant else ""),
@@ -1738,11 +1802,27 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             undiscounted_unit_price_gross_amount=line_amounts.undiscounted_unit_gross,
             undiscounted_total_price_net_amount=line_amounts.undiscounted_total_net,
             undiscounted_total_price_gross_amount=line_amounts.undiscounted_total_gross,
+            base_unit_price_amount=line_amounts.base_unit_price,
+            undiscounted_base_unit_price_amount=line_amounts.undiscounted_base_unit_price,
             unit_discount_amount=line_amounts.unit_discount_amount,
             tax_rate=line_amounts.tax_rate,
             tax_class=line_tax_class,
             tax_class_name=order_line_input.get("tax_class_name"),
         )
+        line_discount = None
+        if line_amounts.unit_discount_amount > 0:
+            discount_amount = line_amounts.unit_discount_amount * line_amounts.quantity
+            line_discount = OrderLineDiscount(
+                line=order_line,
+                unique_type=DiscountType.MANUAL,
+                type=DiscountType.MANUAL,
+                value_type=line_amounts.unit_discount_type
+                or DiscountValueTypeEnum.FIXED.name,  # type: ignore[attr-defined]
+                value=line_amounts.unit_discount_value,
+                amount_value=discount_amount,
+                currency=order_line.currency,
+                reason=line_amounts.unit_discount_reason,
+            )
 
         if metadata := order_line_input.get("metadata"):
             cls.process_metadata(
@@ -1775,7 +1855,9 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
                 field=order_line.tax_class_private_metadata,
             )
 
-        return OrderBulkOrderLine(line=order_line, warehouse=warehouse)
+        return OrderBulkOrderLine(
+            line=order_line, line_discount=line_discount, warehouse=warehouse
+        )
 
     @classmethod
     def create_single_fulfillment(
@@ -2005,6 +2087,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         order_input,
         object_storage: dict[str, Any],
         info: ResolveInfo,
+        user_orders_count: dict[int, int],
     ) -> OrderBulkCreateData:
         order_data = OrderBulkCreateData()
         cls.validate_order_input(order_input, order_data, object_storage)
@@ -2062,6 +2145,8 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         order_data.order.created_at = order_input["created_at"]
         order_data.order.status = order_input["status"]
         order_data.order.user = order_data.user
+        if order_data.user:
+            user_orders_count[order_data.user.id] += 1
         order_data.order.billing_address = order_data.billing_address
         order_data.order.shipping_address = order_data.shipping_address
         order_data.order.language_code = order_input["language_code"]
@@ -2104,6 +2189,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         order_data.order.weight = order_input.get("weight") or zero_weight()
         order_data.order.currency = order_input["currency"]
         order_data.order.should_refresh_prices = False
+        order_data.order.lines_count = len(order_data.lines)
         if order_data.voucher_code:
             order_data.order.voucher_code = order_data.voucher_code.code
             order_data.order.voucher = order_data.voucher_code.voucher
@@ -2286,6 +2372,16 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
         )
         OrderLine.objects.bulk_create(order_lines)
 
+        order_line_discounts: list[OrderLineDiscount] = sum(
+            [
+                order_data.all_order_line_discounts
+                for order_data in orders_data
+                if order_data.order
+            ],
+            [],
+        )
+        OrderLineDiscount.objects.bulk_create(order_line_discounts)
+
         notes = [
             note
             for order_data in orders_data
@@ -2382,6 +2478,7 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             return OrderBulkCreate(count=0, results=result)
 
         orders_data: list[OrderBulkCreateData] = []
+        user_orders_count: dict[int, int] = defaultdict(int)
         with traced_atomic_transaction():
             # Create dictionary, which stores already resolved objects:
             #   - key for instances: "{model_name}.{key_name}.{key_value}"
@@ -2389,7 +2486,9 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
             object_storage: dict[str, Any] = cls.get_all_instances(orders_input)
             for order_input in orders_input:
                 orders_data.append(
-                    cls.create_single_order(order_input, object_storage, info)
+                    cls.create_single_order(
+                        order_input, object_storage, info, user_orders_count
+                    )
                 )
 
             error_policy = data.get("error_policy") or ErrorPolicy.REJECT_EVERYTHING
@@ -2417,5 +2516,6 @@ class OrderBulkCreate(BaseMutation, I18nMixin):
                 results.append(
                     OrderBulkCreateResult(order=order_detail, errors=order_data.errors)
                 )
-            count = sum([order_data.order is not None for order_data in orders_data])
-            return OrderBulkCreate(count=count, results=results)
+            transaction.on_commit(lambda: update_user_orders_count(user_orders_count))
+        count = sum([order_data.order is not None for order_data in orders_data])
+        return OrderBulkCreate(count=count, results=results)

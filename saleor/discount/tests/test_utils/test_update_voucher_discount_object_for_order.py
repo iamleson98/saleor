@@ -224,7 +224,9 @@ def test_update_voucher_discount_specific_product_with_apply_once_per_order(
     assert discount_2.reason == f"Voucher code: {order.voucher_code}"
     assert discount_2.value == voucher_2_discount_amount
 
-    unit_discount_amount_2 = discount_amount_2 / cheapest_line.quantity
+    unit_discount_amount_2 = quantize_price(
+        discount_amount_2 / cheapest_line.quantity, currency
+    )
     assert quantize_price(
         cheapest_line.base_unit_price_amount, currency
     ) == quantize_price(
@@ -321,7 +323,7 @@ def test_update_voucher_discount_apply_once_per_order_with_specific_product(
 
     # apply specific product voucher for line 1 variant
     voucher_listing_2 = voucher_2.channel_listings.get(channel=order.channel)
-    voucher_2_discount_value = Decimal("20")
+    voucher_2_discount_value = Decimal(20)
     voucher_listing_2.discount_value = voucher_2_discount_value
     voucher_listing_2.save(update_fields=["discount_value"])
     order.voucher = voucher_2
@@ -441,7 +443,7 @@ def test_update_voucher_discount_specific_product_with_entire_order(
 
     # apply entire order voucher
     voucher_listing_2 = voucher_2.channel_listings.get(channel=order.channel)
-    voucher_2_discount_value = Decimal("20")
+    voucher_2_discount_value = Decimal(20)
     voucher_listing_2.discount_value = voucher_2_discount_value
     voucher_listing_2.save(update_fields=["discount_value"])
     order.voucher = voucher_2
@@ -837,7 +839,7 @@ def test_update_voucher_discount_shipping_with_entire_order(
 
     # apply entire order voucher
     voucher_listing_2 = voucher_2.channel_listings.get(channel=order.channel)
-    voucher_2_discount_value = Decimal("20")
+    voucher_2_discount_value = Decimal(20)
     voucher_listing_2.discount_value = voucher_2_discount_value
     voucher_listing_2.save(update_fields=["discount_value"])
     order.voucher = voucher_2

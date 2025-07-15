@@ -771,7 +771,7 @@ def test_checkout_lines_update_with_custom_price_and_fixed_catalogue_promotion(
     reward_value = line_discount.value
 
     variant_id = graphene.Node.to_global_id("ProductVariant", line.variant_id)
-    custom_price = Decimal("15")
+    custom_price = Decimal(15)
 
     variables = {
         "id": to_global_id_or_none(checkout),
@@ -822,13 +822,13 @@ def test_checkout_lines_update_with_custom_price_and_percentage_catalogue_promot
 
     promotion_rule = line_discount.promotion_rule
     reward_value_type = RewardValueType.PERCENTAGE
-    reward_value = Decimal("50")
+    reward_value = Decimal(50)
     promotion_rule.reward_value_type = reward_value_type
     promotion_rule.reward_value = reward_value
     promotion_rule.save(update_fields=["reward_value_type", "reward_value"])
 
     variant_id = graphene.Node.to_global_id("ProductVariant", line.variant_id)
-    custom_price = Decimal("40")
+    custom_price = Decimal(40)
 
     variables = {
         "id": to_global_id_or_none(checkout),
@@ -886,7 +886,7 @@ def test_checkout_lines_update_with_0_custom_price_and_catalogue_promotion(
     line_discount = line.discounts.first()
 
     variant_id = graphene.Node.to_global_id("ProductVariant", line.variant_id)
-    custom_price = Decimal("0")
+    custom_price = Decimal(0)
 
     variables = {
         "id": to_global_id_or_none(checkout),
@@ -1809,3 +1809,108 @@ def test_checkout_lines_update_with_invalid_metadata(
 
     assert expected_error["field"] == "metadata"
     assert expected_error["code"] == "REQUIRED"
+
+
+def test_checkout_lines_update_with_empty_metadata_preserve_old(
+    user_api_client,
+    checkout_with_item,
+):
+    # given
+    checkout = checkout_with_item
+
+    assert checkout.lines.count() == 1
+
+    line = checkout.lines.first()
+
+    line.metadata["test_key"] = "old_value"
+    line.save(update_fields=["metadata"])
+
+    variant = line.variant
+
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    # when
+    variables = {
+        "id": to_global_id_or_none(checkout_with_item),
+        "lines": [
+            {
+                "variantId": variant_id,
+                "quantity": 1,
+                # Leave input empty to ensure it will not affect existing entries
+                "metadata": [],
+            }
+        ],
+    }
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINES_UPDATE, variables)
+
+    # then
+    content = get_graphql_content(response)
+
+    data = content["data"]["checkoutLinesUpdate"]
+
+    assert not data["errors"]
+
+    checkout.refresh_from_db()
+
+    assert checkout.lines.count() == 1
+
+    line = checkout.lines.first()
+
+    assert line.metadata["test_key"] == "old_value"
+
+    assert line.variant == variant
+
+
+def test_checkout_lines_update_with_new_metadata_merge_old(
+    user_api_client,
+    checkout_with_item,
+):
+    # given
+    checkout = checkout_with_item
+
+    assert checkout.lines.count() == 1
+
+    line = checkout.lines.first()
+
+    line.metadata["test_key"] = "old_value"
+    line.save(update_fields=["metadata"])
+
+    variant = line.variant
+
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    # when
+    variables = {
+        "id": to_global_id_or_none(checkout_with_item),
+        "lines": [
+            {
+                "variantId": variant_id,
+                "quantity": 1,
+                "metadata": [
+                    {
+                        "key": "new_key",
+                        "value": "new_value",
+                    }
+                ],
+            }
+        ],
+    }
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINES_UPDATE, variables)
+
+    # then
+    content = get_graphql_content(response)
+
+    data = content["data"]["checkoutLinesUpdate"]
+
+    assert not data["errors"]
+
+    checkout.refresh_from_db()
+
+    assert checkout.lines.count() == 1
+
+    line = checkout.lines.first()
+
+    assert line.metadata["test_key"] == "old_value"
+    assert line.metadata["new_key"] == "new_value"
+
+    assert line.variant == variant

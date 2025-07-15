@@ -1,5 +1,5 @@
 from decimal import Decimal
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import graphene
 import pytest
@@ -193,6 +193,53 @@ def test_order_update_shipping_no_shipping_method_channel_listings(
     assert len(errors) == 1
     assert errors[0]["code"] == OrderErrorCode.SHIPPING_METHOD_NOT_APPLICABLE.name
     assert errors[0]["field"] == "shippingMethod"
+
+
+def test_order_sets_shipping_tax_details_to_none_when_default_tax_used(
+    staff_api_client,
+    permission_group_manage_orders,
+    order_with_lines,
+    shipping_method,
+    other_shipping_method,
+):
+    # given
+    shipping_tax_class = shipping_method.tax_class
+    shipping_tax_class.private_metadata = {"key": "value"}
+    shipping_tax_class.metadata = {"key": "value"}
+    shipping_tax_class.save()
+
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order = order_with_lines
+    order.status = OrderStatus.UNCONFIRMED
+    order.shipping_tax_class = shipping_tax_class
+    order.shipping_tax_class_name = shipping_tax_class.name
+    order.shipping_tax_class_private_metadata = shipping_tax_class.private_metadata
+    order.shipping_tax_class_metadata = shipping_tax_class.metadata
+    order.save()
+
+    assert not other_shipping_method.tax_class
+
+    # when
+    query = ORDER_UPDATE_SHIPPING_QUERY
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    method_id = graphene.Node.to_global_id("ShippingMethod", other_shipping_method.id)
+    variables = {"order": order_id, "shippingMethod": method_id}
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["orderUpdateShipping"]
+    assert data["order"]["id"] == order_id
+
+    order.refresh_from_db()
+    assert order.status == OrderStatus.UNCONFIRMED
+    assert order.shipping_method == other_shipping_method
+    assert order.shipping_method_name == other_shipping_method.name
+
+    assert not order.shipping_tax_class
+    assert not order.shipping_tax_class_name
+    assert not order.shipping_tax_class_private_metadata
+    assert not order.shipping_tax_class_metadata
 
 
 def test_order_update_shipping_tax_included(
@@ -496,7 +543,7 @@ def test_order_update_shipping_with_voucher_discount(
     order.status = OrderStatus.DRAFT
     assert order.shipping_method != shipping_method
 
-    new_undiscounted_shipping_price = Money(Decimal("16"), currency)
+    new_undiscounted_shipping_price = Money(Decimal(16), currency)
     assert new_undiscounted_shipping_price > order.undiscounted_base_shipping_price
     new_shipping_listing = shipping_method.channel_listings.get(
         channel_id=order.channel_id
@@ -671,7 +718,7 @@ def test_order_update_shipping_triggers_webhooks(
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
 
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -754,7 +801,7 @@ def test_draft_order_update_shipping_triggers_proper_updated_webhook(
     assert order_delivery.event_type == WebhookEventAsyncType.DRAFT_ORDER_UPDATED
 
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -809,7 +856,7 @@ def test_draft_order_update_shipping_triggers_proper_updated_webhook_for_null_sh
     assert order_delivery.event_type == WebhookEventAsyncType.DRAFT_ORDER_UPDATED
 
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -866,7 +913,7 @@ def test_editable_order_update_shipping_triggers_proper_updated_webhook_for_null
     assert order_delivery.event_type == WebhookEventAsyncType.ORDER_UPDATED
 
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,

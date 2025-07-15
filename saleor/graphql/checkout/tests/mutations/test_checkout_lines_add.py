@@ -380,7 +380,7 @@ def test_add_to_existing_line_catalogue_and_order_discount_applies(
             }
         },
         reward_value_type=RewardValueType.PERCENTAGE,
-        reward_value=Decimal("50"),
+        reward_value=Decimal(50),
         reward_type=RewardType.SUBTOTAL_DISCOUNT,
     )
     rule.channels.add(channel_USD)
@@ -489,7 +489,7 @@ def test_add_to_existing_line_on_promotion_with_voucher_order_promotion_not_appl
             }
         },
         reward_value_type=RewardValueType.PERCENTAGE,
-        reward_value=Decimal("50"),
+        reward_value=Decimal(50),
         reward_type=RewardType.SUBTOTAL_DISCOUNT,
     )
     rule.channels.add(channel_USD)
@@ -621,9 +621,9 @@ def test_add_to_existing_line_catalogue_and_gift_reward_applies(
         if line_data["isGift"] is True
     ][0]
     unit_price = gift_line_data["unitPrice"]["gross"]["amount"]
-    assert Decimal(unit_price) == Decimal("0")
+    assert Decimal(unit_price) == Decimal(0)
     total_price = gift_line_data["totalPrice"]["gross"]["amount"]
-    assert Decimal(total_price) == Decimal("0")
+    assert Decimal(total_price) == Decimal(0)
 
     variants = gift_promotion_rule.gifts.all()
     variant_listings = ProductVariantChannelListing.objects.filter(variant__in=variants)
@@ -635,13 +635,13 @@ def test_add_to_existing_line_catalogue_and_gift_reward_applies(
     undiscounted_total_price = gift_line_data["undiscountedTotalPrice"]["amount"]
     assert Decimal(undiscounted_total_price) == top_price
     unit_price = gift_line_data["unitPrice"]["gross"]["amount"]
-    assert Decimal(unit_price) == Decimal("0")
+    assert Decimal(unit_price) == Decimal(0)
     total_price = gift_line_data["totalPrice"]["gross"]["amount"]
-    assert Decimal(total_price) == Decimal("0")
+    assert Decimal(total_price) == Decimal(0)
 
     checkout_discount_amount = data["checkout"]["discount"]["amount"]
     # Both catalogue and gift discount are only visible on line level
-    assert Decimal(checkout_discount_amount) == Decimal("0")
+    assert Decimal(checkout_discount_amount) == Decimal(0)
     assert checkout.discounts.count() == 0
 
 
@@ -777,6 +777,47 @@ def test_checkout_lines_add_with_invalid_metadata(
 
     assert errors[0]["code"] == "REQUIRED"
     assert errors[0]["field"] == "metadata"
+
+
+def test_checkout_lines_add_with_empty_metadata_and_old_exist(
+    user_api_client,
+    checkout_with_item,
+    stock,
+):
+    # given
+    checkout = checkout_with_item
+
+    old_meta = {"old_key": "old_value"}
+
+    line = checkout.lines.first()
+    line.store_value_in_metadata(old_meta)
+    line.save(update_fields=["metadata"])
+
+    lines, _ = fetch_checkout_lines(checkout)
+    assert calculate_checkout_quantity(lines) == 3
+    variant_id = graphene.Node.to_global_id("ProductVariant", line.variant_id)
+
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "lines": [
+            {
+                "variantId": variant_id,
+                "quantity": 1,
+                "metadata": [],
+            }
+        ],
+        "channelSlug": checkout.channel.slug,
+    }
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINES_ADD, variables)
+    get_graphql_content(response)
+
+    # then
+    checkout.refresh_from_db()
+    line = checkout.lines.last()
+
+    assert line.metadata.get("old_key") == "old_value"
 
 
 @mock.patch(
@@ -1180,7 +1221,7 @@ def test_checkout_lines_add_custom_price_and_catalogue_promotion(
     # given
     variant = variant_on_promotion
     variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
-    price = Decimal("16")
+    price = Decimal(16)
 
     promotion_rule = variant.channel_listings.get(
         channel=checkout.channel

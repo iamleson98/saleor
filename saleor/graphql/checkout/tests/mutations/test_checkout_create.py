@@ -1,7 +1,7 @@
 import datetime
 import warnings
 from unittest import mock
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import graphene
 import pytest
@@ -1400,9 +1400,11 @@ def test_checkout_create_logged_in_customer_custom_email(
     assert new_checkout is not None
     checkout_data = content["data"]["checkoutCreate"]["checkout"]
     assert checkout_data["token"] == str(new_checkout.token)
+    assert checkout_data["email"] == custom_email
+    assert new_checkout.email == custom_email
+
     checkout_user = new_checkout.user
     assert customer.id == checkout_user.id
-    assert new_checkout.email == custom_email
 
 
 def test_checkout_create_logged_in_customer_custom_addresses(
@@ -2761,7 +2763,10 @@ def test_checkout_create_triggers_webhooks(
         webhook_id=checkout_created_webhook.id
     )
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": checkout_create_delivery.id},
+        kwargs={
+            "event_delivery_id": checkout_create_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,

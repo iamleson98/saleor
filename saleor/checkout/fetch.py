@@ -27,6 +27,7 @@ from ..shipping.utils import (
 )
 from ..warehouse import WarehouseClickAndCollectOption
 from ..warehouse.models import Warehouse
+from ..webhook.transport.shipping_helpers import convert_to_app_id_with_identifier
 
 if TYPE_CHECKING:
     from ..account.models import Address, User
@@ -219,7 +220,6 @@ class CheckoutInfo:
                 checkout.save(update_fields=fields_to_update)
 
     def get_delivery_method_info(self) -> "DeliveryMethodBase":
-        from ..webhook.transport.shipping import convert_to_app_id_with_identifier
         from .utils import get_external_shipping_id
 
         delivery_method: ShippingMethodData | Warehouse | None = None
@@ -289,7 +289,11 @@ class CheckoutInfo:
         return address.country.code
 
     def get_customer_email(self) -> str | None:
-        return self.user.email if self.user else self.checkout.email
+        if self.checkout.email:
+            return self.checkout.email
+        if self.user:
+            return self.user.email
+        return None
 
 
 @dataclass(frozen=True)
@@ -578,7 +582,7 @@ def _get_product_channel_listing(
     product_channel_listing = product_channel_listing_mapping.get(product.id)
     if product.id not in product_channel_listing_mapping:
         for channel_listing in product.channel_listings.all():
-            if channel_listing.channel_id == channel_id:  # type: ignore[attr-defined]
+            if channel_listing.channel_id == channel_id:
                 product_channel_listing = channel_listing
         product_channel_listing_mapping[product.id] = product_channel_listing
     return product_channel_listing

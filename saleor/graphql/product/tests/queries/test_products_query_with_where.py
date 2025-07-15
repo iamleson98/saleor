@@ -11,7 +11,11 @@ from .....attribute.tests.model_helpers import (
 )
 from .....attribute.utils import associate_attribute_values_to_instance
 from .....product import ProductTypeKind
-from .....product.models import Product, ProductChannelListing, ProductType
+from .....product.models import (
+    Product,
+    ProductChannelListing,
+    ProductType,
+)
 from .....warehouse.models import Allocation, Reservation, Stock, Warehouse
 from ....tests.utils import get_graphql_content
 
@@ -227,6 +231,44 @@ def test_product_filter_by_categories(
     variables = {
         "channel": channel_USD.slug,
         "where": {"category": {"oneOf": category_ids}},
+    }
+
+    # when
+    response = api_client.post_graphql(PRODUCTS_WHERE_QUERY, variables)
+
+    # then
+    data = get_graphql_content(response)
+    products = data["data"]["products"]["edges"]
+    assert len(products) == 2
+    returned_slugs = {node["node"]["slug"] for node in products}
+    assert returned_slugs == {
+        product_list[0].slug,
+        product_list[1].slug,
+    }
+
+
+def test_product_filter_by_subcategories(
+    api_client, product_list, channel_USD, category_list
+):
+    # given
+    subcategory_1 = category_list[0]
+    subcategory_2 = category_list[1]
+    parent_category = category_list[2]
+
+    subcategory_1.parent = parent_category
+    subcategory_2.parent = parent_category
+    subcategory_1.save()
+    subcategory_2.save()
+
+    product_list[0].category = subcategory_1
+    product_list[1].category = subcategory_2
+    Product.objects.bulk_update(product_list, ["category"])
+
+    category_id = graphene.Node.to_global_id("Category", parent_category.pk)
+
+    variables = {
+        "channel": channel_USD.slug,
+        "where": {"category": {"eq": category_id}},
     }
 
     # when
@@ -650,7 +692,63 @@ def test_product_filter_by_minimal_price(
     assert returned_slugs == {product_list[index].slug for index in indexes}
 
 
-def test_products_filter_by_attributes(
+def test_products_filter_by_attributes_value_slug(
+    api_client,
+    product_list,
+    channel_USD,
+):
+    # given
+    product_type = ProductType.objects.create(
+        name="Custom Type",
+        slug="custom-type",
+        has_variants=True,
+        is_shipping_required=True,
+        kind=ProductTypeKind.NORMAL,
+    )
+    attribute = Attribute.objects.create(slug="new_attr", name="Attr")
+    attribute.product_types.add(product_type)
+    attr_value = AttributeValue.objects.create(
+        attribute=attribute, name="First", slug="first"
+    )
+    # Associate the same attribute value to two products
+    product1 = product_list[0]
+    product1.product_type = product_type
+    product1.save()
+    associate_attribute_values_to_instance(
+        product1,
+        {attribute.pk: [attr_value]},
+    )
+
+    product2 = product_list[1]
+    product2.product_type = product_type
+    product2.save()
+    associate_attribute_values_to_instance(
+        product2,
+        {attribute.pk: [attr_value]},
+    )
+
+    variables = {
+        "channel": channel_USD.slug,
+        "where": {
+            "attributes": [{"slug": attribute.slug, "values": [attr_value.slug]}],
+        },
+    }
+
+    # when
+    response = api_client.post_graphql(PRODUCTS_WHERE_QUERY, variables)
+    content = get_graphql_content(response)
+
+    # then
+    product1_id = graphene.Node.to_global_id("Product", product1.id)
+    product2_id = graphene.Node.to_global_id("Product", product2.id)
+    products = content["data"]["products"]["edges"]
+
+    assert len(products) == 2
+    returned_ids = {product["node"]["id"] for product in products}
+    assert returned_ids == {product1_id, product2_id}
+
+
+def test_products_filter_by_attributes_value_name(
     api_client,
     product_list,
     channel_USD,
@@ -673,13 +771,13 @@ def test_products_filter_by_attributes(
     product.save()
     associate_attribute_values_to_instance(
         product,
-        {attribute.id: [attr_value]},
+        {attribute.pk: [attr_value]},
     )
 
     variables = {
         "channel": channel_USD.slug,
         "where": {
-            "attributes": [{"slug": attribute.slug, "values": [attr_value.slug]}],
+            "attributes": [{"slug": attribute.slug, "valueNames": [attr_value.name]}],
         },
     }
 
@@ -719,7 +817,7 @@ def test_products_filter_by_attributes_empty_list(
     product.save()
     associate_attribute_values_to_instance(
         product,
-        {attribute.id: [attr_value]},
+        {attribute.pk: [attr_value]},
     )
 
     variables = {

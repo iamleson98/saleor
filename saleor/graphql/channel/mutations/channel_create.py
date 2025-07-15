@@ -23,7 +23,7 @@ from ...core.doc_category import (
     DOC_CATEGORY_PRODUCTS,
 )
 from ...core.mutations import DeprecatedModelMutation
-from ...core.scalars import Day, Hour, Minute
+from ...core.scalars import DateTime, Day, Hour, Minute
 from ...core.types import BaseInputObjectType, ChannelError, NonNullList
 from ...core.types import common as common_types
 from ...core.utils import WebhookEventInfo
@@ -150,6 +150,26 @@ class OrderSettingsInput(BaseInputObjectType):
         ),
     )
 
+    use_legacy_line_discount_propagation = graphene.Boolean(
+        required=False,
+        description=(
+            "This flag only affects orders created from checkout and applies "
+            "specifically to vouchers of the types: `SPECIFIC_PRODUCT` and "
+            "`ENTIRE_ORDER` with `applyOncePerOrder` enabled."
+            "\n- When legacy propagation is enabled, discounts from these "
+            "vouchers are represented as `OrderDiscount` objects, attached to "
+            "the order and returned in the `Order.discounts` field. "
+            "Additionally, percentage-based vouchers are converted to "
+            "fixed-value discounts."
+            "\n- When legacy propagation is disabled, discounts are represented "
+            "as `OrderLineDiscount` objects, attached to individual lines and "
+            "returned in the `OrderLine.discounts` field. In this case, "
+            "percentage-based vouchers retain their original type."
+            "\nIn future releases, `OrderLineDiscount` will become the default "
+            "behavior, and this flag will be deprecated and removed." + ADDED_IN_321
+        ),
+    )
+
     class Meta:
         doc_category = DOC_CATEGORY_ORDERS
 
@@ -161,6 +181,29 @@ class PaymentSettingsInput(BaseInputObjectType):
             "Determine the transaction flow strategy to be used. "
             "Include the selected option in the payload sent to the payment app, as a "
             "requested action for the transaction."
+        ),
+    )
+    release_funds_for_expired_checkouts = graphene.Boolean(
+        required=False,
+        description=(
+            "Determine if the funds for expired checkouts should be released automatically."
+            + ADDED_IN_320
+        ),
+    )
+    checkout_ttl_before_releasing_funds = Hour(
+        required=False,
+        description=(
+            "The time in hours after which funds for expired checkouts will be released."
+            + ADDED_IN_320
+        ),
+    )
+    checkout_release_funds_cut_off_date = DateTime(
+        required=False,
+        description=(
+            "Specifies the earliest date on which funds for expired checkouts can begin "
+            "to be released. Expired checkouts dated before this cut-off will not have their "
+            "funds released. Additionally, no funds will be released for checkouts that are "
+            "more than one year old, regardless of the cut-off date." + ADDED_IN_320
         ),
     )
 
@@ -274,8 +317,11 @@ class ChannelCreate(DeprecatedModelMutation):
             cleaned_input["slug"] = slugify(slug)
         if stock_settings := cleaned_input.get("stock_settings"):
             cleaned_input["allocation_strategy"] = stock_settings["allocation_strategy"]
-        if order_settings := cleaned_input.get("order_settings"):
-            clean_input_order_settings(order_settings, cleaned_input, instance)
+
+        order_settings = cleaned_input.get("order_settings") or {
+            "use_legacy_line_discount_propagation_for_order": False
+        }
+        clean_input_order_settings(order_settings, cleaned_input, instance)
 
         if checkout_settings := cleaned_input.get("checkout_settings"):
             clean_input_checkout_settings(checkout_settings, cleaned_input)

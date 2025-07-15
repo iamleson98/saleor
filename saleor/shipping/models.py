@@ -7,12 +7,11 @@ from django.db import models
 from django.db.models import OuterRef, Q, Subquery
 from django_countries.fields import CountryField
 from django_measurement.models import MeasurementField
-from django_prices.models import MoneyField
 from measurement.measures import Weight
 from prices import Money
 
 from ..channel.models import Channel
-from ..core.db.fields import SanitizedJSONField
+from ..core.db.fields import MoneyField, SanitizedJSONField
 from ..core.models import ModelWithMetadata
 from ..core.units import WeightUnits
 from ..core.utils.editorjs import clean_editor_js
@@ -188,7 +187,7 @@ class ShippingMethodQueryset(models.QuerySet["ShippingMethod"]):
         if lines is None:
             # TODO: lines should comes from args in get_valid_shipping_methods_for_order
             lines = list(
-                instance.lines.prefetch_related("variant__product")  # type: ignore[misc] # this is hack # noqa: E501
+                instance.lines.prefetch_related("variant__product")
                 .using(database_connection_name)
                 .all()
             )

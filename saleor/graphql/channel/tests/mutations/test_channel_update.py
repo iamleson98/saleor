@@ -48,6 +48,7 @@ CHANNEL_UPDATE_MUTATION = """
                     allowUnpaidOrders
                     includeDraftOrderInVoucherUsage
                     draftOrderLinePriceFreezePeriod
+                    useLegacyLineDiscountPropagation
                 }
             }
             errors{
@@ -1535,6 +1536,9 @@ CHANNEL_UPDATE_MUTATION_WITH_PAYMENT_SETTINGS = """
                 currencyCode
                 paymentSettings {
                     defaultTransactionFlowStrategy
+                    releaseFundsForExpiredCheckouts
+                    checkoutTtlBeforeReleasingFunds
+                    checkoutReleaseFundsCutOffDate
                 }
             }
             errors{
@@ -1590,6 +1594,88 @@ def test_channel_update_default_transaction_flow_strategy(
     )
 
 
+def test_channel_update_checkout_release_settings(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    date = datetime.datetime(2022, 5, 12, 0, 0, 0, tzinfo=datetime.UTC)
+    ttl_before_releasing_funds = 7
+    variables = {
+        "id": channel_id,
+        "input": {
+            "paymentSettings": {
+                "releaseFundsForExpiredCheckouts": False,
+                "checkoutTtlBeforeReleasingFunds": ttl_before_releasing_funds,
+                "checkoutReleaseFundsCutOffDate": date,
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_PAYMENT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    assert not channel_data["paymentSettings"]["releaseFundsForExpiredCheckouts"]
+    assert (
+        channel_data["paymentSettings"]["checkoutTtlBeforeReleasingFunds"]
+        == ttl_before_releasing_funds
+    )
+    assert (
+        channel_data["paymentSettings"]["checkoutReleaseFundsCutOffDate"]
+        == "2022-05-12T00:00:00+00:00"
+    )
+
+    channel_USD.refresh_from_db()
+    assert not channel_USD.release_funds_for_expired_checkouts
+    assert channel_USD.checkout_ttl_before_releasing_funds == datetime.timedelta(
+        hours=ttl_before_releasing_funds
+    )
+    assert channel_USD.checkout_release_funds_cut_off_date == date
+
+
+def test_channel_create_set_incorect_checkout_ttl_before_releasing_funds(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    ttl_before_releasing_funds = 0
+    variables = {
+        "id": channel_id,
+        "input": {
+            "paymentSettings": {
+                "checkoutTtlBeforeReleasingFunds": ttl_before_releasing_funds,
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_PAYMENT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    errors = content["data"]["channelUpdate"]["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] == "checkoutTtlBeforeReleasingFunds"
+    assert errors[0]["code"] == ChannelErrorCode.INVALID.name
+
+
 def test_channel_update_default_transaction_flow_strategy_with_payment_permission(
     permission_manage_payments,
     staff_api_client,
@@ -1629,3 +1715,56 @@ def test_channel_update_default_transaction_flow_strategy_with_payment_permissio
         channel_USD.default_transaction_flow_strategy
         == TransactionFlowStrategyEnum.AUTHORIZATION.value
     )
+
+
+@pytest.mark.parametrize(
+    ("use_legacy_input", "expected_result", "current_value_on_db"),
+    [
+        ({"useLegacyLineDiscountPropagation": True}, True, True),
+        ({"useLegacyLineDiscountPropagation": True}, True, False),
+        ({"useLegacyLineDiscountPropagation": False}, False, True),
+        ({"useLegacyLineDiscountPropagation": False}, False, False),
+        (None, True, True),
+        (None, False, False),
+        ({"allowUnpaidOrders": False}, False, False),
+        ({"allowUnpaidOrders": True}, True, True),
+    ],
+)
+def test_channel_update_set_use_legacy_line_discount_propagation(
+    use_legacy_input,
+    expected_result,
+    current_value_on_db,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_USD.use_legacy_line_discount_propagation_for_order = current_value_on_db
+    channel_USD.save()
+
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "orderSettings": use_legacy_input,
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert (
+        channel_data["orderSettings"]["useLegacyLineDiscountPropagation"]
+        == expected_result
+    )
+    assert channel_USD.use_legacy_line_discount_propagation_for_order == expected_result

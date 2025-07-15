@@ -2,6 +2,7 @@ import sys
 from collections import defaultdict
 from dataclasses import asdict
 from decimal import Decimal
+from typing import cast
 
 import graphene
 from graphene import relay
@@ -27,7 +28,7 @@ from ....product.utils.variants import get_variant_selection_attributes
 from ....tax.utils import (
     get_display_gross_prices,
     get_tax_calculation_strategy,
-    get_tax_rate_for_tax_class,
+    get_tax_rate_for_country,
 )
 from ....thumbnail.utils import (
     get_image_or_proxy_url,
@@ -37,7 +38,11 @@ from ....thumbnail.utils import (
 from ....warehouse.reservations import is_reservation_enabled
 from ...account import types as account_types
 from ...account.enums import CountryCodeEnum
-from ...attribute.filters import AttributeFilterInput, AttributeWhereInput
+from ...attribute.filters import (
+    AttributeFilterInput,
+    AttributeWhereInput,
+    filter_attribute_search,
+)
 from ...attribute.resolvers import resolve_attributes
 from ...attribute.types import (
     AssignedVariantAttribute,
@@ -45,16 +50,18 @@ from ...attribute.types import (
     AttributeCountableConnection,
     SelectedAttribute,
 )
-from ...channel import ChannelContext, ChannelQsContext
 from ...channel.dataloaders import ChannelBySlugLoader
-from ...channel.types import ChannelContextType
 from ...channel.utils import get_default_channel_slug_or_graphql_error
 from ...core.connection import (
     CountableConnection,
     create_connection_slice,
     filter_connection_queryset,
 )
-from ...core.context import get_database_connection_name
+from ...core.context import (
+    ChannelContext,
+    ChannelQsContext,
+    get_database_connection_name,
+)
 from ...core.descriptions import ADDED_IN_321, DEPRECATED_IN_3X_INPUT, RICH_CONTENT
 from ...core.doc_category import DOC_CATEGORY_PRODUCTS
 from ...core.enums import ReportingPeriod
@@ -78,6 +85,7 @@ from ...core.types import (
     ThumbnailField,
     Weight,
 )
+from ...core.types.context import ChannelContextType
 from ...core.utils import from_global_id_or_error
 from ...core.validators import validate_one_of_args_is_in_query
 from ...meta.types import ObjectWithMetadata
@@ -94,10 +102,9 @@ from ...site.dataloaders import load_site_callback
 from ...tax.dataloaders import (
     ProductChargeTaxesByTaxClassIdLoader,
     TaxClassByIdLoader,
-    TaxClassByProductIdLoader,
-    TaxClassByVariantIdLoader,
     TaxClassCountryRateByTaxClassIDLoader,
     TaxClassDefaultRateByCountryLoader,
+    TaxClassIdByProductIdLoader,
     TaxConfigurationByChannelId,
     TaxConfigurationPerCountryByTaxConfigurationIDLoader,
 )
@@ -578,27 +585,55 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
         info,
         variant_selection: str | None = None,
     ):
-        def apply_variant_selection_filter(selected_attributes):
+        def apply_variant_selection_filter(
+            selected_attributes,
+        ) -> list[SelectedAttribute]:
             if not variant_selection or variant_selection == VariantAttributeScope.ALL:
-                return selected_attributes
+                return [
+                    SelectedAttribute(
+                        attribute=ChannelContext(
+                            selected_att["attribute"], root.channel_slug
+                        ),
+                        values=[
+                            ChannelContext(value, root.channel_slug)
+                            for value in selected_att["values"]
+                        ],
+                    )
+                    for selected_att in selected_attributes
+                ]
             attributes = [
                 (selected_att["attribute"], selected_att["variant_selection"])
                 for selected_att in selected_attributes
             ]
+            attributes = cast(list[tuple[attribute_models.Attribute, bool]], attributes)
             variant_selection_attrs = [
                 attr for attr, _ in get_variant_selection_attributes(attributes)
             ]
 
             if variant_selection == VariantAttributeScope.VARIANT_SELECTION:
-                return [
-                    selected_attribute
-                    for selected_attribute in selected_attributes
-                    if selected_attribute["attribute"] in variant_selection_attrs
+                attributes_to_return = [
+                    selected_att
+                    for selected_att in selected_attributes
+                    if selected_att["attribute"] in variant_selection_attrs
                 ]
+            else:
+                attributes_to_return = [
+                    selected_att
+                    for selected_att in selected_attributes
+                    if selected_att["attribute"] not in variant_selection_attrs
+                ]
+
             return [
-                selected_attribute
-                for selected_attribute in selected_attributes
-                if selected_attribute["attribute"] not in variant_selection_attrs
+                SelectedAttribute(
+                    attribute=ChannelContext(
+                        selected_att["attribute"], root.channel_slug
+                    ),
+                    values=[
+                        ChannelContext(value, root.channel_slug)
+                        for value in selected_att["values"]
+                    ],
+                )
+                for selected_att in attributes_to_return
             ]
 
         return (
@@ -628,14 +663,16 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
             context
         ).load((root.node.id, channel_slug))
         channel = ChannelBySlugLoader(context).load(channel_slug)
-        tax_class = TaxClassByVariantIdLoader(context).load(root.node.id)
+        tax_class_id_loader = TaxClassIdByProductIdLoader(context).load(
+            root.node.product_id
+        )
 
         def load_tax_configuration(data):
             (
                 product_channel_listing,
                 variant_channel_listing,
                 channel,
-                tax_class,
+                tax_class_id,
             ) = data
 
             if not variant_channel_listing or not product_channel_listing:
@@ -664,8 +701,8 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
                             if default_country_rate_obj
                             else Decimal(0)
                         )
-                        tax_rate = get_tax_rate_for_tax_class(
-                            tax_class, country_rates, default_tax_rate, country_code
+                        tax_rate = get_tax_rate_for_country(
+                            country_rates, default_tax_rate, country_code
                         )
 
                         availability = get_variant_availability(
@@ -683,10 +720,10 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
 
                     country_rates = (
                         TaxClassCountryRateByTaxClassIDLoader(context).load(
-                            tax_class.pk
+                            tax_class_id
                         )
-                        if tax_class
-                        else []
+                        if tax_class_id
+                        else Promise.resolve([])
                     )
                     default_rate = TaxClassDefaultRateByCountryLoader(context).load(
                         country_code
@@ -712,7 +749,7 @@ class ProductVariant(ChannelContextType[models.ProductVariant]):
                 product_channel_listing,
                 variant_channel_listing,
                 channel,
-                tax_class,
+                tax_class_id_loader,
             ]
         ).then(load_tax_configuration)
 
@@ -955,9 +992,14 @@ class Product(ChannelContextType[models.Product]):
     product_variants = FilterConnectionField(
         ProductVariantCountableConnection,
         filter=ProductVariantFilterInput(
-            description="Filtering options for product variant."
+            description=(
+                f"Filtering options for product variant. {DEPRECATED_IN_3X_INPUT} "
+                "Use `where` filter instead."
+            )
         ),
-        where=ProductVariantWhereInput(description="Where filtering options."),
+        where=ProductVariantWhereInput(
+            description="Where filtering options for product variants."
+        ),
         sort_by=ProductVariantSortingInput(description="Sort products variants."),
         description=(
             "List of variants for the product. Requires the following permissions to "
@@ -1139,14 +1181,14 @@ class Product(ChannelContextType[models.Product]):
                 (root.node.id, channel_slug)
             )
         )
-        tax_class = TaxClassByProductIdLoader(context).load(root.node.id)
+        tax_class_id_loader = TaxClassIdByProductIdLoader(context).load(root.node.id)
 
         def load_tax_configuration(data):
             (
                 channel,
                 product_channel_listing,
                 variants_channel_listing,
-                tax_class,
+                tax_class_id,
             ) = data
 
             if not variants_channel_listing:
@@ -1178,8 +1220,8 @@ class Product(ChannelContextType[models.Product]):
                             if default_country_rate_obj
                             else Decimal(0)
                         )
-                        tax_rate = get_tax_rate_for_tax_class(
-                            tax_class, country_rates, default_tax_rate, country_code
+                        tax_rate = get_tax_rate_for_country(
+                            country_rates, default_tax_rate, country_code
                         )
 
                         availability = get_product_availability(
@@ -1196,10 +1238,10 @@ class Product(ChannelContextType[models.Product]):
 
                     country_rates = (
                         TaxClassCountryRateByTaxClassIDLoader(context).load(
-                            tax_class.pk
+                            tax_class_id
                         )
-                        if tax_class
-                        else []
+                        if tax_class_id
+                        else Promise.resolve([])
                     )
                     default_rate = TaxClassDefaultRateByCountryLoader(context).load(
                         country_code
@@ -1225,7 +1267,7 @@ class Product(ChannelContextType[models.Product]):
                 channel,
                 product_channel_listing,
                 variants_channel_listing,
-                tax_class,
+                tax_class_id_loader,
             ]
         ).then(load_tax_configuration)
 
@@ -1290,12 +1332,33 @@ class Product(ChannelContextType[models.Product]):
     @staticmethod
     def resolve_attribute(root: ChannelContext[models.Product], info, slug):
         def get_selected_attribute_by_slug(
-            attributes: list[SelectedAttribute],
+            attributes: (
+                list[
+                    dict[
+                        str,
+                        attribute_models.Attribute
+                        | list[attribute_models.AttributeValue],
+                    ]
+                ]
+                | None
+            ),
         ) -> SelectedAttribute | None:
-            return next(
-                (atr for atr in attributes if atr["attribute"].slug == slug),
-                None,
-            )
+            if attributes is None:
+                return None
+
+            for atr in attributes:
+                attribute = atr["attribute"]
+                attribute = cast(attribute_models.Attribute, attribute)
+                if attribute.slug == slug:
+                    values = atr["values"]
+                    values = cast(list[attribute_models.AttributeValue], values)
+                    return SelectedAttribute(
+                        attribute=ChannelContext(attribute, root.channel_slug),
+                        values=[
+                            ChannelContext(value, root.channel_slug) for value in values
+                        ],
+                    )
+            return None
 
         requestor = get_user_or_app_from_context(info.context)
         if (
@@ -1316,18 +1379,53 @@ class Product(ChannelContextType[models.Product]):
 
     @staticmethod
     def resolve_attributes(root: ChannelContext[models.Product], info):
+        def wrap_with_channel_context(
+            attributes: (
+                list[
+                    dict[
+                        str,
+                        attribute_models.Attribute
+                        | list[attribute_models.AttributeValue],
+                    ]
+                ]
+                | None
+            ),
+        ) -> list[SelectedAttribute] | None:
+            if attributes is None:
+                return None
+
+            response = []
+            for attr_data in attributes:
+                attribute = attr_data["attribute"]
+                attribute = cast(attribute_models.Attribute, attribute)
+                values = attr_data["values"]
+                values = cast(list[attribute_models.AttributeValue], values)
+                response.append(
+                    SelectedAttribute(
+                        attribute=ChannelContext(attribute, root.channel_slug),
+                        values=[
+                            ChannelContext(value, root.channel_slug) for value in values
+                        ],
+                    )
+                )
+            return response
+
         requestor = get_user_or_app_from_context(info.context)
         if (
             requestor
             and requestor.is_active
             and requestor.has_perm(ProductPermissions.MANAGE_PRODUCTS)
         ):
-            return SelectedAttributesAllByProductIdLoader(info.context).load(
-                root.node.id
+            return (
+                SelectedAttributesAllByProductIdLoader(info.context)
+                .load(root.node.id)
+                .then(wrap_with_channel_context)
             )
-        return SelectedAttributesVisibleInStorefrontByProductIdLoader(
-            info.context
-        ).load(root.node.id)
+        return (
+            SelectedAttributesVisibleInStorefrontByProductIdLoader(info.context)
+            .load(root.node.id)
+            .then(wrap_with_channel_context)
+        )
 
     @staticmethod
     def resolve_media_by_id(root: ChannelContext[models.Product], info, *, id):
@@ -1446,11 +1544,12 @@ class Product(ChannelContextType[models.Product]):
         requestor = get_user_or_app_from_context(info.context)
 
         def _resolve_product_variants(channel_obj):
+            limited_channel_access = False if channel_slug is None else True
             qs = resolve_product_variants(
                 info,
                 channel=channel_obj,
                 product_id=root.node.pk,
-                limited_channel_access=True,
+                limited_channel_access=limited_channel_access,
                 requestor=requestor,
             )
             kwargs["channel"] = qs.channel_slug
@@ -1461,11 +1560,13 @@ class Product(ChannelContextType[models.Product]):
                 qs, info, kwargs, ProductVariantCountableConnection
             )
 
-        return (
-            ChannelBySlugLoader(info.context)
-            .load(root.channel_slug)
-            .then(_resolve_product_variants)
-        )
+        if channel_slug := root.channel_slug:
+            return (
+                ChannelBySlugLoader(info.context)
+                .load(channel_slug)
+                .then(_resolve_product_variants)
+            )
+        return _resolve_product_variants(None)
 
     @staticmethod
     def resolve_channel_listings(root: ChannelContext[models.Product], info):
@@ -1729,8 +1830,16 @@ class ProductType(ModelObjectType[models.ProductType]):
     )
     available_attributes = FilterConnectionField(
         AttributeCountableConnection,
-        filter=AttributeFilterInput(),
-        where=AttributeWhereInput(),
+        filter=AttributeFilterInput(
+            description=(
+                "Filtering options for attributes of this product type. "
+                f"{DEPRECATED_IN_3X_INPUT} Use `where` filter instead."
+            )
+        ),
+        where=AttributeWhereInput(
+            description="Where filtering options for attributes of this product type."
+        ),
+        search=graphene.String(description="Search attributes."),
         description="List of attributes which can be assigned to this product type.",
         permissions=[ProductPermissions.MANAGE_PRODUCTS],
     )
@@ -1748,7 +1857,9 @@ class ProductType(ModelObjectType[models.ProductType]):
         @allow_writer_in_context(info.context)
         def with_tax_class(data):
             tax_class, manager = data
-            tax_data = manager.get_tax_code_from_object_meta(tax_class)
+            tax_data = manager.get_tax_code_from_object_meta(
+                tax_class, channel_slug=None
+            )
             return TaxType(tax_code=tax_data.code, description=tax_data.description)
 
         if root.tax_class_id:
@@ -1761,7 +1872,7 @@ class ProductType(ModelObjectType[models.ProductType]):
     @staticmethod
     def resolve_product_attributes(root: models.ProductType, info):
         def unpack_attributes(attributes):
-            return [attr for attr, *_ in attributes]
+            return [ChannelContext(attr, None) for attr, *_ in attributes]
 
         requestor = get_user_or_app_from_context(info.context)
         if (
@@ -1789,12 +1900,14 @@ class ProductType(ModelObjectType[models.ProductType]):
     ):
         def apply_variant_selection_filter(attributes):
             if not variant_selection or variant_selection == VariantAttributeScope.ALL:
-                return [attr for attr, *_ in attributes]
+                return [ChannelContext(attr, None) for attr, *_ in attributes]
             variant_selection_attrs = get_variant_selection_attributes(attributes)
             if variant_selection == VariantAttributeScope.VARIANT_SELECTION:
-                return [attr for attr, *_ in variant_selection_attrs]
+                return [
+                    ChannelContext(attr, None) for attr, *_ in variant_selection_attrs
+                ]
             return [
-                attr
+                ChannelContext(attr, None)
                 for attr, variant_selection in attributes
                 if (attr, variant_selection) not in variant_selection_attrs
             ]
@@ -1826,17 +1939,26 @@ class ProductType(ModelObjectType[models.ProductType]):
         def apply_variant_selection_filter(attributes):
             if not variant_selection or variant_selection == VariantAttributeScope.ALL:
                 return [
-                    {"attribute": attr, "variant_selection": variant_selection}
+                    {
+                        "attribute": ChannelContext(attr, None),
+                        "variant_selection": variant_selection,
+                    }
                     for attr, variant_selection in attributes
                 ]
             variant_selection_attrs = get_variant_selection_attributes(attributes)
             if variant_selection == VariantAttributeScope.VARIANT_SELECTION:
                 return [
-                    {"attribute": attr, "variant_selection": variant_selection}
+                    {
+                        "attribute": ChannelContext(attr, None),
+                        "variant_selection": variant_selection,
+                    }
                     for attr, variant_selection in variant_selection_attrs
                 ]
             return [
-                {"attribute": attr, "variant_selection": variant_selection}
+                {
+                    "attribute": ChannelContext(attr, None),
+                    "variant_selection": variant_selection,
+                }
                 for attr, variant_selection in attributes
                 if (attr, variant_selection) not in variant_selection_attrs
             ]
@@ -1884,7 +2006,9 @@ class ProductType(ModelObjectType[models.ProductType]):
         return _resolve_products(None)
 
     @staticmethod
-    def resolve_available_attributes(root: models.ProductType, info, **kwargs):
+    def resolve_available_attributes(
+        root: models.ProductType, info, search=None, **kwargs
+    ):
         qs = attribute_models.Attribute.objects.using(
             get_database_connection_name(info.context)
         ).get_unassigned_product_type_attributes(root.pk)
@@ -1892,6 +2016,9 @@ class ProductType(ModelObjectType[models.ProductType]):
         qs = filter_connection_queryset(
             qs, kwargs, info.context, allow_replica=info.context.allow_replica
         )
+        if search:
+            qs = filter_attribute_search(qs, None, search)
+        qs = ChannelQsContext(qs=qs, channel_slug=None)
         return create_connection_slice(qs, info, kwargs, AttributeCountableConnection)
 
     @staticmethod

@@ -1,11 +1,14 @@
 import datetime
 import logging
+from collections import Counter
 
 from django.conf import settings
 from django.db.models import Exists, F, Func, OuterRef, Subquery, Value
 from django.db.models.functions import Greatest
 from django.utils import timezone
 
+from ..account.lock_objects import user_qs_select_for_update
+from ..account.models import User
 from ..celeryconf import app
 from ..channel.models import Channel
 from ..core.db.connection import allow_writer
@@ -78,24 +81,24 @@ def _bulk_release_voucher_usage(order_ids):
         Exists(vouchers.filter(id=OuterRef("voucher_id"))),
     ).annotate(order_count=Subquery(count_orders))
 
-    # We observed mismatch between code.used and number of orders which utilize the code
-    # In some cases it is expected, but we want to further investigate the issue
-    suspected_codes = [code.code for code in codes if code.used < code.order_count]
-    if suspected_codes:
-        logger.error(
-            "Voucher codes: [%s] have been used more times than indicated by `code.used` field.",
-            ",".join(suspected_codes),
-        )
-
     codes.update(used=Greatest(F("used") - F("order_count"), 0))
 
     orders = Order.objects.filter(id__in=order_ids)
     voucher_codes = VoucherCode.objects.filter(
         Exists(orders.filter(voucher_code=OuterRef("code")))
     )
+    # Only delete voucher customers for orders that have no user associated
+    # as voucher are associated with user's email account
     VoucherCustomer.objects.filter(
         Exists(voucher_codes.filter(id=OuterRef("voucher_code_id"))),
-        Exists(orders.filter(user_email=OuterRef("customer_email"))),
+        Exists(
+            orders.filter(user_email=OuterRef("customer_email"), user_id__isnull=True)
+        ),
+    ).delete()
+
+    VoucherCustomer.objects.filter(
+        Exists(voucher_codes.filter(id=OuterRef("voucher_code_id"))),
+        Exists(orders.filter(user__email=OuterRef("customer_email"))),
     ).delete()
 
 
@@ -207,8 +210,32 @@ def delete_expired_orders_task():
     # Wrap ids_batch with a list as it comes from the replica DB and delete is done on
     # the writer DB. This avoids mixing querysets from different DBs.
     ids_batch = list(ids_batch)
+    user_orders_count = Counter(
+        Order.objects.filter(id__in=ids_batch, user_id__isnull=False)
+        .using(settings.DATABASE_CONNECTION_REPLICA_NAME)
+        .values_list("user_id", flat=True)
+    )
 
     with allow_writer():
         Order.objects.filter(id__in=ids_batch).delete()
 
+    reduce_user_number_of_orders(user_orders_count)
+
     delete_expired_orders_task.delay()
+
+
+@allow_writer()
+def reduce_user_number_of_orders(user_orders_count: dict[int, int]):
+    user_ids = list(user_orders_count.keys())
+    users_to_update = []
+    with traced_atomic_transaction():
+        users = user_qs_select_for_update().filter(id__in=user_ids)
+        users_in_bulk = users.in_bulk()
+        for user_id, order_count in user_orders_count.items():
+            user = users_in_bulk.get(user_id)
+            if user:
+                user.number_of_orders = max(user.number_of_orders - order_count, 0)
+                users_to_update.append(user)
+
+        if users_to_update:
+            User.objects.bulk_update(users_to_update, ["number_of_orders"])

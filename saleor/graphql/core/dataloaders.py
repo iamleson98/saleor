@@ -1,13 +1,14 @@
 from collections import defaultdict
 from collections.abc import Iterable
-from typing import Generic, TypeVar
+from typing import TypeVar
 
-import opentracing
-import opentracing.tags
+from django.conf import settings
+from graphql import GraphQLError
 from promise import Promise
 from promise.dataloader import DataLoader as BaseLoader
 
 from ...core.db.connection import allow_writer_in_context
+from ...core.telemetry import saleor_attributes, tracer
 from ...thumbnail.models import Thumbnail
 from ...thumbnail.utils import get_thumbnail_format
 from . import SaleorContext
@@ -17,7 +18,7 @@ K = TypeVar("K")
 R = TypeVar("R")
 
 
-class DataLoader(BaseLoader, Generic[K, R]):
+class DataLoader[K, R](BaseLoader):
     context_key: str
     context: SaleorContext
     database_connection_name: str
@@ -43,21 +44,63 @@ class DataLoader(BaseLoader, Generic[K, R]):
     def batch_load_fn(  # pylint: disable=method-hidden
         self, keys: Iterable[K]
     ) -> Promise[list[R]]:
-        with opentracing.global_tracer().start_active_span(
-            "dataloader.batch_load"
-        ) as scope:
-            span = scope.span
-            span.set_tag("resource.name", self.__class__.__name__)
+        with tracer.start_as_current_span(
+            self.__class__.__name__, end_on_exit=False
+        ) as span:
+            span.set_attribute(
+                saleor_attributes.OPERATION_NAME, "dataloader.batch_load"
+            )
 
             with allow_writer_in_context(self.context):
                 results = self.batch_load(keys)
 
             if not isinstance(results, Promise):
+                span.set_attribute(
+                    saleor_attributes.GRAPHQL_RESOLVER_ROW_COUNT, len(results)
+                )
+                span.end()
                 return Promise.resolve(results)
-            return results
+
+            def did_fulfill(results: list[R]) -> list[R]:
+                span.set_attribute(
+                    saleor_attributes.GRAPHQL_RESOLVER_ROW_COUNT, len(results)
+                )
+                span.end()
+                return results
+
+            def did_reject(error: Exception) -> list[R]:
+                span.end()
+                raise error
+
+            return results.then(did_fulfill, did_reject)
 
     def batch_load(self, keys: Iterable[K]) -> Promise[list[R]] | list[R]:
         raise NotImplementedError()
+
+
+class DataLoaderWithLimit(DataLoader[K, R]):
+    """Data loader base class that support a limit on the number of items returned."""
+
+    def __new__(cls, context: SaleorContext, limit: int = settings.NESTED_QUERY_LIMIT):
+        loader = super().__new__(cls, context)
+        cls.limit_validation(limit)
+        loader.limit = limit
+        return loader
+
+    def __init__(
+        self, context: SaleorContext, limit: int = settings.NESTED_QUERY_LIMIT
+    ) -> None:
+        if getattr(self, "limit", None) != limit:
+            self.limit_validation(limit)
+            self.limit = limit
+        super().__init__(context=context)
+
+    @staticmethod
+    def limit_validation(limit: int) -> None:
+        if limit > settings.NESTED_QUERY_LIMIT:
+            raise GraphQLError(
+                f"The limit for attribute values cannot be greater than {settings.NESTED_QUERY_LIMIT}."
+            )
 
 
 class BaseThumbnailBySizeAndFormatLoader(

@@ -1359,7 +1359,7 @@ def test_get_discount_for_checkout_shipping_voucher_limited_countries(
             None,
             Money(2, "USD"),
             10,
-            "This offer is only valid for orders over $5.00.",
+            "This offer is only valid for orders over 5.00 USD.",
         ),
         (
             True,
@@ -1383,7 +1383,7 @@ def test_get_discount_for_checkout_shipping_voucher_limited_countries(
             10,
             Money(2, "USD"),
             9,
-            "This offer is only valid for orders over $5.00.",
+            "This offer is only valid for orders over 5.00 USD.",
         ),
     ],
 )
@@ -1607,7 +1607,7 @@ def test_recalculate_checkout_discount_with_promotion(
     )
 
     line_info = lines[0]
-    reward_value = Decimal("1")
+    reward_value = Decimal(1)
     rule = catalogue_promotion_without_rules.rules.create(
         name="Percentage promotion rule",
         catalogue_predicate={
@@ -1691,7 +1691,7 @@ def test_recalculate_checkout_discount_with_checkout_discount_voucher_not_applic
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
     line_info = lines[0]
-    reward_value = Decimal("1")
+    reward_value = Decimal(1)
     rule = catalogue_promotion_without_rules.rules.create(
         name="Fixed promotion rule",
         order_predicate={

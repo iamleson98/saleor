@@ -25,16 +25,27 @@ def transaction_item_generator():
         canceled_value=Decimal(0),
         use_old_id=False,
         last_refund_success=True,
+        payment_method_type=None,
+        payment_method_name=None,
+        cc_brand=None,
+        cc_first_digits=None,
+        cc_last_digits=None,
+        cc_exp_month=None,
+        cc_exp_year=None,
+        metadata=None,
+        currency="USD",
     ):
         if available_actions is None:
             available_actions = []
+        if metadata is None:
+            metadata = {}
         transaction = TransactionItem.objects.create(
             token=uuid.uuid4(),
             name=name,
             message=message,
             psp_reference=psp_reference,
             available_actions=available_actions,
-            currency="USD",
+            currency=currency,
             order_id=order_id,
             checkout_id=checkout_id,
             app_identifier=app.identifier if app else None,
@@ -42,6 +53,14 @@ def transaction_item_generator():
             user=user,
             use_old_id=use_old_id,
             last_refund_success=last_refund_success,
+            payment_method_type=payment_method_type,
+            payment_method_name=payment_method_name,
+            cc_brand=cc_brand,
+            cc_first_digits=cc_first_digits,
+            cc_last_digits=cc_last_digits,
+            cc_exp_month=cc_exp_month,
+            cc_exp_year=cc_exp_year,
+            metadata=metadata,
         )
         create_manual_adjustment_events(
             transaction=transaction,

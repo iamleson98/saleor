@@ -3,7 +3,6 @@ from typing import cast
 from urllib.parse import urlencode
 
 import graphene
-from django.contrib.auth.tokens import default_token_generator
 from django.core.exceptions import ValidationError
 
 from .....account import models
@@ -11,6 +10,7 @@ from .....account.error_codes import AccountErrorCode
 from .....account.notifications import send_set_password_notification
 from .....account.search import USER_SEARCH_FIELDS, prepare_user_search_document_value
 from .....core.exceptions import PermissionDenied
+from .....core.tokens import token_generator
 from .....core.tracing import traced_atomic_transaction
 from .....core.utils.url import prepare_url, validate_storefront_url
 from .....permission.enums import AccountPermissions
@@ -86,7 +86,9 @@ class StaffCreate(DeprecatedModelMutation):
         ]
 
     @classmethod
-    def check_permissions(cls, context, permissions=None, **data):
+    def check_permissions(
+        cls, context, permissions=None, require_all_permissions=False, **data
+    ):
         app = get_app_promise(context).get()
         if app:
             raise PermissionDenied(
@@ -182,7 +184,7 @@ class StaffCreate(DeprecatedModelMutation):
                 channel_slug=None,
                 staff=True,
             )
-            token = default_token_generator.make_token(user)
+            token = token_generator.make_token(user)
             params = urlencode({"email": user.email, "token": token})
             cls.call_event(
                 manager.staff_set_password_requested,

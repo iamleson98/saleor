@@ -2,8 +2,9 @@ import graphene
 
 from ....page import models
 from ....permission.enums import PagePermissions
-from ...attribute.utils import PageAttributeAssignmentMixin
+from ...attribute.utils.attribute_assignment import AttributeAssignmentMixin
 from ...core import ResolveInfo
+from ...core.context import ChannelContext
 from ...core.types import PageError
 from ...plugins.dataloaders import get_plugin_manager_promise
 from ..types import Page
@@ -26,9 +27,9 @@ class PageUpdate(PageCreate):
         error_type_field = "page_errors"
 
     @classmethod
-    def clean_attributes(cls, attributes: dict, page_type: models.PageType):
+    def clean_attributes(cls, attributes: list[dict], page_type: models.PageType):
         attributes_qs = page_type.page_attributes.prefetch_related("values")
-        cleaned_attributes = PageAttributeAssignmentMixin.clean_input(
+        cleaned_attributes = AttributeAssignmentMixin.clean_input(
             attributes, attributes_qs, creation=False, is_page_attributes=True
         )
         return cleaned_attributes
@@ -38,3 +39,9 @@ class PageUpdate(PageCreate):
         super(PageCreate, cls).save(info, instance, cleaned_input)
         manager = get_plugin_manager_promise(info.context).get()
         cls.call_event(manager.page_updated, instance)
+
+    @classmethod
+    def success_response(cls, instance):
+        response = super().success_response(instance)
+        response.page = ChannelContext(instance, channel_slug=None)
+        return response

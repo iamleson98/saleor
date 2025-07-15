@@ -1,25 +1,24 @@
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, cast
 
 import graphene
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from .....app.models import App
-from .....checkout.actions import transaction_amounts_for_checkout_updated
 from .....core.exceptions import PermissionDenied
 from .....core.prices import quantize_price
 from .....core.tracing import traced_atomic_transaction
 from .....core.utils.events import call_event
 from .....order import models as order_models
-from .....order.actions import order_transaction_updated
-from .....order.fetch import fetch_order_info
-from .....order.search import update_order_search_vector
 from .....order.utils import (
     calculate_order_granted_refund_status,
-    updates_amounts_for_order,
 )
 from .....payment import OPTIONAL_AMOUNT_EVENTS, TransactionEventType
 from .....payment import models as payment_models
+from .....payment.interface import PaymentMethodDetails
+from .....payment.lock_objects import (
+    transaction_item_qs_select_for_update,
+)
 from .....payment.transaction_item_calculations import recalculate_transaction_amounts
 from .....payment.utils import (
     authorization_success_already_exists,
@@ -27,12 +26,14 @@ from .....payment.utils import (
     get_already_existing_event,
     get_transaction_event_amount,
     truncate_transaction_event_message,
+    update_transaction_item_with_payment_method_details,
 )
 from .....permission.auth_filters import AuthorizationFilters
 from .....permission.enums import PaymentPermissions
 from .....webhook.event_types import WebhookEventAsyncType
 from ....app.dataloaders import get_app_promise
 from ....core import ResolveInfo
+from ....core.descriptions import ADDED_IN_322
 from ....core.doc_category import DOC_CATEGORY_PAYMENTS
 from ....core.enums import TransactionEventReportErrorCode
 from ....core.mutations import DeprecatedModelMutation
@@ -46,7 +47,12 @@ from ....plugins.dataloaders import get_plugin_manager_promise
 from ...enums import TransactionActionEnum, TransactionEventTypeEnum
 from ...types import TransactionEvent, TransactionItem
 from ...utils import check_if_requestor_has_access
-from .utils import get_transaction_item
+from .shared import (
+    PaymentMethodDetailsInput,
+    get_payment_method_details,
+    validate_payment_method_details_input,
+)
+from .utils import get_transaction_item, process_order_or_checkout_with_transaction
 
 if TYPE_CHECKING:
     from .....plugins.manager import PluginsManager
@@ -132,6 +138,11 @@ class TransactionEventReport(DeprecatedModelMutation):
             f"\n\n{MetadataInputDescription.PRIVATE_METADATA_INPUT}",
             required=False,
         )
+        payment_method_details = PaymentMethodDetailsInput(
+            description="Details of the payment method used for the transaction."
+            + ADDED_IN_322,
+            required=False,
+        )
 
     class Meta:
         description = (
@@ -184,9 +195,10 @@ class TransactionEventReport(DeprecatedModelMutation):
         transaction: payment_models.TransactionItem,
         transaction_event: payment_models.TransactionEvent,
         available_actions: list[str] | None = None,
-        app: Optional["App"] = None,
+        app: App | None = None,
         metadata: list[MetadataInput] | None = None,
         private_metadata: list[MetadataInput] | None = None,
+        payment_details_data: PaymentMethodDetails | None = None,
     ):
         fields_to_update = [
             "authorized_value",
@@ -218,6 +230,13 @@ class TransactionEventReport(DeprecatedModelMutation):
         if available_actions is not None:
             transaction.available_actions = available_actions
             fields_to_update.append("available_actions")
+
+        if payment_details_data:
+            fields_to_update.extend(
+                update_transaction_item_with_payment_method_details(
+                    transaction, payment_details_data
+                )
+            )
 
         recalculate_transaction_amounts(transaction, save=False)
         transaction_has_assigned_app = transaction.app_id or transaction.app_identifier
@@ -290,6 +309,7 @@ class TransactionEventReport(DeprecatedModelMutation):
         available_actions=None,
         transaction_metadata: list[MetadataInput] | None = None,
         transaction_private_metadata: list[MetadataInput] | None = None,
+        payment_method_details: PaymentMethodDetailsInput | None = None,
     ):
         validate_one_of_args_is_in_mutation("id", id, "token", token)
         transaction = get_transaction_item(id, token)
@@ -319,6 +339,13 @@ class TransactionEventReport(DeprecatedModelMutation):
             related_granted_refund = cls.get_related_granted_refund(
                 psp_reference, transaction
             )
+
+        payment_details_data: PaymentMethodDetails | None = None
+        if payment_method_details:
+            validate_payment_method_details_input(
+                payment_method_details, TransactionEventReportErrorCode
+            )
+            payment_details_data = get_payment_method_details(payment_method_details)
 
         message = (
             truncate_transaction_event_message(message) if message is not None else ""
@@ -369,8 +396,8 @@ class TransactionEventReport(DeprecatedModelMutation):
             # thread race. We need to be sure, that we will always create a single event
             # on our side for specific action.
             _transaction = (
-                payment_models.TransactionItem.objects.filter(pk=transaction.pk)
-                .select_for_update(of=("self",))
+                transaction_item_qs_select_for_update()
+                .filter(pk=transaction.pk)
                 .first()
             )
 
@@ -417,44 +444,34 @@ class TransactionEventReport(DeprecatedModelMutation):
                 app=app,
                 metadata=transaction_metadata,
                 private_metadata=transaction_private_metadata,
+                payment_details_data=payment_details_data,
             )
-            if transaction.order_id:
-                order = cast(order_models.Order, transaction.order)
-                update_order_search_vector(order, save=False)
-                updates_amounts_for_order(order, save=False)
-                order.save(
-                    update_fields=[
-                        "total_charged_amount",
-                        "charge_status",
-                        "updated_at",
-                        "total_authorized_amount",
-                        "authorize_status",
-                        "search_vector",
-                    ]
+            process_order_or_checkout_with_transaction(
+                transaction,
+                manager,
+                user,
+                app,
+                previous_authorized_value,
+                previous_charged_value,
+                previous_refunded_value,
+                related_granted_refund=related_granted_refund,
+            )
+        else:
+            updated_fields = []
+            if available_actions is not None and set(
+                transaction.available_actions
+            ) != set(available_actions):
+                transaction.available_actions = available_actions
+                updated_fields.append("available_actions")
+
+            if payment_details_data:
+                updated_fields.extend(
+                    update_transaction_item_with_payment_method_details(
+                        transaction, payment_details_data
+                    )
                 )
-                order_info = fetch_order_info(order)
-                order_transaction_updated(
-                    order_info=order_info,
-                    transaction_item=transaction,
-                    manager=manager,
-                    user=user,
-                    app=app,
-                    previous_authorized_value=previous_authorized_value,
-                    previous_charged_value=previous_charged_value,
-                    previous_refunded_value=previous_refunded_value,
-                )
-                if related_granted_refund:
-                    calculate_order_granted_refund_status(related_granted_refund)
-            if transaction.checkout_id:
-                manager = get_plugin_manager_promise(info.context).get()
-                transaction_amounts_for_checkout_updated(
-                    transaction, manager, user, app
-                )
-        elif available_actions is not None and set(
-            transaction.available_actions
-        ) != set(available_actions):
-            transaction.available_actions = available_actions
-            transaction.save(update_fields=["available_actions"])
+            if updated_fields:
+                transaction.save(update_fields=updated_fields)
 
         return cls(
             already_processed=already_processed,

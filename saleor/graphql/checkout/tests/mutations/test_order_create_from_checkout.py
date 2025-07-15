@@ -15,15 +15,9 @@ from .....checkout.error_codes import OrderCreateFromCheckoutErrorCode
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from .....checkout.models import Checkout, CheckoutLine
 from .....checkout.payment_utils import update_checkout_payment_statuses
-from .....core.taxes import (
-    TaxDataError,
-    TaxDataErrorMessage,
-    TaxError,
-    zero_money,
-    zero_taxed_money,
-)
+from .....core.taxes import TaxDataError, TaxError, zero_money, zero_taxed_money
 from .....discount import DiscountType, DiscountValueType, RewardValueType
-from .....discount.models import CheckoutLineDiscount
+from .....discount.models import CheckoutLineDiscount, OrderLineDiscount
 from .....giftcard import GiftCardEvents
 from .....giftcard.models import GiftCard, GiftCardEvent
 from .....order import OrderOrigin, OrderStatus
@@ -563,6 +557,7 @@ def test_order_from_checkout_gift_card_bought(
     checkout.metadata_storage.store_value_in_private_metadata(
         items={"accepted": "false"}
     )
+    checkout.email = customer_user.email
     checkout.user = customer_user
     checkout.save()
     checkout.metadata_storage.save()
@@ -865,7 +860,7 @@ def test_order_from_checkout_with_voucher_and_gift_card(
     shipping_listing = shipping_method.channel_listings.get(
         channel_id=checkout_with_voucher_percentage.channel_id
     )
-    shipping_listing.price_amount = Decimal("35")
+    shipping_listing.price_amount = Decimal(35)
     shipping_listing.save(update_fields=["price_amount"])
 
     code = voucher_percentage.codes.first()
@@ -1013,15 +1008,15 @@ def test_order_from_checkout_with_voucher_apply_once_per_order(
     assert checkout_line_variant == order_line.variant
     assert order.shipping_address == address
     assert order.shipping_method == checkout.shipping_method
-    order_discount = order.discounts.filter(type=DiscountType.VOUCHER).first()
-    assert order_discount
+    order_line_discount = OrderLineDiscount.objects.get()
+    assert order_line_discount
     assert (
-        order_discount.amount_value
+        order_line_discount.amount_value
         == (order.undiscounted_total - order.total).gross.amount
     )
-    assert order_discount.type == DiscountType.VOUCHER
-    assert order_discount.voucher == voucher_percentage
-    assert order_discount.voucher_code == code.code
+    assert order_line_discount.type == DiscountType.VOUCHER
+    assert order_line_discount.voucher == voucher_percentage
+    assert order_line_discount.voucher_code == code.code
 
     code.refresh_from_db()
     assert code.used == voucher_used_count + 1
@@ -1080,15 +1075,16 @@ def test_order_from_checkout_with_specific_product_voucher(
     assert checkout_line_variant == order_line.variant
     assert order.shipping_address == address
     assert order.shipping_method == checkout.shipping_method
-    order_discount = order.discounts.filter(type=DiscountType.VOUCHER).first()
-    assert order_discount
+
+    order_line_discount = OrderLineDiscount.objects.get()
+    assert order_line_discount
     assert (
-        order_discount.amount_value
+        order_line_discount.amount_value
         == (order.undiscounted_total - order.total).gross.amount
     )
-    assert order_discount.type == DiscountType.VOUCHER
-    assert order_discount.voucher == voucher_specific_product_type
-    assert order_discount.voucher_code == code.code
+    assert order_line_discount.type == DiscountType.VOUCHER
+    assert order_line_discount.voucher == voucher_specific_product_type
+    assert order_line_discount.voucher_code == code.code
 
     code.refresh_from_db()
     assert code.used == voucher_used_count + 1
@@ -1111,7 +1107,7 @@ def test_order_from_checkout_with_free_shipping_voucher_and_gift_card(
     shipping_listing = shipping_method.channel_listings.get(
         channel_id=checkout.channel_id
     )
-    shipping_amount = Decimal("35")
+    shipping_amount = Decimal(35)
     shipping_listing.price_amount = shipping_amount
     shipping_listing.save(update_fields=["price_amount"])
 
@@ -2666,16 +2662,18 @@ def test_order_from_draft_create_0_total_value_from_giftcard(
     )
 
 
-@patch("saleor.checkout.calculations.validate_tax_data")
+@patch(
+    "saleor.checkout.calculations._get_taxes_for_checkout",
+    side_effect=TaxDataError("Invalid data"),
+)
 def test_order_from_checkout_tax_error(
-    mock_validate_tax_data,
+    mocked_get_taxes_for_order,
     app_api_client,
     permission_handle_checkouts,
     checkout_with_items_and_shipping,
     caplog,
 ):
     # given
-    mock_validate_tax_data.side_effect = TaxDataError(TaxDataErrorMessage.EMPTY)
     checkout = checkout_with_items_and_shipping
     variables = {"id": graphene.Node.to_global_id("Checkout", checkout.pk)}
 

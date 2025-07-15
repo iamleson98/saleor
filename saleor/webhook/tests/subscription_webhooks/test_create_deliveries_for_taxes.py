@@ -22,10 +22,7 @@ from ....graphql.core.utils import to_global_id_or_none
 from ....order import OrderStatus
 from ....order.calculations import fetch_order_prices_if_expired
 from ....order.models import Order
-from ....order.utils import (
-    create_order_discount_for_order,
-    update_discount_for_order_line,
-)
+from ....order.utils import create_manual_order_discount, update_discount_for_order_line
 from ....plugins.manager import get_plugins_manager
 from ....tax import TaxableObjectDiscountType
 from ...event_types import WebhookEventSyncType
@@ -646,7 +643,7 @@ def test_draft_order_calculate_taxes_line_discount(
         ]
     )
 
-    discount_value = Decimal("5")
+    discount_value = Decimal(5)
     update_discount_for_order_line(
         order_line, order, "test discount", DiscountValueType.FIXED, discount_value
     )
@@ -721,7 +718,7 @@ def test_draft_order_calculate_taxes_entire_order_voucher(
     voucher.type = VoucherType.ENTIRE_ORDER
     voucher.save(update_fields=["type"])
 
-    discount_amount = Decimal("10")
+    discount_amount = Decimal(10)
     channel_listing = voucher.channel_listings.get()
     channel_listing.discount_value = discount_amount
     channel_listing.save(update_fields=["discount_value"])
@@ -813,7 +810,7 @@ def test_draft_order_calculate_taxes_apply_once_per_order_voucher(
     voucher.apply_once_per_order = True
     voucher.save(update_fields=["type", "apply_once_per_order"])
 
-    discount_amount = Decimal("10")
+    discount_amount = Decimal(10)
     order_discount = order.discounts.first()
     order_discount.value = discount_amount
     order_discount.save(update_fields=["value"])
@@ -923,7 +920,7 @@ def test_order_calculate_taxes_specific_product_voucher(
     voucher_listing = voucher_specific_product_type.channel_listings.get(
         channel=order.channel
     )
-    unit_discount_amount = Decimal("2")
+    unit_discount_amount = Decimal(2)
     voucher_listing.discount_value = unit_discount_amount
     voucher_listing.save(update_fields=["discount_value"])
     voucher_specific_product_type.variants.add(order_line.variant)
@@ -1034,7 +1031,7 @@ def test_order_calculate_taxes_with_manual_discount(
     order = order_with_lines
     shipping_price_amount = order.base_shipping_price_amount
 
-    discount_value = Decimal("20")
+    discount_value = Decimal(20)
     order.discounts.create(
         value_type=DiscountValueType.FIXED,
         value=discount_value,
@@ -1127,7 +1124,7 @@ def test_order_calculate_taxes_empty_order(
     order, webhook_app, permission_handle_taxes, channel_USD
 ):
     # given
-    order = Order.objects.create(channel=channel_USD, currency="USD")
+    order = Order.objects.create(channel=channel_USD, currency="USD", lines_count=0)
     webhook_app.permissions.add(permission_handle_taxes)
     webhook = Webhook.objects.create(
         name="Webhook",
@@ -1270,12 +1267,11 @@ def test_order_calculate_taxes_order_voucher_and_manual_discount(
     order.save(update_fields=["voucher_id"])
 
     manual_reward = Decimal(10)
-    create_order_discount_for_order(
+    create_manual_order_discount(
         order=order,
         reason="Manual discount",
         value_type=DiscountValueType.FIXED,
         value=manual_reward,
-        type=DiscountType.MANUAL,
     )
 
     subtotal_manual_reward_portion = (subtotal_amount / total_amount) * manual_reward
@@ -1375,12 +1371,11 @@ def test_order_calculate_taxes_order_promotion_and_manual_discount(
     assert rule.reward_type == RewardType.SUBTOTAL_DISCOUNT
 
     manual_reward = Decimal(10)
-    create_order_discount_for_order(
+    create_manual_order_discount(
         order=order,
         reason="Manual discount",
         value_type=DiscountValueType.FIXED,
         value=manual_reward,
-        type=DiscountType.MANUAL,
     )
 
     subtotal_manual_reward_portion = (subtotal_amount / total_amount) * manual_reward
@@ -1474,12 +1469,11 @@ def test_order_calculate_taxes_free_shipping_voucher_and_manual_discount_fixed(
     create_or_update_voucher_discount_objects_for_order(order)
 
     manual_reward = Decimal(10)
-    create_order_discount_for_order(
+    create_manual_order_discount(
         order=order,
         reason="Manual discount",
         value_type=DiscountValueType.FIXED,
         value=manual_reward,
-        type=DiscountType.MANUAL,
     )
 
     # Since shipping is free, whole manual discount should be applied to subtotal
@@ -1576,12 +1570,11 @@ def test_order_calculate_taxes_free_shipping_voucher_and_manual_discount_percent
     total_amount -= shipping_price_amount
 
     manual_reward = Decimal(10)
-    create_order_discount_for_order(
+    create_manual_order_discount(
         order=order,
         reason="Manual discount",
         value_type=DiscountValueType.PERCENTAGE,
         value=manual_reward,
-        type=DiscountType.MANUAL,
     )
 
     # Since shipping is free, whole manual discount should be applied to subtotal

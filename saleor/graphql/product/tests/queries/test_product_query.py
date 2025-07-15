@@ -1,4 +1,5 @@
 import datetime
+import logging
 from unittest.mock import MagicMock
 
 import graphene
@@ -490,6 +491,70 @@ def test_product_only_with_variants_without_sku_query_by_anonymous(
 
     variant = product.variants.first()
     variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+    assert product_data["productVariants"]["edges"] == [{"node": {"id": variant_id}}]
+    # deprecated field test
+    assert product_data["variants"] == [{"id": variant_id}]
+
+
+def test_product_variants_query_by_staff_no_channel_provided(
+    staff_api_client, product, permission_manage_products, channel_USD, channel_PLN
+):
+    # given
+    product_id = graphene.Node.to_global_id("Product", product.pk)
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+
+    variables = {
+        "id": product_id,
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_PRODUCT_BY_ID,
+        variables=variables,
+    )
+
+    # then
+    content = get_graphql_content(response)
+    product_data = content["data"]["product"]
+
+    assert product_data is not None
+    assert product_data["id"] == product_id
+
+    variant = product.variants.first()
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    assert product_data["productVariants"]["edges"] == [{"node": {"id": variant_id}}]
+    # deprecated field test
+    assert product_data["variants"] == [{"id": variant_id}]
+
+
+def test_product_variants_query_by_app_no_channel_provided(
+    app_api_client, product, permission_manage_products, channel_USD, channel_PLN
+):
+    # given
+    product_id = graphene.Node.to_global_id("Product", product.pk)
+    app_api_client.app.permissions.add(permission_manage_products)
+
+    variables = {
+        "id": product_id,
+    }
+
+    # when
+    response = app_api_client.post_graphql(
+        QUERY_PRODUCT_BY_ID,
+        variables=variables,
+    )
+
+    # then
+    content = get_graphql_content(response)
+    product_data = content["data"]["product"]
+
+    assert product_data is not None
+    assert product_data["id"] == product_id
+
+    variant = product.variants.first()
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
     assert product_data["productVariants"]["edges"] == [{"node": {"id": variant_id}}]
     # deprecated field test
     assert product_data["variants"] == [{"id": variant_id}]
@@ -1319,13 +1384,20 @@ def test_product_query_error_when_id_and_slug_provided(
     product,
     graphql_log_handler,
 ):
+    # given
+    handled_errors_logger = logging.getLogger("saleor.graphql.errors.handled")
+    handled_errors_logger.setLevel(logging.DEBUG)
     variables = {
         "id": graphene.Node.to_global_id("Product", product.pk),
         "slug": product.slug,
     }
+
+    # when
     response = user_api_client.post_graphql(QUERY_PRODUCT, variables=variables)
+
+    # then
     assert graphql_log_handler.messages == [
-        "saleor.graphql.errors.handled[INFO].GraphQLError"
+        "saleor.graphql.errors.handled[DEBUG].GraphQLError"
     ]
     content = get_graphql_content(response, ignore_errors=True)
     assert len(content["errors"]) == 1
@@ -1336,10 +1408,17 @@ def test_product_query_error_when_no_param(
     product,
     graphql_log_handler,
 ):
+    # given
+    handled_errors_logger = logging.getLogger("saleor.graphql.errors.handled")
+    handled_errors_logger.setLevel(logging.DEBUG)
     variables = {}
+
+    # when
     response = user_api_client.post_graphql(QUERY_PRODUCT, variables=variables)
+
+    # then
     assert graphql_log_handler.messages == [
-        "saleor.graphql.errors.handled[INFO].GraphQLError"
+        "saleor.graphql.errors.handled[DEBUG].GraphQLError"
     ]
     content = get_graphql_content(response, ignore_errors=True)
     assert len(content["errors"]) == 1
@@ -2915,3 +2994,46 @@ def test_product_tax_class_query_by_staff(staff_api_client, product, channel_USD
     assert data["product"]
     assert data["product"]["id"]
     assert data["product"]["taxClass"]["id"]
+
+
+QUERY_FETCH_PRODUCT_VARIANTS = """
+    query ($id: ID!, $channel: String, $where: ProductVariantWhereInput) {
+        product(id: $id, channel: $channel) {
+            id
+            productVariants(first: 10, where: $where) {
+                edges {
+                    node {
+                        id
+                        name
+                        sku
+                    }
+                }
+            }
+        }
+    }
+"""
+
+
+def test_query_product_variants_with_where(
+    user_api_client, product_variant_list, channel_USD
+):
+    # given
+    product = product_variant_list[0].product
+    sku_value = product_variant_list[0].sku
+    product_id = graphene.Node.to_global_id("Product", product.id)
+
+    variables = {
+        "id": product_id,
+        "channel": channel_USD.slug,
+        "where": {"sku": {"eq": sku_value}},
+    }
+
+    # when
+    response = user_api_client.post_graphql(QUERY_FETCH_PRODUCT_VARIANTS, variables)
+
+    # then
+    content = get_graphql_content(response)
+    variants = content["data"]["product"]["productVariants"]["edges"]
+
+    assert len(variants) == 1
+    assert variants[0]["node"]["sku"] == sku_value

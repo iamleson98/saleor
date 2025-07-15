@@ -26,10 +26,17 @@ from ..core.taxes import TaxDataError, TaxError, zero_taxed_money
 from ..core.tracing import traced_atomic_transaction
 from ..core.transactions import transaction_with_commit_on_errors
 from ..core.utils.url import validate_storefront_url
-from ..discount import DiscountType, DiscountValueType, VoucherType
+from ..discount import DiscountType, DiscountValueType
 from ..discount.models import CheckoutDiscount, NotApplicable, OrderLineDiscount
 from ..discount.utils.promotion import get_sale_id
-from ..discount.utils.voucher import increase_voucher_usage, release_voucher_code_usage
+from ..discount.utils.voucher import (
+    calculate_line_discount_amount_from_voucher,
+    get_customer_email_for_voucher_usage,
+    increase_voucher_usage,
+    is_line_level_voucher,
+    is_order_level_voucher,
+    release_voucher_code_usage,
+)
 from ..graphql.checkout.utils import (
     prepare_insufficient_stock_checkout_validation_error,
 )
@@ -92,7 +99,8 @@ from .utils import (
 
 if TYPE_CHECKING:
     from ..app.models import App
-    from ..discount.models import Voucher, VoucherCode
+    from ..channel.models import Channel
+    from ..discount.models import Voucher, VoucherChannelListing, VoucherCode
     from ..plugins.manager import PluginsManager
     from ..site.models import SiteSettings
 
@@ -117,7 +125,7 @@ def _process_voucher_data_for_order(checkout_info: "CheckoutInfo") -> dict:
     if not voucher_code or not voucher:
         return {}
 
-    customer_email = cast(str, checkout_info.get_customer_email())
+    customer_email = cast(str, get_customer_email_for_voucher_usage(checkout_info))
 
     _increase_checkout_voucher_usage(checkout, voucher_code, voucher, customer_email)
     return {
@@ -274,6 +282,7 @@ def _create_line_for_order(
     products_translation: dict[int, str | None],
     variants_translation: dict[int, str | None],
     prices_entered_with_tax: bool,
+    voucher_channel_listing: Optional["VoucherChannelListing"],
 ) -> OrderLineInfo:
     """Create a line for the given order.
 
@@ -338,30 +347,24 @@ def _create_line_for_order(
         prices_entered_with_tax,
     )
 
-    discount_price = undiscounted_unit_price - unit_price
-    if prices_entered_with_tax:
-        discount_amount = discount_price.gross
-    else:
-        discount_amount = discount_price.net
-
     voucher_code = checkout_info.checkout.voucher_code
     is_line_voucher_code = bool(checkout_line_info.voucher)
-    is_shipping_voucher = (
-        True
-        if checkout_info.voucher and checkout_info.voucher.type == VoucherType.SHIPPING
-        else False
-    )
-    unit_discount_reason = _get_unit_discount_reason(
-        voucher_code, is_line_voucher_code, is_shipping_voucher
-    )
 
-    tax_class = None
     if product.tax_class_id:
         tax_class = product.tax_class
     else:
         tax_class = product.product_type.tax_class
 
     is_price_overridden = checkout_line.price_override is not None
+
+    discount_amount = _get_unit_discount(
+        unit_price=unit_price,
+        undiscounted_unit_price=undiscounted_unit_price,
+        base_unit_price=base_unit_price,
+        undiscounted_base_unit_price=undiscounted_base_unit_price,
+        use_legacy_discount_propagation=checkout_info.channel.use_legacy_line_discount_propagation_for_order,
+        prices_entered_with_tax=prices_entered_with_tax,
+    )
 
     line = OrderLine(  # type: ignore[misc] # see below:
         product_name=product_name,
@@ -370,6 +373,7 @@ def _create_line_for_order(
         translated_variant_name=translated_variant_name,
         product_sku=variant.sku,
         product_variant_id=variant.get_global_id(),
+        product_type_id=checkout_line_info.product.product_type_id,
         is_shipping_required=variant.is_shipping_required(),
         is_gift_card=variant.is_gift_card(),
         quantity=quantity,
@@ -382,7 +386,6 @@ def _create_line_for_order(
         tax_rate=tax_rate,
         voucher_code=voucher_code if is_line_voucher_code else None,
         unit_discount=discount_amount,  # money field not supported by mypy_django_plugin # noqa: E501
-        unit_discount_reason=unit_discount_reason,
         unit_discount_value=discount_amount.amount,  # we store value as fixed discount
         unit_discount_type=DiscountValueType.FIXED,
         base_unit_price=base_unit_price,  # money field not supported by mypy_django_plugin # noqa: E501
@@ -393,21 +396,25 @@ def _create_line_for_order(
         **get_tax_class_kwargs_for_order_line(tax_class),
     )
 
-    line_discounts = _create_order_line_discounts(checkout_line_info, line)
+    line_discounts = _create_order_line_discounts(
+        checkout_line_info, line, checkout_info.channel, voucher_channel_listing
+    )
+
+    line.unit_discount_reason = _get_unit_discount_reason(
+        line_discounts,
+        order_lvl_voucher_code=(
+            checkout_info.voucher.code
+            if checkout_info.voucher and is_order_level_voucher(checkout_info.voucher)
+            else None
+        ),
+        use_legacy_discount_propagation=checkout_info.channel.use_legacy_line_discount_propagation_for_order,
+    )
+
     if line_discounts:
         # We might have catalogue and gift predicate promotion so there might be more
         # than one sale_id.
         # The sale_id will be set only for the catalogue discount if exists.
         line.sale_id = _get_sale_id(line_discounts)
-        promotion_discount_reason = " & ".join(
-            [discount.reason for discount in line_discounts if discount.reason]
-        )
-        unit_discount_reason = (
-            f"{unit_discount_reason} & {promotion_discount_reason}"
-            if unit_discount_reason
-            else promotion_discount_reason
-        )
-        line.unit_discount_reason = unit_discount_reason
 
     is_digital = line.is_digital
     line_info = OrderLineInfo(
@@ -423,19 +430,101 @@ def _create_line_for_order(
     return line_info
 
 
+def _get_unit_discount(
+    unit_price: TaxedMoney,
+    undiscounted_unit_price: TaxedMoney,
+    base_unit_price: Money,
+    undiscounted_base_unit_price: Money,
+    use_legacy_discount_propagation: bool,
+    prices_entered_with_tax: bool,
+) -> Money:
+    """Returng the discount applicable on single line.
+
+    When `use_legacy_discount_propagation` is `True`, the discount
+    amount includes the `ENTIRE_ORDER` voucher discount, and OrderPromotion discount.
+    This is already reflected in the order-level discounts, but to maintain
+    backward compatibility, the legacy flow behaves as before.
+
+    When `use_legacy_discount_propagation` is `False`, the
+    `unit_discount` includes only the order-line level discounts.
+    """
+    if use_legacy_discount_propagation:
+        discount_price = undiscounted_unit_price - unit_price
+        if prices_entered_with_tax:
+            return discount_price.gross
+        return discount_price.net
+    return undiscounted_base_unit_price - base_unit_price
+
+
 def _get_unit_discount_reason(
-    voucher_code: str | None, is_line_voucher_code: bool, is_shipping_voucher: bool
+    line_discounts: list[OrderLineDiscount],
+    order_lvl_voucher_code: str | None,
+    use_legacy_discount_propagation: bool,
 ) -> str | None:
-    if not voucher_code or is_shipping_voucher:
+    include_entire_order_lvl_reason = (
+        order_lvl_voucher_code and use_legacy_discount_propagation
+    )
+    if not include_entire_order_lvl_reason and not line_discounts:
         return None
-    return (
-        f"{'Voucher code' if is_line_voucher_code else 'Entire order voucher code'}: "
-        f"{voucher_code}"
+
+    reasons = []
+    if include_entire_order_lvl_reason:
+        reasons.append(f"Entire order voucher code: {order_lvl_voucher_code}")
+
+    reasons.extend([discount.reason for discount in line_discounts if discount.reason])
+    return " & ".join(reasons)
+
+
+def _create_order_line_discount_object_for_voucher(
+    checkout_line_info: "CheckoutLineInfo",
+    order_line: "OrderLine",
+    channel: "Channel",
+    voucher_channel_listing: Optional["VoucherChannelListing"],
+) -> OrderLineDiscount | None:
+    voucher = checkout_line_info.voucher
+    if not voucher or not voucher_channel_listing:
+        return None
+
+    total_price = (
+        checkout_line_info.variant_discounted_price * checkout_line_info.line.quantity
+    )
+    discount_amount = calculate_line_discount_amount_from_voucher(
+        checkout_line_info, total_price
+    ).amount
+    discount_name = f"{voucher.name}"
+    code = checkout_line_info.voucher_code
+    discount_reason = f"Voucher code: {code}"
+
+    if channel.use_legacy_line_discount_propagation_for_order:
+        # Previously voucher discount was always set as fixed value. To keep it in the
+        # same way as previously we force the fixed type when legacy flow is used
+        value_type = DiscountValueType.FIXED
+        value = discount_amount
+    else:
+        value_type = voucher.discount_value_type
+        value = voucher_channel_listing.discount_value
+
+    return OrderLineDiscount(
+        line=order_line,
+        type=DiscountType.VOUCHER,
+        value_type=value_type,
+        value=value,
+        amount_value=discount_amount,
+        currency=order_line.currency,
+        name=discount_name,
+        translated_name=None,
+        reason=discount_reason,
+        voucher=voucher,
+        unique_type=DiscountType.VOUCHER,
+        voucher_code=code,
     )
 
 
 def _create_order_line_discounts(
-    checkout_line_info: "CheckoutLineInfo", order_line: "OrderLine"
+    checkout_line_info: "CheckoutLineInfo",
+    order_line: "OrderLine",
+    channel: "Channel",
+    voucher_channel_listing: Optional["VoucherChannelListing"],
 ) -> list["OrderLineDiscount"]:
     line_discounts = []
     discounts = checkout_line_info.get_promotion_discounts()
@@ -445,6 +534,16 @@ def _create_order_line_discounts(
         discount_data["promotion_rule_id"] = discount_data.pop("promotion_rule")
         discount_data["line_id"] = order_line.pk
         line_discounts.append(OrderLineDiscount(**discount_data))
+
+    voucher_line_discount = _create_order_line_discount_object_for_voucher(
+        checkout_line_info,
+        order_line,
+        channel=channel,
+        voucher_channel_listing=voucher_channel_listing,
+    )
+    if voucher_line_discount:
+        line_discounts.append(voucher_line_discount)
+
     return line_discounts
 
 
@@ -512,6 +611,12 @@ def _create_lines_for_order(
         replace=True,
         check_reservations=True,
     )
+    voucher = checkout_info.voucher
+    voucher_channel_listing = None
+    if voucher and is_line_level_voucher(voucher):
+        voucher_channel_listing = voucher.channel_listings.filter(
+            channel_id=checkout_info.channel.id
+        ).first()
     order_lines_info = [
         _create_line_for_order(
             manager,
@@ -521,6 +626,7 @@ def _create_lines_for_order(
             product_translations,
             variants_translation,
             prices_entered_with_tax,
+            voucher_channel_listing=voucher_channel_listing,
         )
         for checkout_line_info in lines
     ]
@@ -615,6 +721,7 @@ def _prepare_order_data(
             "undiscounted_total": undiscounted_total,
             "shipping_tax_rate": shipping_tax_rate,
             "tax_error": checkout.tax_error,
+            "lines_count": len(order_data["lines"]),
         }
     )
 
@@ -623,25 +730,22 @@ def _prepare_order_data(
 
     order_data.update(_process_voucher_data_for_order(checkout_info))
 
-    order_data["total_price_left"] = (
-        calculations.checkout_subtotal(
-            manager=manager,
-            checkout_info=checkout_info,
-            lines=lines,
-            address=address,
-        )
-        + undiscounted_base_shipping_price
-        - checkout.discount
+    order_data["total_price_left"] = calculations.checkout_total(
+        manager=manager,
+        checkout_info=checkout_info,
+        lines=lines,
+        address=address,
     ).gross
 
     try:
         manager.preprocess_order_creation(checkout_info, lines)
     except TaxError:
+        user_email = get_customer_email_for_voucher_usage(checkout_info)
         _release_checkout_voucher_usage(
             checkout,
             checkout_info.voucher_code,
             checkout_info.voucher,
-            order_data.get("user_email"),
+            user_email,
         )
         raise
 
@@ -1051,11 +1155,12 @@ def complete_checkout_post_payment_part(
         action_required = txn.action_required
         if action_required:
             action_data = txn.action_required_data
+            user_email = get_customer_email_for_voucher_usage(checkout_info)
             _release_checkout_voucher_usage(
                 checkout_info.checkout,
                 checkout_info.voucher_code,
                 checkout_info.voucher,
-                order_data.get("user_email"),
+                user_email,
             )
 
     order = None
@@ -1124,7 +1229,7 @@ def _increase_voucher_code_usage_value(checkout_info: "CheckoutInfo"):
     if not voucher or not code:
         return None
 
-    customer_email = cast(str, checkout_info.get_customer_email())
+    customer_email = cast(str, get_customer_email_for_voucher_usage(checkout_info))
 
     checkout = checkout_info.checkout
     _increase_checkout_voucher_usage(checkout, code, voucher, customer_email)
@@ -1191,7 +1296,15 @@ def _handle_allocations_of_order_lines(
 def _create_order_discount(order: "Order", checkout_info: "CheckoutInfo"):
     checkout = checkout_info.checkout
     checkout_discount = checkout.discounts.first()
+
+    # Currently, we don't create `CheckoutDiscount` of type VOUCHER, so if there is
+    # discount on checkout, but not related `CheckoutDiscount`, we assume it is
+    # a voucher discount.
     is_voucher_discount = checkout.discount and not checkout_discount
+    is_order_level_voucher_discount = is_voucher_discount and not is_line_level_voucher(
+        checkout_info.voucher
+    )
+
     is_promotion_discount = (
         checkout_discount and checkout_discount.type == DiscountType.ORDER_PROMOTION
     )
@@ -1203,10 +1316,7 @@ def _create_order_discount(order: "Order", checkout_info: "CheckoutInfo"):
         del discount_data["checkout"]
         order.discounts.create(**discount_data)
 
-    if is_voucher_discount:
-        # Currently, we don't create `CheckoutDiscount` of type VOUCHER, so if there is
-        # discount on checkout, but not related `CheckoutDiscount`, we assume it is
-        # a voucher discount.
+    if is_order_level_voucher_discount:
         # Store voucher as a fixed value as it this the simplest solution for now.
         # This will be solved when we refactor the voucher logic to use .discounts
         # relations.
@@ -1366,6 +1476,7 @@ def _create_order_from_checkout(
         should_refresh_prices=False,
         tax_exemption=checkout_info.checkout.tax_exemption,
         tax_error=checkout_info.checkout.tax_error,
+        lines_count=len(checkout_lines_info),
         **_process_shipping_data_for_order(
             checkout_info,
             undiscounted_base_shipping_price,
@@ -1419,14 +1530,13 @@ def _create_order_from_checkout(
     )
 
     # giftcards
-    total_without_giftcard = (
-        order.subtotal
-        + undiscounted_base_shipping_price
-        - checkout_info.checkout.discount
-    )
-    add_gift_cards_to_order(
-        checkout_info, order, total_without_giftcard.gross, user, app
-    )
+    total_without_giftcard = calculations.checkout_total(
+        manager=manager,
+        checkout_info=checkout_info,
+        lines=checkout_lines_info,
+        address=address,
+    ).gross
+    add_gift_cards_to_order(checkout_info, order, total_without_giftcard, user, app)
 
     # payments
     checkout_info.checkout.payments.update(order=order, checkout_id=None)
@@ -1885,7 +1995,7 @@ def _complete_checkout_fail_handler(
             checkout,
             voucher_code,
             voucher,
-            checkout.get_customer_email(),
+            get_customer_email_for_voucher_usage(checkout_info),
             update_fields,
         )
 

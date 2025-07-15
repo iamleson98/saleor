@@ -8,12 +8,15 @@ from urllib.parse import urlparse
 from django.conf import settings
 from django.core.cache import cache
 from django.db import transaction
+from opentelemetry.trace import StatusCode
+from pydantic import ValidationError
 
 from ....celeryconf import app
 from ....core import EventDeliveryStatus
 from ....core.db.connection import allow_writer
 from ....core.models import EventDelivery, EventPayload
-from ....core.tracing import webhooks_opentracing_trace
+from ....core.taxes import TaxData
+from ....core.tracing import webhooks_otel_trace
 from ....core.utils import get_domain
 from ....core.utils.events import call_event
 from ....core.utils.url import sanitize_url_for_logging
@@ -40,6 +43,8 @@ from ...event_types import WebhookEventSyncType
 from ...payloads import generate_transaction_action_request_payload
 from ...utils import get_webhooks_for_event
 from .. import signature_for_payload
+from ..metrics import record_external_request
+from ..taxes import parse_tax_data
 from ..utils import (
     WebhookResponse,
     WebhookSchemes,
@@ -108,9 +113,12 @@ def _send_webhook_request_sync(
     message = data.encode("utf-8")
     payload_size = len(message)
     signature = signature_for_payload(message, webhook.secret_key)
+    response = WebhookResponse(content="", status=EventDeliveryStatus.FAILED)
+    response_data = None
 
     if parts.scheme.lower() not in [WebhookSchemes.HTTP, WebhookSchemes.HTTPS]:
         delivery_update(delivery, EventDeliveryStatus.FAILED)
+        record_external_request(webhook.target_url, response, payload_size)
         raise ValueError(f"Unknown webhook scheme: {parts.scheme!r}")
 
     logger.debug(
@@ -120,13 +128,11 @@ def _send_webhook_request_sync(
     )
     if attempt is None:
         attempt = create_attempt(delivery=delivery, task_id=None, with_save=False)
-    response = WebhookResponse(content="")
-    response_data = None
 
-    try:
-        with webhooks_opentracing_trace(
-            delivery.event_type, domain, payload_size, sync=True, app=webhook.app
-        ):
+    with webhooks_otel_trace(
+        delivery.event_type, payload_size, sync=True, app=webhook.app
+    ) as span:
+        try:
             response = send_webhook_using_http(
                 webhook.target_url,
                 message,
@@ -137,31 +143,34 @@ def _send_webhook_request_sync(
                 custom_headers=webhook.custom_headers,
             )
             response_data = json.loads(response.content)
-
-    except JSONDecodeError as e:
-        logger.info(
-            "[Webhook] Failed parsing JSON response from %r: %r."
-            "ID of failed DeliveryAttempt: %r . ",
-            sanitize_url_for_logging(webhook.target_url),
-            e,
-            attempt.id,
-        )
-        response.status = EventDeliveryStatus.FAILED
-    else:
-        if response.status == EventDeliveryStatus.FAILED:
+        except JSONDecodeError as e:
             logger.info(
-                "[Webhook] Failed request to %r: %r. "
+                "[Webhook] Failed parsing JSON response from %r: %r."
                 "ID of failed DeliveryAttempt: %r . ",
                 sanitize_url_for_logging(webhook.target_url),
-                response.content,
+                e,
                 attempt.id,
             )
-        if response.status == EventDeliveryStatus.SUCCESS:
-            logger.debug(
-                "[Webhook] Success response from %r.Successful DeliveryAttempt id: %r",
-                sanitize_url_for_logging(webhook.target_url),
-                attempt.id,
-            )
+            response.status = EventDeliveryStatus.FAILED
+        else:
+            if response.status == EventDeliveryStatus.FAILED:
+                logger.info(
+                    "[Webhook] Failed request to %r: %r. "
+                    "ID of failed DeliveryAttempt: %r . ",
+                    sanitize_url_for_logging(webhook.target_url),
+                    response.content,
+                    attempt.id,
+                )
+            if response.status == EventDeliveryStatus.SUCCESS:
+                logger.debug(
+                    "[Webhook] Success response from %r.Successful DeliveryAttempt id: %r",
+                    sanitize_url_for_logging(webhook.target_url),
+                    attempt.id,
+                )
+        finally:
+            if response.status == EventDeliveryStatus.FAILED:
+                span.set_status(StatusCode.ERROR)
+            record_external_request(webhook.target_url, response, payload_size)
 
     attempt_update(attempt, response)
     delivery_update(delivery, response.status)
@@ -337,15 +346,14 @@ if breaker_board := initialize_breaker_board():
     trigger_webhook_sync = breaker_board(trigger_webhook_sync)
 
 
-def trigger_all_webhooks_sync(
+def trigger_taxes_all_webhooks_sync(
     event_type: str,
     generate_payload: Callable,
-    parse_response: Callable[[Any], R | None],
+    expected_lines_count: int,
     subscribable_object=None,
     requestor=None,
-    allow_replica=False,
     pregenerated_subscription_payloads: dict | None = None,
-) -> R | None:
+) -> TaxData | None:
     """Send all synchronous webhook request for given event type.
 
     Requests are send sequentially.
@@ -366,7 +374,6 @@ def trigger_all_webhooks_sync(
                 request_context = initialize_request(
                     requestor,
                     event_type in WebhookEventSyncType.ALL,
-                    allow_replica,
                     event_type=event_type,
                 )
 
@@ -396,8 +403,17 @@ def trigger_all_webhooks_sync(
             )
 
         response_data = send_webhook_request_sync(delivery)
-        if parsed_response := parse_response(response_data):
-            return parsed_response
+        try:
+            parsed_response = parse_tax_data(response_data, expected_lines_count)
+        except ValidationError as e:
+            logger.warning(
+                "Webhook response for event %s is invalid: %s",
+                event_type,
+                str(e),
+                extra={"errors": e.errors()},
+            )
+            continue
+        return parsed_response
     return None
 
 

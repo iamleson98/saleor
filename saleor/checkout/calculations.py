@@ -30,7 +30,6 @@ from ..tax.utils import (
     get_tax_app_identifier_for_checkout,
     get_tax_calculation_strategy_for_checkout,
     normalize_tax_rate_for_db,
-    validate_tax_data,
 )
 from .fetch import find_checkout_line_info
 from .models import Checkout
@@ -147,9 +146,26 @@ def calculate_checkout_total_with_gift_cards(
         pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         force_update=force_update,
         allow_sync_webhooks=allow_sync_webhooks,
-    ) - checkout_info.checkout.get_total_gift_cards_balance(database_connection_name)
+    )
 
-    return max(total, zero_taxed_money(total.currency))
+    if total == zero_taxed_money(total.currency):
+        return total
+
+    # Calculate how many percent of total net value the total gross value is.
+    gross_percentage = total.gross / total.net
+
+    # Subtract gift cards value from total gross value.
+    total.gross -= checkout_info.checkout.get_total_gift_cards_balance(
+        database_connection_name
+    )
+
+    # Gross value cannot be below zero.
+    total.gross = max(total.gross, zero_money(total.currency))
+
+    # Adjusted total net value is proportional to potentially reduced total gross value.
+    total.net = quantize_price(total.gross / gross_percentage, total.currency)
+
+    return total
 
 
 def checkout_total(
@@ -361,7 +377,7 @@ def _fetch_checkout_prices_if_expired(
 
     tax_configuration = checkout_info.tax_configuration
     tax_calculation_strategy = get_tax_calculation_strategy_for_checkout(
-        checkout_info, lines, database_connection_name=database_connection_name
+        checkout_info, database_connection_name=database_connection_name
     )
 
     if (
@@ -372,11 +388,11 @@ def _fetch_checkout_prices_if_expired(
 
     prices_entered_with_tax = tax_configuration.prices_entered_with_tax
     charge_taxes = get_charge_taxes_for_checkout(
-        checkout_info, lines, database_connection_name=database_connection_name
+        checkout_info, database_connection_name=database_connection_name
     )
     should_charge_tax = charge_taxes and not checkout.tax_exemption
     tax_app_identifier = get_tax_app_identifier_for_checkout(
-        checkout_info, lines, database_connection_name
+        checkout_info, database_connection_name
     )
 
     lines = cast(list, lines)
@@ -388,9 +404,12 @@ def _fetch_checkout_prices_if_expired(
     )
 
     checkout.tax_error = None
-    if prices_entered_with_tax:
-        # If prices are entered with tax, we need to always calculate it anyway, to
-        # display the tax rate to the user.
+
+    no_need_to_calculate_taxes = not prices_entered_with_tax and not should_charge_tax
+    if no_need_to_calculate_taxes:
+        # Calculate net prices without taxes.
+        _set_checkout_base_prices(checkout, checkout_info, lines)
+    else:
         try:
             _calculate_and_add_tax(
                 tax_calculation_strategy,
@@ -406,9 +425,10 @@ def _fetch_checkout_prices_if_expired(
             )
         except TaxDataError as e:
             if str(e) != TaxDataErrorMessage.EMPTY:
-                logger.warning(
-                    str(e), extra=checkout_info_for_logs(checkout_info, lines)
-                )
+                extra = checkout_info_for_logs(checkout_info, lines)
+                if e.errors:
+                    extra["errors"] = e.errors
+                logger.warning(str(e), extra=extra)
             _set_checkout_base_prices(checkout, checkout_info, lines)
             checkout.tax_error = str(e)
 
@@ -416,35 +436,6 @@ def _fetch_checkout_prices_if_expired(
             # If charge_taxes is disabled or checkout is exempt from taxes, remove the
             # tax from the original gross prices.
             _remove_tax(checkout, lines)
-
-    else:
-        # Prices are entered without taxes.
-        if should_charge_tax:
-            # Calculate taxes if charge_taxes is enabled and checkout is not exempt
-            # from taxes.
-            try:
-                _calculate_and_add_tax(
-                    tax_calculation_strategy,
-                    tax_app_identifier,
-                    checkout,
-                    manager,
-                    checkout_info,
-                    lines,
-                    prices_entered_with_tax,
-                    address,
-                    database_connection_name=database_connection_name,
-                    pregenerated_subscription_payloads=pregenerated_subscription_payloads,
-                )
-            except TaxDataError as e:
-                if str(e) != TaxDataErrorMessage.EMPTY:
-                    logger.warning(
-                        str(e), extra=checkout_info_for_logs(checkout_info, lines)
-                    )
-                _set_checkout_base_prices(checkout, checkout_info, lines)
-                checkout.tax_error = str(e)
-        else:
-            # Calculate net prices without taxes.
-            _set_checkout_base_prices(checkout, checkout_info, lines)
 
     checkout_update_fields = [
         "voucher_code",
@@ -500,41 +491,10 @@ def _calculate_and_add_tax(
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     pregenerated_subscription_payloads: dict | None = None,
 ):
-    from .utils import log_address_if_validation_skipped_for_checkout
-
     if pregenerated_subscription_payloads is None:
         pregenerated_subscription_payloads = {}
-    if tax_calculation_strategy == TaxCalculationStrategy.TAX_APP:
-        # If taxAppId is not configured run all active plugins and tax apps.
-        # If taxAppId is provided run tax plugin or Tax App. taxAppId can be
-        # configured with Avatax plugin identifier.
-        if not tax_app_identifier:
-            # Call the tax plugins.
-            _apply_tax_data_from_plugins(
-                checkout, manager, checkout_info, lines, address
-            )
-            # Get the taxes calculated with apps and apply to checkout.
-            tax_data = manager.get_taxes_for_checkout(
-                checkout_info,
-                lines,
-                tax_app_identifier,
-                pregenerated_subscription_payloads,
-            )
-            if not tax_data:
-                log_address_if_validation_skipped_for_checkout(checkout_info, logger)
-            validate_tax_data(tax_data, lines, allow_empty_tax_data=True)
-            _apply_tax_data(checkout, lines, tax_data)
-        else:
-            _call_plugin_or_tax_app(
-                tax_app_identifier,
-                checkout,
-                manager,
-                checkout_info,
-                lines,
-                address,
-                pregenerated_subscription_payloads,
-            )
-    else:
+
+    if tax_calculation_strategy != TaxCalculationStrategy.TAX_APP:
         # Get taxes calculated with flat rates and apply to checkout.
         update_checkout_prices_with_flat_rates(
             checkout,
@@ -543,6 +503,36 @@ def _calculate_and_add_tax(
             prices_entered_with_tax,
             address,
             database_connection_name=database_connection_name,
+        )
+        return
+
+    # If taxAppId is not configured run all active plugins and tax apps.
+    # If taxAppId is provided run tax plugin or Tax App. taxAppId can be
+    # configured with Avatax plugin identifier.
+    if not tax_app_identifier:
+        # Call the tax plugins.
+        _apply_tax_data_from_plugins(checkout, manager, checkout_info, lines, address)
+        # Get the taxes calculated with apps and apply to checkout.
+        # We should allow empty tax_data in case any tax webhook has not been
+        # configured - handled by `allowed_empty_tax_data`
+        tax_data = _get_taxes_for_checkout(
+            checkout_info,
+            lines,
+            tax_app_identifier,
+            manager,
+            pregenerated_subscription_payloads,
+            allowed_empty_tax_data=True,
+        )
+        _apply_tax_data(checkout, lines, tax_data)
+    else:
+        _call_plugin_or_tax_app(
+            tax_app_identifier,
+            checkout,
+            manager,
+            checkout_info,
+            lines,
+            address,
+            pregenerated_subscription_payloads,
         )
 
 
@@ -555,8 +545,6 @@ def _call_plugin_or_tax_app(
     address: Optional["Address"] = None,
     pregenerated_subscription_payloads: dict | None = None,
 ):
-    from .utils import log_address_if_validation_skipped_for_checkout
-
     if pregenerated_subscription_payloads is None:
         pregenerated_subscription_payloads = {}
 
@@ -580,16 +568,50 @@ def _call_plugin_or_tax_app(
         if checkout.tax_error:
             raise TaxDataError(checkout.tax_error)
     else:
+        tax_data = _get_taxes_for_checkout(
+            checkout_info,
+            lines,
+            tax_app_identifier,
+            manager,
+            pregenerated_subscription_payloads,
+        )
+        _apply_tax_data(checkout, lines, tax_data)
+
+
+def _get_taxes_for_checkout(
+    checkout_info: "CheckoutInfo",
+    lines: list["CheckoutLineInfo"],
+    tax_app_identifier: str | None,
+    manager: "PluginsManager",
+    pregenerated_subscription_payloads: dict | None = None,
+    allowed_empty_tax_data: bool = False,
+):
+    """Get taxes for checkout from tax apps.
+
+    The `allowed_empty_tax_data` flag prevents an error from being raised when tax data
+    is missing due to the absence of a configured tax app.
+    """
+    from .utils import log_address_if_validation_skipped_for_checkout
+
+    tax_data = None
+    try:
         tax_data = manager.get_taxes_for_checkout(
             checkout_info,
             lines,
             tax_app_identifier,
             pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         )
+    except TaxDataError as e:
+        raise e from e
+    finally:
+        # log in case the tax_data is missing
         if tax_data is None:
             log_address_if_validation_skipped_for_checkout(checkout_info, logger)
-        validate_tax_data(tax_data, lines)
-        _apply_tax_data(checkout, lines, tax_data)
+
+    if not tax_data and not allowed_empty_tax_data:
+        raise TaxDataError(TaxDataErrorMessage.EMPTY)
+
+    return tax_data
 
 
 def _remove_tax(checkout, lines_info):

@@ -3,7 +3,6 @@ from collections.abc import Callable, Iterable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
-import opentracing
 from django.conf import settings
 from django.http import HttpResponse, HttpResponseNotFound
 from django.utils.module_loading import import_string
@@ -15,7 +14,8 @@ from ..core.db.connection import allow_writer
 from ..core.models import EventDelivery
 from ..core.payments import PaymentInterface
 from ..core.prices import quantize_price
-from ..core.taxes import TaxData, TaxType, zero_money, zero_taxed_money
+from ..core.taxes import TaxData, TaxDataError, TaxType, zero_money, zero_taxed_money
+from ..core.telemetry import tracer
 from ..graphql.core import SaleorContext
 from ..order import base_calculations as base_order_calculations
 from ..order.base_calculations import (
@@ -130,7 +130,7 @@ class PluginsManager(PaymentInterface):
         )
 
     def __init__(self, plugins: list[str], requestor_getter=None, allow_replica=True):
-        with opentracing.global_tracer().start_active_span("PluginsManager.__init__"):
+        with tracer.start_as_current_span("PluginsManager.__init__"):
             self.plugins = plugins
             self._allow_replica = allow_replica
             self.all_plugins = []
@@ -156,7 +156,7 @@ class PluginsManager(PaymentInterface):
             global_db_config = self._get_db_plugin_configs(None)
 
             for plugin_path in self.plugins:
-                with opentracing.global_tracer().start_active_span(f"{plugin_path}"):
+                with tracer.start_as_current_span(f"{plugin_path}"):
                     PluginClass = import_string(plugin_path)
                     if not getattr(PluginClass, "CONFIGURATION_PER_CHANNEL", False):
                         plugin = self._load_plugin(
@@ -182,7 +182,7 @@ class PluginsManager(PaymentInterface):
             channel_db_config = self._get_db_plugin_configs(channel)
 
             for plugin_path in self.plugins:
-                with opentracing.global_tracer().start_active_span(f"{plugin_path}"):
+                with tracer.start_as_current_span(f"{plugin_path}"):
                     PluginClass = import_string(plugin_path)
                     if getattr(PluginClass, "CONFIGURATION_PER_CHANNEL", False):
                         plugin = self._load_plugin(
@@ -200,12 +200,12 @@ class PluginsManager(PaymentInterface):
             self.loaded_channels.add(channel_slug)
 
     def _get_db_plugin_configs(self, channel: Channel | None):
-        with opentracing.global_tracer().start_active_span("_get_db_plugin_configs"):
+        with tracer.start_as_current_span("_get_db_plugin_configs"):
             plugin_manager_configs = PluginConfiguration.objects.using(
                 self.database
             ).filter(channel=channel)
             configs = {}
-            for db_plugin_config in plugin_manager_configs.iterator():
+            for db_plugin_config in plugin_manager_configs.iterator(chunk_size=1000):
                 configs[db_plugin_config.identifier] = db_plugin_config
             return configs
 
@@ -639,7 +639,7 @@ class PluginsManager(PaymentInterface):
     ) -> TaxData | None:
         if pregenerated_subscription_payloads is None:
             pregenerated_subscription_payloads = {}
-        return self.__run_plugin_method_until_first_success(
+        return self.__run_tax_method_until_first_success(
             "get_taxes_for_checkout",
             checkout_info,
             lines,
@@ -651,12 +651,39 @@ class PluginsManager(PaymentInterface):
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def get_taxes_for_order(self, order: "Order", app_identifier) -> TaxData | None:
-        return self.__run_plugin_method_until_first_success(
+        return self.__run_tax_method_until_first_success(
             "get_taxes_for_order",
             order,
             app_identifier,
             channel_slug=order.channel.slug,
         )
+
+    def __run_tax_method_until_first_success(
+        self,
+        method_name: str,
+        *args,
+        channel_slug: str | None,
+        **kwargs,
+    ) -> TaxData | None:
+        plugins = self.get_plugins(channel_slug=channel_slug, active_only=True)
+        default_value = None
+        error = None
+        if plugins:
+            # try to get the proper response from the plugins; in case any plugin
+            # return proper response, raise an error from last plugin
+            for plugin in plugins:
+                try:
+                    tax_data = self.__run_method_on_single_plugin(
+                        plugin, method_name, default_value, *args, **kwargs
+                    )
+                except TaxDataError as e:
+                    error = e
+                    continue
+                if tax_data is not None:
+                    return tax_data
+        if error:
+            raise error
+        return default_value
 
     def preprocess_order_creation(
         self,
@@ -2481,7 +2508,7 @@ class PluginsManager(PaymentInterface):
     def get_all_plugins(self, active_only=False):
         if not self.loaded_all_channels:
             channels = Channel.objects.using(self.database).all()
-            for channel in channels.iterator():
+            for channel in channels.iterator(chunk_size=1000):
                 self._ensure_channel_plugins_loaded(channel.slug, channel=channel)
             self.loaded_all_channels = True
         return self.get_plugins(active_only=active_only)
@@ -2643,7 +2670,7 @@ class PluginsManager(PaymentInterface):
         return None
 
     def _get_all_plugin_configs(self):
-        with opentracing.global_tracer().start_active_span("_get_all_plugin_configs"):
+        with tracer.start_as_current_span("_get_all_plugin_configs"):
             if not hasattr(self, "_plugin_configs"):
                 plugin_configurations = (
                     PluginConfiguration.objects.using(self.database)
@@ -2903,7 +2930,7 @@ def get_plugins_manager(
     allow_replica: bool,
     requestor_getter: Callable[[], "Requestor"] | None = None,
 ) -> PluginsManager:
-    with opentracing.global_tracer().start_active_span("get_plugins_manager"):
+    with tracer.start_as_current_span("get_plugins_manager"):
         if allow_replica:
             return PluginsManager(settings.PLUGINS, requestor_getter, allow_replica)
         with allow_writer():

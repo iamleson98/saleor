@@ -423,7 +423,7 @@ def test_handle_fully_paid_order_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -713,7 +713,7 @@ def test_cancel_order_dont_trigger_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -889,7 +889,7 @@ def test_order_refunded_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -987,7 +987,10 @@ def test_order_voided_triggers_webhooks(
         event_type=WebhookEventAsyncType.ORDER_UPDATED,
     )
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_updated_delivery.id},
+        kwargs={
+            "event_delivery_id": order_updated_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -1097,7 +1100,7 @@ def test_order_fulfilled_dont_trigger_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -1181,7 +1184,10 @@ def test_order_awaits_fulfillment_approval_triggers_webhooks(
     )
 
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_updated_delivery.id},
+        kwargs={
+            "event_delivery_id": order_updated_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -1274,7 +1280,10 @@ def test_order_authorized_triggers_webhooks(
         event_type=WebhookEventAsyncType.ORDER_UPDATED,
     )
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_updated_delivery.id},
+        kwargs={
+            "event_delivery_id": order_updated_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -1392,7 +1401,7 @@ def test_order_charged_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -1788,7 +1797,7 @@ def test_order_transaction_updated_for_charged_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -1903,7 +1912,10 @@ def test_order_transaction_updated_for_authorized_triggers_webhooks(
         event_type=WebhookEventAsyncType.ORDER_UPDATED,
     )
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_updated_delivery.id},
+        kwargs={
+            "event_delivery_id": order_updated_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -2029,7 +2041,7 @@ def test_order_transaction_updated_for_refunded_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -2086,7 +2098,7 @@ def test_order_transaction_updated_order_partially_paid(
     # given
     order_info = fetch_order_info(order_with_lines)
     transaction_item = transaction_item_generator(
-        order_id=order_with_lines.pk, charged_value=Decimal("10")
+        order_id=order_with_lines.pk, charged_value=Decimal(10)
     )
     manager = get_plugins_manager(allow_replica=False)
     updates_amounts_for_order(
@@ -2122,11 +2134,9 @@ def test_order_transaction_updated_order_partially_paid_and_multiple_transaction
 ):
     # given
     order_info = fetch_order_info(order_with_lines)
-    transaction_item_generator(
-        order_id=order_with_lines.pk, charged_value=Decimal("10")
-    )
+    transaction_item_generator(order_id=order_with_lines.pk, charged_value=Decimal(10))
     transaction_item = transaction_item_generator(
-        order_id=order_with_lines.pk, charged_value=Decimal("5")
+        order_id=order_with_lines.pk, charged_value=Decimal(5)
     )
     manager = get_plugins_manager(allow_replica=False)
     updates_amounts_for_order(
@@ -2162,7 +2172,7 @@ def test_order_transaction_updated_with_the_same_transaction_charged_amount(
 ):
     # given
     order_info = fetch_order_info(order_with_lines)
-    charged_value = Decimal("5")
+    charged_value = Decimal(5)
 
     transaction_item = transaction_item_generator(
         order_id=order_with_lines.pk, charged_value=charged_value
@@ -2240,10 +2250,10 @@ def test_order_transaction_updated_order_partially_authorized_and_multiple_trans
     # given
     order_info = fetch_order_info(order_with_lines)
     transaction_item_generator(
-        order_id=order_with_lines.pk, authorized_value=Decimal("10")
+        order_id=order_with_lines.pk, authorized_value=Decimal(10)
     )
     transaction_item = transaction_item_generator(
-        order_id=order_with_lines.pk, authorized_value=Decimal("5")
+        order_id=order_with_lines.pk, authorized_value=Decimal(5)
     )
     manager = get_plugins_manager(allow_replica=False)
     updates_amounts_for_order(
@@ -2279,7 +2289,7 @@ def test_order_transaction_updated_with_the_same_transaction_authorized_amount(
 ):
     # given
     order_info = fetch_order_info(order_with_lines)
-    authorized_value = Decimal("5")
+    authorized_value = Decimal(5)
 
     transaction_item = transaction_item_generator(
         order_id=order_with_lines.pk, authorized_value=authorized_value
@@ -2392,12 +2402,10 @@ def test_order_transaction_updated_order_fully_refunded_and_multiple_transaction
 ):
     # given
     order_info = fetch_order_info(order_with_lines)
-    transaction_item_generator(
-        order_id=order_with_lines.pk, refunded_value=Decimal("10")
-    )
+    transaction_item_generator(order_id=order_with_lines.pk, refunded_value=Decimal(10))
     transaction_item = transaction_item_generator(
         order_id=order_with_lines.pk,
-        refunded_value=order_with_lines.total.gross.amount - Decimal("10"),
+        refunded_value=order_with_lines.total.gross.amount - Decimal(10),
     )
     manager = get_plugins_manager(allow_replica=False)
     updates_amounts_for_order(
@@ -2440,7 +2448,7 @@ def test_order_transaction_updated_order_fully_refunded_with_transaction_and_pay
     payment.save()
 
     payment.transactions.create(
-        amount=Decimal("10"),
+        amount=Decimal(10),
         currency=payment.currency,
         kind=TransactionKind.REFUND,
         gateway_response={},
@@ -2450,7 +2458,7 @@ def test_order_transaction_updated_order_fully_refunded_with_transaction_and_pay
     order_info = fetch_order_info(order_with_lines)
     transaction_item = transaction_item_generator(
         order_id=order_with_lines.pk,
-        refunded_value=order_with_lines.total.gross.amount - Decimal("10"),
+        refunded_value=order_with_lines.total.gross.amount - Decimal(10),
     )
 
     manager = get_plugins_manager(allow_replica=False)
@@ -2536,7 +2544,7 @@ def test_call_order_event_triggers_sync_webhook(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -2670,7 +2678,7 @@ def test_call_order_event_missing_filter_shipping_method_webhook(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -2753,7 +2761,7 @@ def test_call_order_event_skips_tax_webhook_when_prices_are_valid(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -2843,7 +2851,7 @@ def test_call_order_event_skips_sync_webhooks_when_order_not_editable(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -2905,7 +2913,7 @@ def test_call_order_event_skips_sync_webhooks_when_draft_order_deleted(
     assert not filter_shipping_delivery
     assert not tax_delivery
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3005,7 +3013,7 @@ def test_call_order_event_skips_when_sync_webhooks_missing(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3079,7 +3087,7 @@ def test_call_order_events_triggers_sync_webhook(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3233,7 +3241,7 @@ def test_call_order_events_missing_filter_shipping_method_webhook(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3328,7 +3336,7 @@ def test_call_order_events_skips_tax_webhook_when_prices_are_valid(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=order_webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3436,7 +3444,7 @@ def test_call_order_events_skips_sync_webhooks_when_order_not_editable(
     assert not filter_shipping_delivery
     assert not tax_delivery
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3509,7 +3517,7 @@ def test_call_order_events_skips_sync_webhooks_when_draft_order_deleted(
     assert not filter_shipping_delivery
     assert not tax_delivery
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3624,7 +3632,7 @@ def test_call_order_events_skips_when_sync_webhooks_missing(
     # then
     order_delivery = EventDelivery.objects.get(webhook_id=webhook.id)
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_delivery.id},
+        kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,
@@ -3689,7 +3697,12 @@ def test_order_created_triggers_webhooks(
     order.status = OrderStatus.UNCONFIRMED
     order.should_refresh_prices = True
     order.charge_status = OrderChargeStatus.FULL
-    order.save(update_fields=["status", "should_refresh_prices", "charge_status"])
+    order.user = customer_user
+    order.save(
+        update_fields=["status", "should_refresh_prices", "charge_status", "user"]
+    )
+
+    user_number_of_orders = customer_user.number_of_orders
 
     order.channel.automatically_confirm_all_new_orders = True
     order.channel.save(update_fields=["automatically_confirm_all_new_orders"])
@@ -3738,7 +3751,7 @@ def test_order_created_triggers_webhooks(
     mocked_send_webhook_request_async.assert_has_calls(
         [
             call(
-                kwargs={"event_delivery_id": delivery.id},
+                kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                 bind=True,
                 retry_backoff=10,
@@ -3799,6 +3812,9 @@ def test_order_created_triggers_webhooks(
         any_order=True,
     )
 
+    customer_user.refresh_from_db()
+    assert customer_user.number_of_orders == user_number_of_orders + 1
+
 
 @patch(
     "saleor.order.actions.call_order_event",
@@ -3848,7 +3864,10 @@ def test_order_confirmed_triggers_webhooks(
         event_type=WebhookEventAsyncType.ORDER_CONFIRMED,
     )
     mocked_send_webhook_request_async.assert_called_once_with(
-        kwargs={"event_delivery_id": order_confirmed_delivery.id},
+        kwargs={
+            "event_delivery_id": order_confirmed_delivery.id,
+            "telemetry_context": ANY,
+        },
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
         bind=True,
         retry_backoff=10,

@@ -1,10 +1,10 @@
 import graphene
 import pytest
-from django.db.models import Q
+from django.db.models import Count, Q
 from graphene.utils.str_converters import to_camel_case
 
 from .....attribute import AttributeInputType, AttributeType
-from .....attribute.models import Attribute
+from .....attribute.models import Attribute, AttributeValue
 from .....product import ProductTypeKind
 from .....product.models import Category, Collection, Product, ProductType
 from .....tests.utils import dummy_editorjs
@@ -64,36 +64,56 @@ def test_get_single_attribute_by_slug_as_customer(
 
 
 QUERY_ATTRIBUTE = """
-    query($id: ID!, $query: String) {
-        attribute(id: $id) {
-            id
-            slug
-            name
-            inputType
-            entityType
-            type
-            unit
-            choices(first: 10, filter: {search: $query}) {
-                edges {
-                    node {
-                        slug
-                        inputType
-                        value
-                        file {
-                            url
-                            contentType
-                        }
-                    }
-                }
-            }
-            valueRequired
-            visibleInStorefront
-            filterableInStorefront
-            filterableInDashboard
-            availableInGrid
-            storefrontSearchPosition
+query ($id: ID!, $query: String) {
+  attribute(id: $id) {
+    id
+    slug
+    name
+    inputType
+    entityType
+    type
+    unit
+    choices(first: 10, filter: {search: $query}) {
+      edges {
+        node {
+          slug
+          inputType
+          value
+          file {
+            url
+            contentType
+          }
         }
+      }
     }
+    valueRequired
+    visibleInStorefront
+    filterableInStorefront
+    filterableInDashboard
+    availableInGrid
+    storefrontSearchPosition
+    translation(languageCode: PL) {
+      id
+      name
+    }
+    withChoices
+    productTypes(first: 1) {
+      edges {
+        node {
+          id
+        }
+      }
+    }
+    productVariantTypes(first: 1) {
+      edges {
+        node {
+          id
+        }
+      }
+    }
+    externalReference
+  }
+}
 """
 
 
@@ -417,9 +437,11 @@ def test_get_single_swatch_attribute_by_staff(
                 "slug": value.slug,
                 "value": value.value,
                 "inputType": value.input_type.upper(),
-                "file": {"url": value.file_url, "contentType": value.content_type}
-                if value.file_url
-                else None,
+                "file": (
+                    {"url": value.file_url, "contentType": value.content_type}
+                    if value.file_url
+                    else None
+                ),
             }
         }
         attribute_value_data.append(data)
@@ -439,9 +461,29 @@ QUERY_ATTRIBUTES = """
                     choices(first: 10) {
                         edges {
                             node {
+                            id
+                            name
+                            slug
+                            inputType
+                            value
+                            file {
+                                url
+                                contentType
+                            }
+                            translation(languageCode: PL) {
                                 id
                                 name
-                                slug
+                                translatableContent {
+                                id
+                                }
+                            }
+                            reference
+                            richText
+                            plainText
+                            boolean
+                            date
+                            dateTime
+                            externalReference
                             }
                         }
                     }
@@ -741,3 +783,95 @@ def test_get_attribute_by_external_reference(
     data = content["data"]["attribute"]
     assert data["externalReference"] == ext_ref
     assert data["id"] == graphene.Node.to_global_id("Attribute", attribute.id)
+
+
+ATTRIBUTE_VALUES_QUERY = """
+query ($limit: Int) {
+    attributes(first: 10) {
+        edges {
+            node {
+                id
+                name
+                slug
+                values(limit: $limit) {
+                    name
+                    slug
+                }
+            }
+        }
+    }
+}
+"""
+
+
+def test_attributes_values_with_limit(
+    api_client, numeric_attribute, size_attribute, weight_attribute
+):
+    # given
+    assert weight_attribute.values.count() > 1
+    assert size_attribute.values.count() > 1
+
+    AttributeValue.objects.bulk_create(
+        [
+            AttributeValue(slug="10", name="num-10", attribute=numeric_attribute),
+            AttributeValue(slug="20", name="num-20", attribute=numeric_attribute),
+            AttributeValue(slug="30", name="num-30", attribute=numeric_attribute),
+        ]
+    )
+    limit = 1
+    variables = {"limit": limit}
+
+    # when
+    response = api_client.post_graphql(ATTRIBUTE_VALUES_QUERY, variables)
+
+    # then
+    data = get_graphql_content(response)
+    attributes = data["data"]["attributes"]["edges"]
+    for attribute in attributes:
+        assert len(attribute["node"]["values"]) == limit
+
+
+def test_attributes_values_default_limit(
+    api_client, numeric_attribute, size_attribute, weight_attribute
+):
+    # given
+    AttributeValue.objects.bulk_create(
+        [
+            AttributeValue(slug="10", name="num-10", attribute=numeric_attribute),
+            AttributeValue(slug="20", name="num-20", attribute=numeric_attribute),
+            AttributeValue(slug="30", name="num-30", attribute=numeric_attribute),
+        ]
+    )
+    attribute_count = {
+        att.slug: att.values_count
+        for att in Attribute.objects.annotate(values_count=Count("values"))
+    }
+
+    # when
+    response = api_client.post_graphql(ATTRIBUTE_VALUES_QUERY, {})
+
+    # then
+    data = get_graphql_content(response)
+    attributes = data["data"]["attributes"]["edges"]
+    for attribute in attributes:
+        assert (
+            len(attribute["node"]["values"])
+            == attribute_count[attribute["node"]["slug"]]
+        )
+
+
+def test_attributes_values_limit_exceeded(api_client, weight_attribute):
+    # given
+    limit = 150
+    variables = {"limit": limit}
+
+    # when
+    response = api_client.post_graphql(ATTRIBUTE_VALUES_QUERY, variables)
+
+    # then
+    content = get_graphql_content_from_response(response)
+
+    assert len(content["errors"]) == 1
+    assert content["errors"][0]["message"] == (
+        "The limit for attribute values cannot be greater than 100."
+    )

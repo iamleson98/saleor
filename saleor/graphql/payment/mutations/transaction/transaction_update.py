@@ -1,25 +1,25 @@
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 import graphene
 from django.core.exceptions import ValidationError
 
 from .....app.models import App
-from .....checkout.actions import transaction_amounts_for_checkout_updated
 from .....core.exceptions import PermissionDenied
-from .....order import models as order_models
-from .....order.actions import order_transaction_updated
 from .....order.events import transaction_event as order_transaction_event
-from .....order.fetch import fetch_order_info
 from .....payment import models as payment_models
 from .....payment.error_codes import (
     TransactionCreateErrorCode,
     TransactionUpdateErrorCode,
 )
+from .....payment.interface import PaymentMethodDetails
 from .....payment.transaction_item_calculations import (
     calculate_transaction_amount_based_on_events,
     recalculate_transaction_amounts,
 )
-from .....payment.utils import create_manual_adjustment_events
+from .....payment.utils import (
+    create_manual_adjustment_events,
+    update_transaction_item_with_payment_method_details,
+)
 from .....permission.auth_filters import AuthorizationFilters
 from .....permission.enums import PaymentPermissions
 from ....app.dataloaders import get_app_promise
@@ -31,12 +31,13 @@ from ....core.validators import validate_one_of_args_is_in_mutation
 from ....plugins.dataloaders import get_plugin_manager_promise
 from ...types import TransactionItem
 from ...utils import check_if_requestor_has_access
+from .shared import get_payment_method_details, validate_payment_method_details_input
 from .transaction_create import (
     TransactionCreate,
     TransactionCreateInput,
     TransactionEventInput,
 )
-from .utils import get_transaction_item
+from .utils import get_transaction_item, process_order_or_checkout_with_transaction
 
 if TYPE_CHECKING:
     from .....account.models import User
@@ -131,6 +132,10 @@ class TransactionUpdate(TransactionCreate):
             transaction_data.get("external_url"),
             error_code=TransactionCreateErrorCode.INVALID.value,
         )
+        if payment_method_details := transaction_data.get("payment_method_details"):
+            validate_payment_method_details_input(
+                payment_method_details, TransactionUpdateErrorCode
+            )
 
     @classmethod
     def update_transaction(
@@ -140,6 +145,7 @@ class TransactionUpdate(TransactionCreate):
         money_data: dict,
         user: Optional["User"],
         app: Optional["App"],
+        payment_details_data: PaymentMethodDetails | None = None,
     ):
         psp_reference = transaction_data.get("psp_reference")
         if psp_reference and instance.psp_reference != psp_reference:
@@ -155,6 +161,10 @@ class TransactionUpdate(TransactionCreate):
                     }
                 )
         instance = cls.construct_instance(instance, transaction_data)
+        if payment_details_data:
+            update_transaction_item_with_payment_method_details(
+                instance, payment_details_data
+            )
         instance.save()
         if money_data:
             calculate_transaction_amount_based_on_events(transaction=instance)
@@ -204,7 +214,6 @@ class TransactionUpdate(TransactionCreate):
             app=app,
         )
         money_data = {}
-        previous_transaction_psp_reference = instance.psp_reference
         previous_authorized_value = instance.authorized_value
         previous_charged_value = instance.charged_value
         previous_refunded_value = instance.refunded_value
@@ -218,11 +227,24 @@ class TransactionUpdate(TransactionCreate):
                 transaction.pop("private_metadata", None),
             )
             money_data = cls.get_money_data_from_input(transaction, instance.currency)
-            cls.update_transaction(instance, transaction, money_data, user, app)
+            payment_details_data: PaymentMethodDetails | None = None
+            if payment_method_details := transaction.pop(
+                "payment_method_details", None
+            ):
+                payment_details_data = get_payment_method_details(
+                    payment_method_details
+                )
+            cls.update_transaction(
+                instance,
+                transaction,
+                money_data,
+                user,
+                app,
+                payment_details_data=payment_details_data,
+            )
 
-        event = None
         if transaction_event:
-            event = cls.create_transaction_event(transaction_event, instance, user, app)
+            cls.create_transaction_event(transaction_event, instance, user, app)
             if instance.order:
                 order_transaction_event(
                     order=instance.order,
@@ -231,28 +253,17 @@ class TransactionUpdate(TransactionCreate):
                     reference=transaction_event.get("psp_reference"),
                     message=transaction_event.get("message", ""),
                 )
-        if instance.order_id:
-            order = cast(order_models.Order, instance.order)
-            should_update_search_vector = bool(
-                (instance.psp_reference != previous_transaction_psp_reference)
-                or (event and event.psp_reference)
-            )
-            cls.update_order(
-                order, money_data, update_search_vector=should_update_search_vector
-            )
-            order_info = fetch_order_info(order)
-            order_transaction_updated(
-                order_info=order_info,
-                transaction_item=instance,
-                manager=manager,
-                user=user,
-                app=app,
-                previous_authorized_value=previous_authorized_value,
-                previous_charged_value=previous_charged_value,
-                previous_refunded_value=previous_refunded_value,
-            )
-        if instance.checkout_id and money_data:
-            manager = get_plugin_manager_promise(info.context).get()
-            transaction_amounts_for_checkout_updated(instance, manager, user, app)
+
+        # TransactionCreate.process_order_or_checkout_with_transaction is called to use same logic for processing
+        # order or checkout as in a transaction mutation.
+        process_order_or_checkout_with_transaction(
+            instance,
+            manager,
+            user,
+            app,
+            previous_authorized_value,
+            previous_charged_value,
+            previous_refunded_value,
+        )
 
         return TransactionUpdate(transaction=instance)

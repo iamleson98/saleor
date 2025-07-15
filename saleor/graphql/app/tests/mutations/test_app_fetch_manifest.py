@@ -438,6 +438,11 @@ def test_app_fetch_manifest_extensions_incorrect_enum_values(
         ("/app", AppExtensionTargetEnum.APP_PAGE.name, ""),
         ("/app", AppExtensionTargetEnum.APP_PAGE.name, "https://www.example.com/app"),
         ("/app", AppExtensionTargetEnum.POPUP.name, "https://www.example.com/app"),
+        (
+            "https://www.example.com/app/form",
+            AppExtensionTargetEnum.NEW_TAB.name,
+            "https://www.example.com/app",
+        ),
     ],
 )
 def test_app_fetch_manifest_extensions_correct_url(

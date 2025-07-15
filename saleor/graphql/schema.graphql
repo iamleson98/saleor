@@ -341,7 +341,7 @@ type Query {
     """Filtering options for categories."""
     filter: CategoryFilterInput
 
-    """Where filtering options."""
+    """Where filtering options for categories."""
     where: CategoryWhereInput
 
     """Sort categories."""
@@ -411,7 +411,7 @@ type Query {
     """Filtering options for collections."""
     filter: CollectionFilterInput
 
-    """Where filtering options."""
+    """Where filtering options for collections."""
     where: CollectionWhereInput
 
     """Sort collections."""
@@ -466,9 +466,9 @@ type Query {
   """
   products(
     """Filtering options for products."""
-    filter: ProductFilterInput
+    filter: ProductFilterInput @deprecated(reason: "Use `where` filter instead.")
 
-    """Where filtering options."""
+    """Where filtering options for products."""
     where: ProductWhereInput
 
     """Sort products."""
@@ -555,11 +555,18 @@ type Query {
     """Slug of a channel for which the data should be returned."""
     channel: String
 
-    """Filtering options for product variant."""
-    filter: ProductVariantFilterInput
+    """Filtering options for product variants."""
+    filter: ProductVariantFilterInput @deprecated(reason: "Use `where` filter instead.")
 
-    """Where filtering options."""
+    """Where filtering options for product variants."""
     where: ProductVariantWhereInput
+
+    """
+    Search product variants.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
 
     """Sort products variants."""
     sortBy: ProductVariantSortingInput
@@ -677,6 +684,13 @@ type Query {
     Added in Saleor 3.21.
     """
     slugLanguageCode: LanguageCodeEnum
+
+    """
+    Slug of a channel for which the data should be returned.
+    
+    Added in Saleor 3.22.
+    """
+    channel: String
   ): Page @doc(category: "Pages")
 
   """List of the shop's pages."""
@@ -685,7 +699,28 @@ type Query {
     sortBy: PageSortingInput
 
     """Filtering options for pages."""
-    filter: PageFilterInput
+    filter: PageFilterInput @deprecated(reason: "+ Use `where` and `search` instead.")
+
+    """
+    Search pages. Overrides filter.search input.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
+
+    """
+    Where filtering options for pages.
+    
+    Added in Saleor 3.22.
+    """
+    where: PageWhereInput
+
+    """
+    Slug of a channel for which the data should be returned.
+    
+    Added in Saleor 3.22.
+    """
+    channel: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -781,10 +816,24 @@ type Query {
     sortBy: OrderSortingInput
 
     """Filtering options for orders."""
-    filter: OrderFilterInput
+    filter: OrderFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """
+    Where filtering options for orders.
+    
+    Added in Saleor 3.22.
+    """
+    where: OrderWhereInput
 
     """Slug of a channel for which the data should be returned."""
     channel: String
+
+    """
+    Search orders.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -813,7 +862,21 @@ type Query {
     sortBy: OrderSortingInput
 
     """Filtering options for draft orders."""
-    filter: OrderDraftFilterInput
+    filter: OrderDraftFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """
+    Where filtering options for draft orders.
+    
+    Added in Saleor 3.22.
+    """
+    where: DraftOrderWhereInput
+
+    """
+    Search orders.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -1163,7 +1226,7 @@ type Query {
   Requires one of the following permissions: MANAGE_DISCOUNTS.
   """
   promotions(
-    """Where filtering options."""
+    """Where filtering options for promotions."""
     where: PromotionWhereInput
 
     """Sort promotions."""
@@ -1315,9 +1378,9 @@ type Query {
   """List of the shop's attributes."""
   attributes(
     """Filtering options for attributes."""
-    filter: AttributeFilterInput
+    filter: AttributeFilterInput @deprecated(reason: "Use `where` filter instead.")
 
-    """Filtering options for attributes."""
+    """Where filtering options for attributes."""
     where: AttributeWhereInput
 
     """Search attributes."""
@@ -1472,10 +1535,24 @@ type Query {
   """
   customers(
     """Filtering options for customers."""
-    filter: CustomerFilterInput
+    filter: CustomerFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """
+    Where filtering options for customers.
+    
+    Added in Saleor 3.22.
+    """
+    where: CustomerWhereInput
 
     """Sort customers."""
     sortBy: UserSortingInput
+
+    """
+    Search customers.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -1981,7 +2058,7 @@ enum WebhookEventTypeEnum @doc(category: "Webhooks") {
   CHECKOUT_METADATA_UPDATED
 
   """User notification triggered."""
-  NOTIFY_USER @deprecated(reason: "See the docs for more details about migrating from NOTIFY_USER to other events: https://docs.saleor.io/docs/next/upgrade-guides/notify-user-deprecation")
+  NOTIFY_USER @deprecated(reason: "See the docs for more details about migrating from NOTIFY_USER to other events: https://docs.saleor.io/upgrade-guides/core/3-16-to-3-17#migrating-from-notify_user")
 
   """A new page is created."""
   PAGE_CREATED
@@ -2543,7 +2620,7 @@ enum WebhookEventTypeAsyncEnum @doc(category: "Webhooks") {
   CHECKOUT_METADATA_UPDATED
 
   """User notification triggered."""
-  NOTIFY_USER @deprecated(reason: "See the docs for more details about migrating from NOTIFY_USER to other events: https://docs.saleor.io/docs/next/upgrade-guides/notify-user-deprecation")
+  NOTIFY_USER @deprecated(reason: "See the docs for more details about migrating from NOTIFY_USER to other events: https://docs.saleor.io/upgrade-guides/core/3-16-to-3-17#migrating-from-notify_user")
 
   """A new page is created."""
   PAGE_CREATED
@@ -2928,16 +3005,36 @@ type AppExtension implements Node @doc(category: "Apps") {
 
   """JWT token used to authenticate by third-party app extension."""
   accessToken: String
+
+  """
+  App extension options.
+  
+  Added in Saleor 3.22.
+  """
+  options: AppExtensionPossibleOptions
 }
 
 """All places where app extension can be mounted."""
 enum AppExtensionMountEnum @doc(category: "Apps") {
+  CATEGORY_OVERVIEW_CREATE
+  CATEGORY_OVERVIEW_MORE_ACTIONS
+  CATEGORY_DETAILS_MORE_ACTIONS
+  COLLECTION_OVERVIEW_CREATE
+  COLLECTION_OVERVIEW_MORE_ACTIONS
+  COLLECTION_DETAILS_MORE_ACTIONS
+  COLLECTION_DETAILS_WIDGETS
+  GIFT_CARD_OVERVIEW_CREATE
+  GIFT_CARD_OVERVIEW_MORE_ACTIONS
+  GIFT_CARD_DETAILS_MORE_ACTIONS
+  GIFT_CARD_DETAILS_WIDGETS
   CUSTOMER_OVERVIEW_CREATE
   CUSTOMER_OVERVIEW_MORE_ACTIONS
   CUSTOMER_DETAILS_MORE_ACTIONS
+  CUSTOMER_DETAILS_WIDGETS
   PRODUCT_OVERVIEW_CREATE
   PRODUCT_OVERVIEW_MORE_ACTIONS
   PRODUCT_DETAILS_MORE_ACTIONS
+  PRODUCT_DETAILS_WIDGETS
   NAVIGATION_CATALOG
   NAVIGATION_ORDERS
   NAVIGATION_CUSTOMERS
@@ -2947,6 +3044,27 @@ enum AppExtensionMountEnum @doc(category: "Apps") {
   ORDER_DETAILS_MORE_ACTIONS
   ORDER_OVERVIEW_CREATE
   ORDER_OVERVIEW_MORE_ACTIONS
+  ORDER_DETAILS_WIDGETS
+  DRAFT_ORDER_DETAILS_MORE_ACTIONS
+  DRAFT_ORDER_OVERVIEW_CREATE
+  DRAFT_ORDER_OVERVIEW_MORE_ACTIONS
+  DRAFT_ORDER_DETAILS_WIDGETS
+  DISCOUNT_DETAILS_MORE_ACTIONS
+  DISCOUNT_OVERVIEW_CREATE
+  DISCOUNT_OVERVIEW_MORE_ACTIONS
+  VOUCHER_DETAILS_MORE_ACTIONS
+  VOUCHER_OVERVIEW_CREATE
+  VOUCHER_OVERVIEW_MORE_ACTIONS
+  VOUCHER_DETAILS_WIDGETS
+  PAGE_DETAILS_MORE_ACTIONS
+  PAGE_OVERVIEW_CREATE
+  PAGE_OVERVIEW_MORE_ACTIONS
+  PAGE_TYPE_OVERVIEW_CREATE
+  PAGE_TYPE_OVERVIEW_MORE_ACTIONS
+  PAGE_TYPE_DETAILS_MORE_ACTIONS
+  MENU_OVERVIEW_CREATE
+  MENU_OVERVIEW_MORE_ACTIONS
+  MENU_DETAILS_MORE_ACTIONS
 }
 
 """
@@ -2958,6 +3076,39 @@ All available ways of opening an app extension.
 enum AppExtensionTargetEnum @doc(category: "Apps") {
   POPUP
   APP_PAGE
+  NEW_TAB
+  WIDGET
+}
+
+union AppExtensionPossibleOptions = AppExtensionOptionsWidget | AppExtensionOptionsNewTab
+
+"""Represents the options for an app extension."""
+type AppExtensionOptionsWidget @doc(category: "Apps") {
+  """Options for displaying a Widget"""
+  widgetTarget: WidgetTargetOptions
+}
+
+"""Represents the WIDGET target options for an app extension."""
+type WidgetTargetOptions @doc(category: "Apps") {
+  """HTTP method for Widget target (GET or POST)"""
+  method: HttpMethod!
+}
+
+enum HttpMethod {
+  POST
+  GET
+}
+
+"""Represents the options for an app extension."""
+type AppExtensionOptionsNewTab @doc(category: "Apps") {
+  """Options controlling behavior of the NEW_TAB extension target"""
+  newTabTarget: NewTabTargetOptions
+}
+
+"""Represents the NEW_TAB target options for an app extension."""
+type NewTabTargetOptions @doc(category: "Apps") {
+  """HTTP method for New Tab target (GET or POST)"""
+  method: HttpMethod!
 }
 
 """Represents the app's brand data."""
@@ -4876,6 +5027,7 @@ enum CountryCode {
   KZ
   KE
   KI
+  XK
   KW
   KG
   LA
@@ -5180,6 +5332,16 @@ type OrderSettings {
   Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
   draftOrderLinePriceFreezePeriod: Hour
+
+  """
+  This flag only affects orders created from checkout and applies specifically to vouchers of the types: `SPECIFIC_PRODUCT` and `ENTIRE_ORDER` with `applyOncePerOrder` enabled.
+  - When legacy propagation is enabled, discounts from these vouchers are represented as `OrderDiscount` objects, attached to the order and returned in the `Order.discounts` field. Additionally, percentage-based vouchers are converted to fixed-value discounts.
+  - When legacy propagation is disabled, discounts are represented as `OrderLineDiscount` objects, attached to individual lines and returned in the `OrderLine.discounts` field. In this case, percentage-based vouchers retain their original type.
+  In future releases, `OrderLineDiscount` will become the default behavior, and this flag will be deprecated and removed.
+  
+  Added in Saleor 3.21.
+  """
+  useLegacyLineDiscountPropagation: Boolean!
 }
 
 """
@@ -5228,6 +5390,27 @@ type PaymentSettings {
   Determine the transaction flow strategy to be used. Include the selected option in the payload sent to the payment app, as a requested action for the transaction.
   """
   defaultTransactionFlowStrategy: TransactionFlowStrategyEnum!
+
+  """
+  Determine if the funds for expired checkouts should be released automatically.
+  
+  Added in Saleor 3.20.
+  """
+  releaseFundsForExpiredCheckouts: Boolean
+
+  """
+  The time in hours after which funds for expired checkouts will be released.
+  
+  Added in Saleor 3.20.
+  """
+  checkoutTtlBeforeReleasingFunds: Hour
+
+  """
+  Specifies the earliest date on which funds for expired checkouts can begin to be released. Expired checkouts dated before this cut-off will not have their funds released. Additionally, no funds will be released for checkouts that are more than one year old, regardless of the cut-off date.
+  
+  Added in Saleor 3.20.
+  """
+  checkoutReleaseFundsCutOffDate: DateTime
 }
 
 """
@@ -5302,6 +5485,13 @@ type TaxConfiguration implements Node & ObjectWithMetadata @doc(category: "Taxes
   Added in Saleor 3.19.
   """
   taxAppId: String
+
+  """
+  Determines whether to use weighted tax for shipping. When set to true, the tax rate for shipping will be calculated based on the weighted average of tax rates from the order or checkout lines.
+  
+  Added in Saleor 3.21.
+  """
+  useWeightedTaxForShipping: Boolean
 }
 
 enum TaxCalculationStrategy @doc(category: "Taxes") {
@@ -5333,6 +5523,13 @@ type TaxConfigurationPerCountry @doc(category: "Taxes") {
   Added in Saleor 3.19.
   """
   taxAppId: String
+
+  """
+  Determines whether to use weighted tax for shipping. When set to true, the tax rate for shipping will be calculated based on the weighted average of tax rates from the order or checkout lines.
+  
+  Added in Saleor 3.21.
+  """
+  useWeightedTaxForShipping: Boolean
 }
 
 """Represents shipping method postal code rule."""
@@ -5543,9 +5740,9 @@ type Product implements Node & ObjectWithMetadata @doc(category: "Products") {
   """
   productVariants(
     """Filtering options for product variant."""
-    filter: ProductVariantFilterInput
+    filter: ProductVariantFilterInput @deprecated(reason: "Use `where` filter instead.")
 
-    """Where filtering options."""
+    """Where filtering options for product variants."""
     where: ProductVariantWhereInput
 
     """Sort products variants."""
@@ -5723,8 +5920,14 @@ type ProductType implements Node & ObjectWithMetadata @doc(category: "Products")
   Requires one of the following permissions: MANAGE_PRODUCTS.
   """
   availableAttributes(
-    filter: AttributeFilterInput
+    """Filtering options for attributes of this product type."""
+    filter: AttributeFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """Where filtering options for attributes of this product type."""
     where: AttributeWhereInput
+
+    """Search attributes."""
+    search: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -5871,13 +6074,29 @@ type Attribute implements Node & ObjectWithMetadata @doc(category: "Attributes")
   """The unit of attribute values."""
   unit: MeasurementUnitsEnum
 
-  """List of attribute's values."""
+  """
+  A list of predefined attribute choices available for selection. Available only for attributes with predefined choices.
+  """
   choices(
     """Sort attribute choices."""
     sortBy: AttributeChoicesSortingInput
 
     """Filtering options for attribute choices."""
-    filter: AttributeValueFilterInput
+    filter: AttributeValueFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """
+    Where filtering options for attribute choices.
+    
+    Added in Saleor 3.22.
+    """
+    where: AttributeValueWhereInput
+
+    """
+    Search attribute choices.
+    
+    Added in Saleor 3.22.
+    """
+    search: String
 
     """Return the elements in the list that come before the specified cursor."""
     before: String
@@ -5895,6 +6114,18 @@ type Attribute implements Node & ObjectWithMetadata @doc(category: "Attributes")
     """
     last: Int
   ): AttributeValueCountableConnection
+
+  """
+  List of all existing attribute values. This includes all values that have been assigned to attributes.
+  
+  Added in Saleor 3.22.
+  """
+  values(
+    """
+    Maximum number of attribute values to return. The default value is also the maximum number of values that can be fetched.
+    """
+    limit: Int = 100
+  ): [AttributeValue!]
 
   """
   Whether the attribute requires values to be passed or not. Requires one of the following permissions: MANAGE_PAGES, MANAGE_PAGE_TYPES_AND_ATTRIBUTES, MANAGE_PRODUCTS, MANAGE_PRODUCT_TYPES_AND_ATTRIBUTES.
@@ -5999,6 +6230,8 @@ enum AttributeEntityTypeEnum @doc(category: "Attributes") {
   PAGE
   PRODUCT
   PRODUCT_VARIANT
+  CATEGORY
+  COLLECTION
 }
 
 enum AttributeTypeEnum @doc(category: "Attributes") {
@@ -6085,8 +6318,15 @@ type AttributeValue implements Node @doc(category: "Attributes") {
   """The input type to use for entering attribute values in the dashboard."""
   inputType: AttributeInputTypeEnum
 
-  """The ID of the attribute reference."""
+  """The ID of the referenced object."""
   reference: ID
+
+  """
+  The object referenced by the attribute value.
+  
+  Added in Saleor 3.22.
+  """
+  referencedObject: AttributeValueReferencedObject
 
   """Represents file URL and content type (if attribute value is a file)."""
   file: File
@@ -6215,785 +6455,7 @@ type AttributeTranslation implements Node @doc(category: "Attributes") {
   translatableContent: AttributeTranslatableContent
 }
 
-type File {
-  """The URL of the file."""
-  url: String!
-
-  """Content type of the file."""
-  contentType: String
-}
-
-"""
-The `Date` scalar type represents a Date
-value as specified by
-[iso8601](https://en.wikipedia.org/wiki/ISO_8601).
-"""
-scalar Date
-
-input AttributeChoicesSortingInput @doc(category: "Attributes") {
-  """Specifies the direction in which to sort attribute choices."""
-  direction: OrderDirection!
-
-  """Sort attribute choices by the selected field."""
-  field: AttributeChoicesSortField!
-}
-
-enum AttributeChoicesSortField @doc(category: "Attributes") {
-  """Sort attribute choice by name."""
-  NAME
-
-  """Sort attribute choice by slug."""
-  SLUG
-}
-
-input AttributeValueFilterInput @doc(category: "Attributes") {
-  search: String
-  ids: [ID!]
-  slugs: [String!]
-}
-
-type ProductTypeCountableConnection @doc(category: "Products") {
-  """Pagination data for this connection."""
-  pageInfo: PageInfo!
-  edges: [ProductTypeCountableEdge!]!
-
-  """A total count of items in the collection."""
-  totalCount: Int
-}
-
-type ProductTypeCountableEdge @doc(category: "Products") {
-  """The item at the end of the edge."""
-  node: ProductType!
-
-  """A cursor for use in pagination."""
-  cursor: String!
-}
-
-enum VariantAttributeScope @doc(category: "Products") {
-  ALL
-  VARIANT_SELECTION
-  NOT_VARIANT_SELECTION
-}
-
-"""
-Represents assigned attribute to variant with variant selection attached.
-"""
-type AssignedVariantAttribute @doc(category: "Attributes") {
-  """Attribute assigned to variant."""
-  attribute: Attribute!
-
-  """
-  Determines, whether assigned attribute is allowed for variant selection. Supported variant types for variant selection are: ['dropdown', 'boolean', 'swatch', 'numeric']
-  """
-  variantSelection: Boolean!
-}
-
-type AttributeCountableConnection @doc(category: "Attributes") {
-  """Pagination data for this connection."""
-  pageInfo: PageInfo!
-  edges: [AttributeCountableEdge!]!
-
-  """A total count of items in the collection."""
-  totalCount: Int
-}
-
-type AttributeCountableEdge @doc(category: "Attributes") {
-  """The item at the end of the edge."""
-  node: Attribute!
-
-  """A cursor for use in pagination."""
-  cursor: String!
-}
-
-input AttributeFilterInput @doc(category: "Attributes") {
-  valueRequired: Boolean
-  isVariantOnly: Boolean
-  visibleInStorefront: Boolean
-  filterableInStorefront: Boolean
-  filterableInDashboard: Boolean
-  availableInGrid: Boolean
-  metadata: [MetadataFilter!]
-  search: String
-  ids: [ID!]
-  type: AttributeTypeEnum
-  inCollection: ID
-  inCategory: ID
-  slugs: [String!]
-
-  """Specifies the channel by which the data should be filtered."""
-  channel: String @deprecated(reason: "Use root-level channel argument instead.")
-}
-
-input MetadataFilter {
-  """Key of a metadata item."""
-  key: String!
-
-  """Value of a metadata item."""
-  value: String
-}
-
-"""Where filtering options."""
-input AttributeWhereInput @doc(category: "Attributes") {
-  metadata: [MetadataFilter!]
-  ids: [ID!]
-  name: StringFilterInput
-  slug: StringFilterInput
-  withChoices: Boolean
-  inputType: AttributeInputTypeEnumFilterInput
-  entityType: AttributeEntityTypeEnumFilterInput
-  type: AttributeTypeEnumFilterInput
-  unit: MeasurementUnitsEnumFilterInput
-  inCollection: ID
-  inCategory: ID
-  valueRequired: Boolean
-  visibleInStorefront: Boolean
-  filterableInDashboard: Boolean
-
-  """List of conditions that must be met."""
-  AND: [AttributeWhereInput!]
-
-  """A list of conditions of which at least one must be met."""
-  OR: [AttributeWhereInput!]
-}
-
-"""Define the filtering options for string fields."""
-input StringFilterInput {
-  """The value equal to."""
-  eq: String
-
-  """The value included in."""
-  oneOf: [String!]
-}
-
-input AttributeInputTypeEnumFilterInput @doc(category: "Attributes") {
-  """The value equal to."""
-  eq: AttributeInputTypeEnum
-
-  """The value included in."""
-  oneOf: [AttributeInputTypeEnum!]
-}
-
-input AttributeEntityTypeEnumFilterInput @doc(category: "Attributes") {
-  """The value equal to."""
-  eq: AttributeEntityTypeEnum
-
-  """The value included in."""
-  oneOf: [AttributeEntityTypeEnum!]
-}
-
-input AttributeTypeEnumFilterInput @doc(category: "Attributes") {
-  """The value equal to."""
-  eq: AttributeTypeEnum
-
-  """The value included in."""
-  oneOf: [AttributeTypeEnum!]
-}
-
-input MeasurementUnitsEnumFilterInput @doc(category: "Attributes") {
-  """The value equal to."""
-  eq: MeasurementUnitsEnum
-
-  """The value included in."""
-  oneOf: [MeasurementUnitsEnum!]
-}
-
-"""
-Represents a single category of products. Categories allow to organize products in a tree-hierarchies which can be used for navigation in the storefront.
-"""
-type Category implements Node & ObjectWithMetadata @doc(category: "Products") {
-  """The ID of the category."""
-  id: ID!
-
-  """List of private metadata items. Requires staff permissions to access."""
-  privateMetadata: [MetadataItem!]!
-
-  """
-  A single key from private metadata. Requires staff permissions to access.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  privateMetafield(key: String!): String
-
-  """
-  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  privateMetafields(keys: [String!]): Metadata
-
-  """List of public metadata items. Can be accessed without permissions."""
-  metadata: [MetadataItem!]!
-
-  """
-  A single key from public metadata.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  metafield(key: String!): String
-
-  """
-  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  metafields(keys: [String!]): Metadata
-
-  """SEO title of category."""
-  seoTitle: String
-
-  """SEO description of category."""
-  seoDescription: String
-
-  """Name of category"""
-  name: String!
-
-  """
-  Description of the category.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  description: JSONString
-
-  """Slug of the category."""
-  slug: String!
-
-  """Parent category."""
-  parent: Category
-
-  """Level of the category."""
-  level: Int!
-
-  """
-  Description of the category.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
-
-  """The date and time when the category was last updated."""
-  updatedAt: DateTime!
-
-  """List of ancestors of the category."""
-  ancestors(
-    """Return the elements in the list that come before the specified cursor."""
-    before: String
-
-    """Return the elements in the list that come after the specified cursor."""
-    after: String
-
-    """
-    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    first: Int
-
-    """
-    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    last: Int
-  ): CategoryCountableConnection
-
-  """
-  List of products in the category. Requires the following permissions to include the unpublished items: MANAGE_ORDERS, MANAGE_DISCOUNTS, MANAGE_PRODUCTS.
-  """
-  products(
-    """Filtering options for products."""
-    filter: ProductFilterInput
-
-    """Filtering options for products."""
-    where: ProductWhereInput
-
-    """Sort products."""
-    sortBy: ProductOrder
-
-    """Slug of a channel for which the data should be returned."""
-    channel: String
-
-    """Return the elements in the list that come before the specified cursor."""
-    before: String
-
-    """Return the elements in the list that come after the specified cursor."""
-    after: String
-
-    """
-    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    first: Int
-
-    """
-    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    last: Int
-  ): ProductCountableConnection
-
-  """List of children of the category."""
-  children(
-    """Return the elements in the list that come before the specified cursor."""
-    before: String
-
-    """Return the elements in the list that come after the specified cursor."""
-    after: String
-
-    """
-    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    first: Int
-
-    """
-    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    last: Int
-  ): CategoryCountableConnection
-
-  """Background image of the category."""
-  backgroundImage(
-    """
-    Desired longest side the image in pixels. Defaults to 4096. Images are never cropped. Pass 0 to retrieve the original size (not recommended).
-    """
-    size: Int
-
-    """
-    The format of the image. When not provided, format of the original image will be used.
-    """
-    format: ThumbnailFormatEnum = ORIGINAL
-  ): Image
-
-  """Returns translated category fields for the given language code."""
-  translation(
-    """A language code to return the translation for category."""
-    languageCode: LanguageCodeEnum!
-  ): CategoryTranslation
-}
-
-type CategoryCountableConnection @doc(category: "Products") {
-  """Pagination data for this connection."""
-  pageInfo: PageInfo!
-  edges: [CategoryCountableEdge!]!
-
-  """A total count of items in the collection."""
-  totalCount: Int
-}
-
-type CategoryCountableEdge @doc(category: "Products") {
-  """The item at the end of the edge."""
-  node: Category!
-
-  """A cursor for use in pagination."""
-  cursor: String!
-}
-
-input ProductFilterInput @doc(category: "Products") {
-  isPublished: Boolean
-  collections: [ID!]
-  categories: [ID!]
-  hasCategory: Boolean
-  attributes: [AttributeInput!]
-
-  """Filter by variants having specific stock status."""
-  stockAvailability: StockAvailability
-  stocks: ProductStockFilterInput
-  search: String
-  metadata: [MetadataFilter!]
-
-  """Filter by the publication date."""
-  publishedFrom: DateTime
-
-  """Filter by availability for purchase."""
-  isAvailable: Boolean
-
-  """Filter by the date of availability for purchase."""
-  availableFrom: DateTime
-
-  """Filter by visibility in product listings."""
-  isVisibleInListing: Boolean
-  price: PriceRangeInput
-
-  """Filter by the lowest variant price after discounts."""
-  minimalPrice: PriceRangeInput
-
-  """Filter by when was the most recent update."""
-  updatedAt: DateTimeRangeInput
-  productTypes: [ID!]
-
-  """Filter on whether product is a gift card or not."""
-  giftCard: Boolean
-  ids: [ID!]
-  hasPreorderedVariants: Boolean
-  slugs: [String!]
-
-  """Specifies the channel by which the data should be filtered."""
-  channel: String @deprecated(reason: "Use root-level channel argument instead.")
-}
-
-input AttributeInput @doc(category: "Attributes") {
-  """Internal representation of an attribute name."""
-  slug: String!
-
-  """Internal representation of a value (unique per attribute)."""
-  values: [String!]
-
-  """The range that the returned values should be in."""
-  valuesRange: IntRangeInput
-
-  """The date/time range that the returned values should be in."""
-  dateTime: DateTimeRangeInput
-
-  """
-  The date range that the returned values should be in. In case of date/time attributes, the UTC midnight of the given date is used.
-  """
-  date: DateRangeInput
-
-  """The boolean value of the attribute."""
-  boolean: Boolean
-}
-
-input IntRangeInput {
-  """Value greater than or equal to."""
-  gte: Int
-
-  """Value less than or equal to."""
-  lte: Int
-}
-
-input DateTimeRangeInput {
-  """Start date."""
-  gte: DateTime
-
-  """End date."""
-  lte: DateTime
-}
-
-input DateRangeInput {
-  """Start date."""
-  gte: Date
-
-  """End date."""
-  lte: Date
-}
-
-enum StockAvailability @doc(category: "Products") {
-  IN_STOCK
-  OUT_OF_STOCK
-}
-
-input ProductStockFilterInput @doc(category: "Products") {
-  warehouseIds: [ID!]
-  quantity: IntRangeInput
-}
-
-input PriceRangeInput {
-  """Price greater than or equal to."""
-  gte: Float
-
-  """Price less than or equal to."""
-  lte: Float
-}
-
-input ProductWhereInput @doc(category: "Products") {
-  metadata: [MetadataFilter!]
-  ids: [ID!]
-
-  """Filter by product name."""
-  name: StringFilterInput
-
-  """Filter by product slug."""
-  slug: StringFilterInput
-
-  """Filter by product type."""
-  productType: GlobalIDFilterInput
-
-  """Filter by product category."""
-  category: GlobalIDFilterInput
-
-  """Filter by collection."""
-  collection: GlobalIDFilterInput
-
-  """Filter by availability for purchase."""
-  isAvailable: Boolean
-
-  """Filter by public visibility."""
-  isPublished: Boolean
-
-  """Filter by visibility on the channel."""
-  isVisibleInListing: Boolean
-
-  """Filter by the publication date."""
-  publishedFrom: DateTime
-
-  """Filter by the date of availability for purchase."""
-  availableFrom: DateTime
-
-  """Filter by product with category assigned."""
-  hasCategory: Boolean
-
-  """Filter by product variant price."""
-  price: DecimalFilterInput
-
-  """Filter by the lowest variant price after discounts."""
-  minimalPrice: DecimalFilterInput
-
-  """Filter by attributes associated with the product."""
-  attributes: [AttributeInput!]
-
-  """Filter by variants having specific stock status."""
-  stockAvailability: StockAvailability
-
-  """Filter by stock of the product variant."""
-  stocks: ProductStockFilterInput
-
-  """Filter on whether product is a gift card or not."""
-  giftCard: Boolean
-
-  """Filter by product with preordered variants."""
-  hasPreorderedVariants: Boolean
-
-  """Filter by when was the most recent update."""
-  updatedAt: DateTimeFilterInput
-
-  """List of conditions that must be met."""
-  AND: [ProductWhereInput!]
-
-  """A list of conditions of which at least one must be met."""
-  OR: [ProductWhereInput!]
-}
-
-"""Define the filtering options for foreign key fields."""
-input GlobalIDFilterInput {
-  """The value equal to."""
-  eq: ID
-
-  """The value included in."""
-  oneOf: [ID!]
-}
-
-"""Define the filtering options for decimal fields."""
-input DecimalFilterInput {
-  """The value equal to."""
-  eq: Decimal
-
-  """The value included in."""
-  oneOf: [Decimal!]
-
-  """The value in range."""
-  range: DecimalRangeInput
-}
-
-"""
-Custom Decimal implementation.
-
-Returns Decimal as a float in the API,
-parses float to the Decimal on the way back.
-"""
-scalar Decimal
-
-input DecimalRangeInput {
-  """Decimal value greater than or equal to."""
-  gte: Decimal
-
-  """Decimal value less than or equal to."""
-  lte: Decimal
-}
-
-"""Define the filtering options for date time fields."""
-input DateTimeFilterInput {
-  """The value equal to."""
-  eq: DateTime
-
-  """The value included in."""
-  oneOf: [DateTime!]
-
-  """The value in range."""
-  range: DateTimeRangeInput
-}
-
-input ProductOrder @doc(category: "Products") {
-  """Specifies the direction in which to sort products."""
-  direction: OrderDirection!
-
-  """Specifies the channel in which to sort the data."""
-  channel: String @deprecated(reason: "Use root-level channel argument instead.")
-
-  """
-  Sort product by the selected attribute's values.
-  Note: this doesn't take translations into account yet.
-  """
-  attributeId: ID
-
-  """Sort products by the selected field."""
-  field: ProductOrderField
-}
-
-enum ProductOrderField @doc(category: "Products") {
-  """Sort products by name."""
-  NAME
-
-  """
-  Sort products by rank. Note: This option is available only with the `search` filter.
-  """
-  RANK
-
-  """
-  Sort products by price.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  PRICE
-
-  """
-  Sort products by a minimal price of a product's variant.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  MINIMAL_PRICE
-
-  """Sort products by update date."""
-  LAST_MODIFIED
-
-  """Sort products by update date."""
-  DATE
-
-  """Sort products by type."""
-  TYPE
-
-  """
-  Sort products by publication status.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  PUBLISHED
-
-  """
-  Sort products by publication date.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  PUBLICATION_DATE
-
-  """
-  Sort products by publication date.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  PUBLISHED_AT
-
-  """Sort products by update date."""
-  LAST_MODIFIED_AT
-
-  """
-  Sort products by collection. Note: This option is available only for the `Collection.products` query.
-  
-  This option requires a channel filter to work as the values can vary between channels.
-  """
-  COLLECTION
-
-  """Sort products by rating."""
-  RATING
-
-  """Sort products by creation date."""
-  CREATED_AT
-}
-
-"""Represents an image."""
-type Image {
-  """The URL of the image."""
-  url: String!
-
-  """Alt text for an image."""
-  alt: String
-}
-
-enum ThumbnailFormatEnum {
-  ORIGINAL
-  AVIF
-  WEBP
-}
-
-"""Represents category translations."""
-type CategoryTranslation implements Node @doc(category: "Products") {
-  """The ID of the category translation."""
-  id: ID!
-
-  """Translation language."""
-  language: LanguageDisplay!
-
-  """Translated SEO title."""
-  seoTitle: String
-
-  """Translated SEO description."""
-  seoDescription: String
-
-  """
-  Translated category slug.
-  
-  Added in Saleor 3.21.
-  """
-  slug: String
-
-  """Translated category name."""
-  name: String
-
-  """
-  Translated description of the category.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  description: JSONString
-
-  """
-  Translated description of the category.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
-
-  """Represents the category fields to translate."""
-  translatableContent: CategoryTranslatableContent
-}
-
-"""
-Represents category original translatable fields and related translations.
-"""
-type CategoryTranslatableContent implements Node @doc(category: "Products") {
-  """The ID of the category translatable content."""
-  id: ID!
-
-  """The ID of the category to translate."""
-  categoryId: ID!
-
-  """SEO title to translate."""
-  seoTitle: String
-
-  """SEO description to translate."""
-  seoDescription: String
-
-  """
-  Slug to translate.
-  
-  Added in Saleor 3.21.
-  """
-  slug: String
-
-  """Name of the category translatable content."""
-  name: String!
-
-  """
-  Category description to translate.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  description: JSONString
-
-  """
-  Description of the category.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
-
-  """Returns translated category fields for the given language code."""
-  translation(
-    """A language code to return the translation for category."""
-    languageCode: LanguageCodeEnum!
-  ): CategoryTranslation
-
-  """Represents a single category of products."""
-  category: Category @deprecated(reason: "Get model fields from the root level queries.")
-}
+union AttributeValueReferencedObject = Product | ProductVariant | Page
 
 """Represents a version of a product such as different size or color."""
 type ProductVariant implements Node & ObjectWithMetadata @doc(category: "Products") {
@@ -7322,6 +6784,12 @@ type SelectedAttribute @doc(category: "Attributes") {
   values: [AttributeValue!]!
 }
 
+enum VariantAttributeScope @doc(category: "Products") {
+  ALL
+  VARIANT_SELECTION
+  NOT_VARIANT_SELECTION
+}
+
 enum ReportingPeriod {
   TODAY
   THIS_MONTH
@@ -7352,6 +6820,12 @@ type ProductImage @doc(category: "Products") {
     """
     format: ThumbnailFormatEnum = ORIGINAL
   ): String!
+}
+
+enum ThumbnailFormatEnum {
+  ORIGINAL
+  AVIF
+  WEBP
 }
 
 """Represents a product media."""
@@ -7597,6 +7071,1074 @@ type PreorderData @doc(category: "Products") {
   endDate: DateTime
 }
 
+"""
+A static page that can be manually added by a shop operator through the dashboard.
+"""
+type Page implements Node & ObjectWithMetadata @doc(category: "Pages") {
+  """ID of the page."""
+  id: ID!
+
+  """List of private metadata items. Requires staff permissions to access."""
+  privateMetadata: [MetadataItem!]!
+
+  """
+  A single key from private metadata. Requires staff permissions to access.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  privateMetafield(key: String!): String
+
+  """
+  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  privateMetafields(keys: [String!]): Metadata
+
+  """List of public metadata items. Can be accessed without permissions."""
+  metadata: [MetadataItem!]!
+
+  """
+  A single key from public metadata.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  metafield(key: String!): String
+
+  """
+  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  metafields(keys: [String!]): Metadata
+
+  """Title of the page for SEO."""
+  seoTitle: String
+
+  """Description of the page for SEO."""
+  seoDescription: String
+
+  """Title of the page."""
+  title: String!
+
+  """
+  Content of the page.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  content: JSONString
+  publicationDate: Date @deprecated(reason: "Use the `publishedAt` field to fetch the publication date.")
+
+  """The page publication date."""
+  publishedAt: DateTime
+
+  """Determines if the page is published."""
+  isPublished: Boolean!
+
+  """Slug of the page."""
+  slug: String!
+
+  """Determines the type of page"""
+  pageType: PageType!
+
+  """Date and time at which page was created."""
+  created: DateTime!
+
+  """
+  Content of the page.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  contentJson: JSONString! @deprecated(reason: "Use the `content` field instead.")
+
+  """Returns translated page fields for the given language code."""
+  translation(
+    """A language code to return the translation for page."""
+    languageCode: LanguageCodeEnum!
+  ): PageTranslation
+
+  """Get a single attribute attached to page by attribute slug."""
+  attribute(
+    """Slug of the attribute"""
+    slug: String!
+  ): SelectedAttribute
+
+  """List of attributes assigned to this page."""
+  attributes: [SelectedAttribute!]!
+}
+
+"""
+The `Date` scalar type represents a Date
+value as specified by
+[iso8601](https://en.wikipedia.org/wiki/ISO_8601).
+"""
+scalar Date
+
+"""
+Represents a type of page. It defines what attributes are available to pages of this type.
+"""
+type PageType implements Node & ObjectWithMetadata @doc(category: "Pages") {
+  """ID of the page type."""
+  id: ID!
+
+  """List of private metadata items. Requires staff permissions to access."""
+  privateMetadata: [MetadataItem!]!
+
+  """
+  A single key from private metadata. Requires staff permissions to access.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  privateMetafield(key: String!): String
+
+  """
+  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  privateMetafields(keys: [String!]): Metadata
+
+  """List of public metadata items. Can be accessed without permissions."""
+  metadata: [MetadataItem!]!
+
+  """
+  A single key from public metadata.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  metafield(key: String!): String
+
+  """
+  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  metafields(keys: [String!]): Metadata
+
+  """Name of the page type."""
+  name: String!
+
+  """Slug of the page type."""
+  slug: String!
+
+  """Page attributes of that page type."""
+  attributes: [Attribute!]
+
+  """
+  Attributes that can be assigned to the page type.
+  
+  Requires one of the following permissions: MANAGE_PAGES, MANAGE_PAGE_TYPES_AND_ATTRIBUTES.
+  """
+  availableAttributes(
+    """Filtering options for attributes."""
+    filter: AttributeFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """Where filtering options for attributes."""
+    where: AttributeWhereInput
+
+    """Search attributes."""
+    search: String
+
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): AttributeCountableConnection
+
+  """
+  Whether page type has pages assigned.
+  
+  Requires one of the following permissions: MANAGE_PAGES, MANAGE_PAGE_TYPES_AND_ATTRIBUTES.
+  """
+  hasPages: Boolean
+}
+
+type AttributeCountableConnection @doc(category: "Attributes") {
+  """Pagination data for this connection."""
+  pageInfo: PageInfo!
+  edges: [AttributeCountableEdge!]!
+
+  """A total count of items in the collection."""
+  totalCount: Int
+}
+
+type AttributeCountableEdge @doc(category: "Attributes") {
+  """The item at the end of the edge."""
+  node: Attribute!
+
+  """A cursor for use in pagination."""
+  cursor: String!
+}
+
+input AttributeFilterInput @doc(category: "Attributes") {
+  valueRequired: Boolean
+  isVariantOnly: Boolean
+  visibleInStorefront: Boolean
+  filterableInStorefront: Boolean
+  filterableInDashboard: Boolean
+  availableInGrid: Boolean
+  metadata: [MetadataFilter!]
+  search: String
+  ids: [ID!]
+  type: AttributeTypeEnum
+  inCollection: ID
+  inCategory: ID
+  slugs: [String!]
+
+  """Specifies the channel by which the data should be filtered."""
+  channel: String @deprecated(reason: "Use root-level channel argument instead.")
+}
+
+input MetadataFilter {
+  """Key of a metadata item."""
+  key: String!
+
+  """Value of a metadata item."""
+  value: String
+}
+
+"""Where filtering options."""
+input AttributeWhereInput @doc(category: "Attributes") {
+  metadata: [MetadataFilter!]
+  ids: [ID!]
+  name: StringFilterInput
+  slug: StringFilterInput
+  withChoices: Boolean
+  inputType: AttributeInputTypeEnumFilterInput
+  entityType: AttributeEntityTypeEnumFilterInput
+  type: AttributeTypeEnumFilterInput
+  unit: MeasurementUnitsEnumFilterInput
+  inCollection: ID
+  inCategory: ID
+  valueRequired: Boolean
+  visibleInStorefront: Boolean
+  filterableInDashboard: Boolean
+
+  """List of conditions that must be met."""
+  AND: [AttributeWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [AttributeWhereInput!]
+}
+
+"""Define the filtering options for string fields."""
+input StringFilterInput {
+  """The value equal to."""
+  eq: String
+
+  """The value included in."""
+  oneOf: [String!]
+}
+
+input AttributeInputTypeEnumFilterInput @doc(category: "Attributes") {
+  """The value equal to."""
+  eq: AttributeInputTypeEnum
+
+  """The value included in."""
+  oneOf: [AttributeInputTypeEnum!]
+}
+
+input AttributeEntityTypeEnumFilterInput @doc(category: "Attributes") {
+  """The value equal to."""
+  eq: AttributeEntityTypeEnum
+
+  """The value included in."""
+  oneOf: [AttributeEntityTypeEnum!]
+}
+
+input AttributeTypeEnumFilterInput @doc(category: "Attributes") {
+  """The value equal to."""
+  eq: AttributeTypeEnum
+
+  """The value included in."""
+  oneOf: [AttributeTypeEnum!]
+}
+
+input MeasurementUnitsEnumFilterInput @doc(category: "Attributes") {
+  """The value equal to."""
+  eq: MeasurementUnitsEnum
+
+  """The value included in."""
+  oneOf: [MeasurementUnitsEnum!]
+}
+
+"""Represents page translations."""
+type PageTranslation implements Node @doc(category: "Pages") {
+  """The ID of the page translation."""
+  id: ID!
+
+  """Translation language."""
+  language: LanguageDisplay!
+
+  """Translated SEO title."""
+  seoTitle: String
+
+  """Translated SEO description."""
+  seoDescription: String
+
+  """
+  Translated page slug.
+  
+  Added in Saleor 3.21.
+  """
+  slug: String
+
+  """Translated page title."""
+  title: String
+
+  """
+  Translated content of the page.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  content: JSONString
+
+  """
+  Translated description of the page.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  contentJson: JSONString @deprecated(reason: "Use the `content` field instead.")
+
+  """Represents the page fields to translate."""
+  translatableContent: PageTranslatableContent
+}
+
+"""
+Represents page's original translatable fields and related translations.
+"""
+type PageTranslatableContent implements Node @doc(category: "Pages") {
+  """The ID of the page translatable content."""
+  id: ID!
+
+  """The ID of the page to translate."""
+  pageId: ID!
+
+  """SEO title to translate."""
+  seoTitle: String
+
+  """SEO description to translate."""
+  seoDescription: String
+
+  """
+  Slug to translate.
+  
+  Added in Saleor 3.21.
+  """
+  slug: String
+
+  """Page title to translate."""
+  title: String!
+
+  """
+  Content of the page to translate.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  content: JSONString
+
+  """
+  Content of the page.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  contentJson: JSONString @deprecated(reason: "Use the `content` field instead.")
+
+  """Returns translated page fields for the given language code."""
+  translation(
+    """A language code to return the translation for page."""
+    languageCode: LanguageCodeEnum!
+  ): PageTranslation
+
+  """
+  A static page that can be manually added by a shop operator through the dashboard.
+  """
+  page: Page @deprecated(reason: "Get model fields from the root level queries.")
+
+  """List of page content attribute values that can be translated."""
+  attributeValues: [AttributeValueTranslatableContent!]!
+}
+
+type File {
+  """The URL of the file."""
+  url: String!
+
+  """Content type of the file."""
+  contentType: String
+}
+
+input AttributeChoicesSortingInput @doc(category: "Attributes") {
+  """Specifies the direction in which to sort attribute choices."""
+  direction: OrderDirection!
+
+  """Sort attribute choices by the selected field."""
+  field: AttributeChoicesSortField!
+}
+
+enum AttributeChoicesSortField @doc(category: "Attributes") {
+  """Sort attribute choice by name."""
+  NAME
+
+  """Sort attribute choice by slug."""
+  SLUG
+}
+
+input AttributeValueFilterInput @doc(category: "Attributes") {
+  search: String
+  ids: [ID!]
+  slugs: [String!]
+}
+
+"""Where filtering options for attribute values."""
+input AttributeValueWhereInput @doc(category: "Attributes") {
+  ids: [ID!]
+  name: StringFilterInput
+  slug: StringFilterInput
+
+  """List of conditions that must be met."""
+  AND: [AttributeValueWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [AttributeValueWhereInput!]
+}
+
+type ProductTypeCountableConnection @doc(category: "Products") {
+  """Pagination data for this connection."""
+  pageInfo: PageInfo!
+  edges: [ProductTypeCountableEdge!]!
+
+  """A total count of items in the collection."""
+  totalCount: Int
+}
+
+type ProductTypeCountableEdge @doc(category: "Products") {
+  """The item at the end of the edge."""
+  node: ProductType!
+
+  """A cursor for use in pagination."""
+  cursor: String!
+}
+
+"""
+Represents assigned attribute to variant with variant selection attached.
+"""
+type AssignedVariantAttribute @doc(category: "Attributes") {
+  """Attribute assigned to variant."""
+  attribute: Attribute!
+
+  """
+  Determines, whether assigned attribute is allowed for variant selection. Supported variant types for variant selection are: ['dropdown', 'boolean', 'swatch', 'numeric']
+  """
+  variantSelection: Boolean!
+}
+
+"""
+Represents a single category of products. Categories allow to organize products in a tree-hierarchies which can be used for navigation in the storefront.
+"""
+type Category implements Node & ObjectWithMetadata @doc(category: "Products") {
+  """The ID of the category."""
+  id: ID!
+
+  """List of private metadata items. Requires staff permissions to access."""
+  privateMetadata: [MetadataItem!]!
+
+  """
+  A single key from private metadata. Requires staff permissions to access.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  privateMetafield(key: String!): String
+
+  """
+  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  privateMetafields(keys: [String!]): Metadata
+
+  """List of public metadata items. Can be accessed without permissions."""
+  metadata: [MetadataItem!]!
+
+  """
+  A single key from public metadata.
+  
+  Tip: Use GraphQL aliases to fetch multiple keys.
+  """
+  metafield(key: String!): String
+
+  """
+  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
+  """
+  metafields(keys: [String!]): Metadata
+
+  """SEO title of category."""
+  seoTitle: String
+
+  """SEO description of category."""
+  seoDescription: String
+
+  """Name of category"""
+  name: String!
+
+  """
+  Description of the category.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  description: JSONString
+
+  """Slug of the category."""
+  slug: String!
+
+  """Parent category."""
+  parent: Category
+
+  """Level of the category."""
+  level: Int!
+
+  """
+  Description of the category.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
+
+  """The date and time when the category was last updated."""
+  updatedAt: DateTime!
+
+  """List of ancestors of the category."""
+  ancestors(
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): CategoryCountableConnection
+
+  """
+  List of products in the category. Requires the following permissions to include the unpublished items: MANAGE_ORDERS, MANAGE_DISCOUNTS, MANAGE_PRODUCTS.
+  """
+  products(
+    """Filtering options for products."""
+    filter: ProductFilterInput @deprecated(reason: "Use `where` filter instead.")
+
+    """Where filtering options for products."""
+    where: ProductWhereInput
+
+    """Sort products."""
+    sortBy: ProductOrder
+
+    """Search products."""
+    search: String
+
+    """Slug of a channel for which the data should be returned."""
+    channel: String
+
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): ProductCountableConnection
+
+  """List of children of the category."""
+  children(
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): CategoryCountableConnection
+
+  """Background image of the category."""
+  backgroundImage(
+    """
+    Desired longest side the image in pixels. Defaults to 4096. Images are never cropped. Pass 0 to retrieve the original size (not recommended).
+    """
+    size: Int
+
+    """
+    The format of the image. When not provided, format of the original image will be used.
+    """
+    format: ThumbnailFormatEnum = ORIGINAL
+  ): Image
+
+  """Returns translated category fields for the given language code."""
+  translation(
+    """A language code to return the translation for category."""
+    languageCode: LanguageCodeEnum!
+  ): CategoryTranslation
+}
+
+type CategoryCountableConnection @doc(category: "Products") {
+  """Pagination data for this connection."""
+  pageInfo: PageInfo!
+  edges: [CategoryCountableEdge!]!
+
+  """A total count of items in the collection."""
+  totalCount: Int
+}
+
+type CategoryCountableEdge @doc(category: "Products") {
+  """The item at the end of the edge."""
+  node: Category!
+
+  """A cursor for use in pagination."""
+  cursor: String!
+}
+
+input ProductFilterInput @doc(category: "Products") {
+  isPublished: Boolean
+  collections: [ID!]
+  categories: [ID!]
+  hasCategory: Boolean
+  attributes: [AttributeInput!]
+
+  """Filter by variants having specific stock status."""
+  stockAvailability: StockAvailability
+  stocks: ProductStockFilterInput
+  search: String
+  metadata: [MetadataFilter!]
+
+  """Filter by the publication date."""
+  publishedFrom: DateTime
+
+  """Filter by availability for purchase."""
+  isAvailable: Boolean
+
+  """Filter by the date of availability for purchase."""
+  availableFrom: DateTime
+
+  """Filter by visibility in product listings."""
+  isVisibleInListing: Boolean
+  price: PriceRangeInput
+
+  """Filter by the lowest variant price after discounts."""
+  minimalPrice: PriceRangeInput
+
+  """Filter by when was the most recent update."""
+  updatedAt: DateTimeRangeInput
+  productTypes: [ID!]
+
+  """Filter on whether product is a gift card or not."""
+  giftCard: Boolean
+  ids: [ID!]
+  hasPreorderedVariants: Boolean
+  slugs: [String!]
+
+  """Specifies the channel by which the data should be filtered."""
+  channel: String @deprecated(reason: "Use root-level channel argument instead.")
+}
+
+input AttributeInput @doc(category: "Attributes") {
+  """Internal representation of an attribute name."""
+  slug: String!
+
+  """
+  Names corresponding to the attributeValues associated with the Attribute. When specified, it filters the results to include only records with one of the matching values.
+  
+  Added in Saleor 3.22.
+  """
+  valueNames: [String!]
+
+  """
+  Slugs identifying the attributeValues associated with the Attribute. When specified, it filters the results to include only records with one of the matching values.
+  """
+  values: [String!]
+
+  """The range that the returned values should be in."""
+  valuesRange: IntRangeInput
+
+  """The date/time range that the returned values should be in."""
+  dateTime: DateTimeRangeInput
+
+  """
+  The date range that the returned values should be in. In case of date/time attributes, the UTC midnight of the given date is used.
+  """
+  date: DateRangeInput
+
+  """The boolean value of the attribute."""
+  boolean: Boolean
+}
+
+input IntRangeInput {
+  """Value greater than or equal to."""
+  gte: Int
+
+  """Value less than or equal to."""
+  lte: Int
+}
+
+input DateTimeRangeInput {
+  """Start date."""
+  gte: DateTime
+
+  """End date."""
+  lte: DateTime
+}
+
+input DateRangeInput {
+  """Start date."""
+  gte: Date
+
+  """End date."""
+  lte: Date
+}
+
+enum StockAvailability @doc(category: "Products") {
+  IN_STOCK
+  OUT_OF_STOCK
+}
+
+input ProductStockFilterInput @doc(category: "Products") {
+  warehouseIds: [ID!]
+  quantity: IntRangeInput
+}
+
+input PriceRangeInput {
+  """Price greater than or equal to."""
+  gte: Float
+
+  """Price less than or equal to."""
+  lte: Float
+}
+
+input ProductWhereInput @doc(category: "Products") {
+  metadata: [MetadataFilter!]
+  ids: [ID!]
+
+  """Filter by product name."""
+  name: StringFilterInput
+
+  """Filter by product slug."""
+  slug: StringFilterInput
+
+  """Filter by product type."""
+  productType: GlobalIDFilterInput
+
+  """Filter by product category."""
+  category: GlobalIDFilterInput
+
+  """Filter by collection."""
+  collection: GlobalIDFilterInput
+
+  """Filter by availability for purchase."""
+  isAvailable: Boolean
+
+  """Filter by public visibility."""
+  isPublished: Boolean
+
+  """Filter by visibility on the channel."""
+  isVisibleInListing: Boolean
+
+  """Filter by the publication date."""
+  publishedFrom: DateTime
+
+  """Filter by the date of availability for purchase."""
+  availableFrom: DateTime
+
+  """Filter by product with category assigned."""
+  hasCategory: Boolean
+
+  """Filter by product variant price."""
+  price: DecimalFilterInput
+
+  """Filter by the lowest variant price after discounts."""
+  minimalPrice: DecimalFilterInput
+
+  """Filter by attributes associated with the product."""
+  attributes: [AttributeInput!]
+
+  """Filter by variants having specific stock status."""
+  stockAvailability: StockAvailability
+
+  """Filter by stock of the product variant."""
+  stocks: ProductStockFilterInput
+
+  """Filter on whether product is a gift card or not."""
+  giftCard: Boolean
+
+  """Filter by product with preordered variants."""
+  hasPreorderedVariants: Boolean
+
+  """Filter by when was the most recent update."""
+  updatedAt: DateTimeFilterInput
+
+  """List of conditions that must be met."""
+  AND: [ProductWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [ProductWhereInput!]
+}
+
+"""Define the filtering options for foreign key fields."""
+input GlobalIDFilterInput {
+  """The value equal to."""
+  eq: ID
+
+  """The value included in."""
+  oneOf: [ID!]
+}
+
+"""Define the filtering options for decimal fields."""
+input DecimalFilterInput {
+  """The value equal to."""
+  eq: Decimal
+
+  """The value included in."""
+  oneOf: [Decimal!]
+
+  """The value in range."""
+  range: DecimalRangeInput
+}
+
+"""
+Custom Decimal implementation.
+
+Returns Decimal as a float in the API,
+parses float to the Decimal on the way back.
+"""
+scalar Decimal
+
+input DecimalRangeInput {
+  """Decimal value greater than or equal to."""
+  gte: Decimal
+
+  """Decimal value less than or equal to."""
+  lte: Decimal
+}
+
+"""Define the filtering options for date time fields."""
+input DateTimeFilterInput {
+  """The value equal to."""
+  eq: DateTime
+
+  """The value included in."""
+  oneOf: [DateTime!]
+
+  """The value in range."""
+  range: DateTimeRangeInput
+}
+
+input ProductOrder @doc(category: "Products") {
+  """Specifies the direction in which to sort products."""
+  direction: OrderDirection!
+
+  """Specifies the channel in which to sort the data."""
+  channel: String @deprecated(reason: "Use root-level channel argument instead.")
+
+  """
+  Sort product by the selected attribute's values.
+  Note: this doesn't take translations into account yet.
+  """
+  attributeId: ID
+
+  """Sort products by the selected field."""
+  field: ProductOrderField
+}
+
+enum ProductOrderField @doc(category: "Products") {
+  """Sort products by name."""
+  NAME
+
+  """
+  Sort products by rank. Note: This option is available only with the `search` filter.
+  """
+  RANK
+
+  """
+  Sort products by price.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  PRICE
+
+  """
+  Sort products by a minimal price of a product's variant.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  MINIMAL_PRICE
+
+  """Sort products by update date."""
+  LAST_MODIFIED @deprecated(reason: "Use `LAST_MODIFIED_AT` instead.")
+
+  """Sort products by update date."""
+  DATE @deprecated(reason: "Use `LAST_MODIFIED_AT` instead.")
+
+  """Sort products by type."""
+  TYPE
+
+  """
+  Sort products by publication status.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  PUBLISHED
+
+  """
+  Sort products by publication date.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  PUBLICATION_DATE @deprecated(reason: "Use `PUBLISHED_AT` instead.")
+
+  """
+  Sort products by publication date.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  PUBLISHED_AT
+
+  """Sort products by update date."""
+  LAST_MODIFIED_AT
+
+  """
+  Sort products by collection. Note: This option is available only for the `Collection.products` query.
+  
+  This option requires a channel filter to work as the values can vary between channels.
+  """
+  COLLECTION
+
+  """Sort products by rating."""
+  RATING
+
+  """Sort products by creation date."""
+  CREATED_AT
+}
+
+"""Represents an image."""
+type Image {
+  """The URL of the image."""
+  url: String!
+
+  """Alt text for an image."""
+  alt: String
+}
+
+"""Represents category translations."""
+type CategoryTranslation implements Node @doc(category: "Products") {
+  """The ID of the category translation."""
+  id: ID!
+
+  """Translation language."""
+  language: LanguageDisplay!
+
+  """Translated SEO title."""
+  seoTitle: String
+
+  """Translated SEO description."""
+  seoDescription: String
+
+  """
+  Translated category slug.
+  
+  Added in Saleor 3.21.
+  """
+  slug: String
+
+  """Translated category name."""
+  name: String
+
+  """
+  Translated description of the category.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  description: JSONString
+
+  """
+  Translated description of the category.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
+
+  """Represents the category fields to translate."""
+  translatableContent: CategoryTranslatableContent
+}
+
+"""
+Represents category original translatable fields and related translations.
+"""
+type CategoryTranslatableContent implements Node @doc(category: "Products") {
+  """The ID of the category translatable content."""
+  id: ID!
+
+  """The ID of the category to translate."""
+  categoryId: ID!
+
+  """SEO title to translate."""
+  seoTitle: String
+
+  """SEO description to translate."""
+  seoDescription: String
+
+  """
+  Slug to translate.
+  
+  Added in Saleor 3.21.
+  """
+  slug: String
+
+  """Name of the category translatable content."""
+  name: String!
+
+  """
+  Category description to translate.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  description: JSONString
+
+  """
+  Description of the category.
+  
+  Rich text format. For reference see https://editorjs.io/
+  """
+  descriptionJson: JSONString @deprecated(reason: "Use the `description` field instead.")
+
+  """Returns translated category fields for the given language code."""
+  translation(
+    """A language code to return the translation for category."""
+    languageCode: LanguageCodeEnum!
+  ): CategoryTranslation
+
+  """Represents a single category of products."""
+  category: Category @deprecated(reason: "Get model fields from the root level queries.")
+}
+
 """Represents availability of a product in the storefront."""
 type ProductPricingInfo @doc(category: "Products") {
   """Whether it is in sale or not."""
@@ -7739,6 +8281,12 @@ input ProductVariantWhereInput @doc(category: "Products") {
   metadata: [MetadataFilter!]
   ids: [ID!]
 
+  """Filter by product SKU."""
+  sku: StringFilterInput
+
+  """Filter by when was the most recent update."""
+  updatedAt: DateTimeRangeInput
+
   """List of conditions that must be met."""
   AND: [ProductVariantWhereInput!]
 
@@ -7755,7 +8303,7 @@ input ProductVariantSortingInput @doc(category: "Products") {
 }
 
 enum ProductVariantSortField @doc(category: "Products") {
-  """Sort products variants by last modified at."""
+  """Sort product variants by last modification date."""
   LAST_MODIFIED_AT
 }
 
@@ -7841,10 +8389,13 @@ type Collection implements Node & ObjectWithMetadata @doc(category: "Products") 
   """List of products in this collection."""
   products(
     """Filtering options for products."""
-    filter: ProductFilterInput
+    filter: ProductFilterInput @deprecated(reason: "Use `where` filter instead.")
 
-    """Filtering options for products."""
+    """Where filtering options for products."""
     where: ProductWhereInput
+
+    """Search products."""
+    search: String
 
     """Sort products."""
     sortBy: ProductOrder
@@ -8171,269 +8722,6 @@ type TranslatableItemEdge {
 }
 
 union TranslatableItem = ProductTranslatableContent | CollectionTranslatableContent | CategoryTranslatableContent | AttributeTranslatableContent | AttributeValueTranslatableContent | ProductVariantTranslatableContent | PageTranslatableContent | ShippingMethodTranslatableContent | VoucherTranslatableContent | MenuItemTranslatableContent | PromotionTranslatableContent | PromotionRuleTranslatableContent | SaleTranslatableContent
-
-"""
-Represents page's original translatable fields and related translations.
-"""
-type PageTranslatableContent implements Node @doc(category: "Pages") {
-  """The ID of the page translatable content."""
-  id: ID!
-
-  """The ID of the page to translate."""
-  pageId: ID!
-
-  """SEO title to translate."""
-  seoTitle: String
-
-  """SEO description to translate."""
-  seoDescription: String
-
-  """
-  Slug to translate.
-  
-  Added in Saleor 3.21.
-  """
-  slug: String
-
-  """Page title to translate."""
-  title: String!
-
-  """
-  Content of the page to translate.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  content: JSONString
-
-  """
-  Content of the page.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  contentJson: JSONString @deprecated(reason: "Use the `content` field instead.")
-
-  """Returns translated page fields for the given language code."""
-  translation(
-    """A language code to return the translation for page."""
-    languageCode: LanguageCodeEnum!
-  ): PageTranslation
-
-  """
-  A static page that can be manually added by a shop operator through the dashboard.
-  """
-  page: Page @deprecated(reason: "Get model fields from the root level queries.")
-
-  """List of page content attribute values that can be translated."""
-  attributeValues: [AttributeValueTranslatableContent!]!
-}
-
-"""Represents page translations."""
-type PageTranslation implements Node @doc(category: "Pages") {
-  """The ID of the page translation."""
-  id: ID!
-
-  """Translation language."""
-  language: LanguageDisplay!
-
-  """Translated SEO title."""
-  seoTitle: String
-
-  """Translated SEO description."""
-  seoDescription: String
-
-  """
-  Translated page slug.
-  
-  Added in Saleor 3.21.
-  """
-  slug: String
-
-  """Translated page title."""
-  title: String
-
-  """
-  Translated content of the page.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  content: JSONString
-
-  """
-  Translated description of the page.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  contentJson: JSONString @deprecated(reason: "Use the `content` field instead.")
-
-  """Represents the page fields to translate."""
-  translatableContent: PageTranslatableContent
-}
-
-"""
-A static page that can be manually added by a shop operator through the dashboard.
-"""
-type Page implements Node & ObjectWithMetadata @doc(category: "Pages") {
-  """ID of the page."""
-  id: ID!
-
-  """List of private metadata items. Requires staff permissions to access."""
-  privateMetadata: [MetadataItem!]!
-
-  """
-  A single key from private metadata. Requires staff permissions to access.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  privateMetafield(key: String!): String
-
-  """
-  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  privateMetafields(keys: [String!]): Metadata
-
-  """List of public metadata items. Can be accessed without permissions."""
-  metadata: [MetadataItem!]!
-
-  """
-  A single key from public metadata.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  metafield(key: String!): String
-
-  """
-  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  metafields(keys: [String!]): Metadata
-
-  """Title of the page for SEO."""
-  seoTitle: String
-
-  """Description of the page for SEO."""
-  seoDescription: String
-
-  """Title of the page."""
-  title: String!
-
-  """
-  Content of the page.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  content: JSONString
-  publicationDate: Date @deprecated(reason: "Use the `publishedAt` field to fetch the publication date.")
-
-  """The page publication date."""
-  publishedAt: DateTime
-
-  """Determines if the page is published."""
-  isPublished: Boolean!
-
-  """Slug of the page."""
-  slug: String!
-
-  """Determines the type of page"""
-  pageType: PageType!
-
-  """Date and time at which page was created."""
-  created: DateTime!
-
-  """
-  Content of the page.
-  
-  Rich text format. For reference see https://editorjs.io/
-  """
-  contentJson: JSONString! @deprecated(reason: "Use the `content` field instead.")
-
-  """Returns translated page fields for the given language code."""
-  translation(
-    """A language code to return the translation for page."""
-    languageCode: LanguageCodeEnum!
-  ): PageTranslation
-
-  """List of attributes assigned to this product."""
-  attributes: [SelectedAttribute!]!
-}
-
-"""
-Represents a type of page. It defines what attributes are available to pages of this type.
-"""
-type PageType implements Node & ObjectWithMetadata @doc(category: "Pages") {
-  """ID of the page type."""
-  id: ID!
-
-  """List of private metadata items. Requires staff permissions to access."""
-  privateMetadata: [MetadataItem!]!
-
-  """
-  A single key from private metadata. Requires staff permissions to access.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  privateMetafield(key: String!): String
-
-  """
-  Private metadata. Requires staff permissions to access. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  privateMetafields(keys: [String!]): Metadata
-
-  """List of public metadata items. Can be accessed without permissions."""
-  metadata: [MetadataItem!]!
-
-  """
-  A single key from public metadata.
-  
-  Tip: Use GraphQL aliases to fetch multiple keys.
-  """
-  metafield(key: String!): String
-
-  """
-  Public metadata. Use `keys` to control which fields you want to include. The default is to include everything.
-  """
-  metafields(keys: [String!]): Metadata
-
-  """Name of the page type."""
-  name: String!
-
-  """Slug of the page type."""
-  slug: String!
-
-  """Page attributes of that page type."""
-  attributes: [Attribute!]
-
-  """
-  Attributes that can be assigned to the page type.
-  
-  Requires one of the following permissions: MANAGE_PAGES, MANAGE_PAGE_TYPES_AND_ATTRIBUTES.
-  """
-  availableAttributes(
-    filter: AttributeFilterInput
-    where: AttributeWhereInput
-
-    """Return the elements in the list that come before the specified cursor."""
-    before: String
-
-    """Return the elements in the list that come after the specified cursor."""
-    after: String
-
-    """
-    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    first: Int
-
-    """
-    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
-    """
-    last: Int
-  ): AttributeCountableConnection
-
-  """
-  Whether page type has pages assigned.
-  
-  Requires one of the following permissions: MANAGE_PAGES, MANAGE_PAGE_TYPES_AND_ATTRIBUTES.
-  """
-  hasPages: Boolean
-}
 
 """
 Represents voucher's original translatable fields and related translations.
@@ -10583,6 +10871,13 @@ type TransactionItem implements Node & ObjectWithMetadata @doc(category: "Paymen
   The url that will allow to redirect user to payment provider page with transaction details.
   """
   externalUrl: String!
+
+  """
+  The payment method used for this transaction.
+  
+  Added in Saleor 3.22.
+  """
+  paymentMethodDetails: PaymentMethodDetails
 }
 
 """
@@ -11182,6 +11477,13 @@ type OrderLine implements Node & ObjectWithMetadata @doc(category: "Orders") {
   Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
   isGift: Boolean
+
+  """
+  List of applied discounts
+  
+  Added in Saleor 3.21.
+  """
+  discounts: [OrderLineDiscount!]
 }
 
 """
@@ -11209,6 +11511,48 @@ type Allocation implements Node @doc(category: "Products") {
   Requires one of the following permissions: MANAGE_PRODUCTS, MANAGE_ORDERS.
   """
   warehouse: Warehouse!
+}
+
+"""Represent the discount applied to order line."""
+type OrderLineDiscount @doc(category: "Orders") {
+  """The ID of discount applied."""
+  id: ID!
+
+  """The type of applied discount: Sale, Voucher or Manual."""
+  type: OrderDiscountType!
+
+  """The name of applied discount."""
+  name: String
+
+  """Translated name of the applied discount."""
+  translatedName: String
+
+  """Type of the discount: fixed or percent"""
+  valueType: DiscountValueTypeEnum!
+
+  """Value of the discount. Can store fixed value or percent value"""
+  value: PositiveDecimal!
+
+  """
+  Explanation for the applied discount.
+  
+  Requires one of the following permissions: MANAGE_ORDERS.
+  """
+  reason: String
+
+  """The discount amount applied to the line item."""
+  total: Money!
+
+  """The discount amount applied to the single line unit."""
+  unit: Money!
+}
+
+enum OrderDiscountType @doc(category: "Discounts") {
+  SALE
+  VOUCHER
+  MANUAL
+  PROMOTION
+  ORDER_PROMOTION
 }
 
 enum OrderAction @doc(category: "Payments") {
@@ -11510,7 +11854,7 @@ type Transaction implements Node @doc(category: "Payments") {
   error: String
 
   """Response returned by payment gateway."""
-  gatewayResponse: JSONString!
+  gatewayResponse: JSONString! @deprecated(reason: "This field is a part of a legacy Payments API. Please use apps instead.")
 
   """Total amount of the transaction."""
   amount: Money
@@ -11757,15 +12101,14 @@ type OrderDiscount implements Node @doc(category: "Discounts") {
   reason: String
 
   """Returns amount of discount."""
-  amount: Money!
-}
+  amount: Money! @deprecated(reason: "Use `total` instead.")
 
-enum OrderDiscountType @doc(category: "Discounts") {
-  SALE
-  VOUCHER
-  MANUAL
-  PROMOTION
-  ORDER_PROMOTION
+  """
+  The amount of discount applied to the order.
+  
+  Added in Saleor 3.21.
+  """
+  total: Money!
 }
 
 type OrderError @doc(category: "Orders") {
@@ -12002,6 +12345,53 @@ enum TransactionEventTypeEnum @doc(category: "Payments") {
 }
 
 union UserOrApp = User | App
+
+union PaymentMethodDetails = CardPaymentMethodDetails | OtherPaymentMethodDetails
+
+"""
+Represents a card payment method used for a transaction.
+
+Added in Saleor 3.22.
+"""
+type CardPaymentMethodDetails implements GenericPaymentMethodDetails {
+  """Name of the payment method."""
+  name: String!
+
+  """Card brand."""
+  brand: String
+
+  """First 4 digits of the card number."""
+  firstDigits: String
+
+  """Last 4 digits of the card number."""
+  lastDigits: String
+
+  """Two-digit number representing the card’s expiration month."""
+  expMonth: Int
+
+  """Four-digit number representing the card’s expiration year."""
+  expYear: Int
+}
+
+"""
+Represents a payment method used for a transaction.
+
+Added in Saleor 3.22.
+"""
+interface GenericPaymentMethodDetails {
+  """Name of the payment method."""
+  name: String!
+}
+
+"""
+Represents a payment method used for a transaction.
+
+Added in Saleor 3.22.
+"""
+type OtherPaymentMethodDetails implements GenericPaymentMethodDetails {
+  """Name of the payment method."""
+  name: String!
+}
 
 """
 Determine a current authorize status for checkout.
@@ -12436,10 +12826,10 @@ enum CollectionSortField @doc(category: "Products") {
   
   This option requires a channel filter to work as the values can vary between channels.
   """
-  PUBLICATION_DATE
+  PUBLICATION_DATE @deprecated(reason: "Use `PUBLISHED_AT` instead.")
 
   """
-  Sort collections by publication date.
+  Sort collections by published at.
   
   This option requires a channel filter to work as the values can vary between channels.
   """
@@ -12544,10 +12934,10 @@ enum PageSortField @doc(category: "Pages") {
   VISIBILITY
 
   """Sort pages by creation date."""
-  CREATION_DATE
+  CREATION_DATE @deprecated(reason: "Use `CREATED_AT` instead.")
 
   """Sort pages by publication date."""
-  PUBLICATION_DATE
+  PUBLICATION_DATE @deprecated(reason: "Use `PUBLISHED_AT` instead.")
 
   """Sort pages by publication date."""
   PUBLISHED_AT
@@ -12562,6 +12952,87 @@ input PageFilterInput @doc(category: "Pages") {
   pageTypes: [ID!]
   ids: [ID!]
   slugs: [String!]
+}
+
+input PageWhereInput @doc(category: "Pages") {
+  """Filter by metadata fields."""
+  metadata: MetadataFilterInput
+  ids: [ID!]
+
+  """Filter by page slug."""
+  slug: StringFilterInput
+
+  """Filter by page type."""
+  pageType: GlobalIDFilterInput
+
+  """Filter by attributes associated with the page."""
+  attributes: [AttributePageWhereInput!]
+
+  """List of conditions that must be met."""
+  AND: [PageWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [PageWhereInput!]
+}
+
+"""
+Allows filtering based on metadata key/value pairs.
+
+        Examples:
+        - `{key: "size"}`
+          Matches objects where the metadata key "size" exists, regardless of its value.
+        - `{key: "color", value: {oneOf: ["blue", "green"]}}`
+          Matches objects where the metadata key "color" is set to either "blue" or "green".
+        - `{key: "status", value: {eq: "active"}}`
+          Matches objects where the metadata key "status" is set to "active".
+"""
+input MetadataFilterInput {
+  """
+  Key to filter by. If not other fields provided - checking the existence of the key in metadata.
+  """
+  key: String!
+
+  """Value to filter by."""
+  value: MetadataValueFilterInput
+}
+
+"""Define the filtering options for metadata value fields."""
+input MetadataValueFilterInput {
+  """The value equal to."""
+  eq: String
+
+  """The value included in."""
+  oneOf: [String!]
+}
+
+input AttributePageWhereInput {
+  """Filter by attribute slug."""
+  slug: String!
+
+  """
+  Filter by value of the attribute. Only one value input field is allowed. If provided more than one, the error will be raised.
+  """
+  value: AttributeValuePageInput
+}
+
+input AttributeValuePageInput {
+  """Filter by slug assigned to AttributeValue."""
+  slug: StringFilterInput
+
+  """Filter by name assigned to AttributeValue."""
+  name: StringFilterInput
+
+  """Filter by numeric value for attributes of numeric type."""
+  numeric: DecimalFilterInput
+
+  """Filter by date value for attributes of date type."""
+  date: DateRangeInput
+
+  """Filter by date time value for attributes of date time type."""
+  dateTime: DateTimeRangeInput
+
+  """Filter by boolean value for attributes of boolean type."""
+  boolean: Boolean
 }
 
 type PageTypeCountableConnection @doc(category: "Pages") {
@@ -12636,23 +13107,30 @@ enum OrderSortField @doc(category: "Orders") {
   """
   RANK
 
-  """Sort orders by creation date."""
-  CREATION_DATE
+  """Sort orders by creation date"""
+  CREATION_DATE @deprecated(reason: "Use `CREATED_AT` instead.")
 
   """Sort orders by creation date."""
   CREATED_AT
 
-  """Sort orders by last modified at."""
+  """Sort orders by last modified date."""
   LAST_MODIFIED_AT
 
   """Sort orders by customer."""
   CUSTOMER
 
-  """Sort orders by payment."""
+  """Sort orders by payment status."""
   PAYMENT
 
   """Sort orders by fulfillment status."""
-  FULFILLMENT_STATUS
+  FULFILLMENT_STATUS @deprecated(reason: "Use `STATUS` instead.")
+
+  """
+  Sort orders by order status. 
+  
+  Added in Saleor 3.22.
+  """
+  STATUS
 }
 
 input OrderFilterInput @doc(category: "Orders") {
@@ -12686,12 +13164,346 @@ enum OrderStatusFilter @doc(category: "Orders") {
   CANCELED
 }
 
+input OrderWhereInput @doc(category: "Orders") {
+  """Filter by metadata fields."""
+  metadata: MetadataFilterInput
+  ids: [ID!]
+
+  """Filter by order number."""
+  number: IntFilterInput
+
+  """Filter by channel."""
+  channelId: GlobalIDFilterInput
+
+  """Filter order by created at date."""
+  createdAt: DateTimeRangeInput
+
+  """Filter order by updated at date."""
+  updatedAt: DateTimeRangeInput
+
+  """Filter by user."""
+  user: GlobalIDFilterInput
+
+  """Filter by user email."""
+  userEmail: StringFilterInput
+
+  """Filter by authorize status."""
+  authorizeStatus: OrderAuthorizeStatusEnumFilterInput
+
+  """Filter by charge status."""
+  chargeStatus: OrderChargeStatusEnumFilterInput
+
+  """Filter by order status."""
+  status: OrderStatusEnumFilterInput
+
+  """Filter by checkout token."""
+  checkoutToken: UUIDFilterInput
+
+  """Filter by checkout id."""
+  checkoutId: GlobalIDFilterInput
+
+  """
+  Filter by whether the order uses the click and collect delivery method.
+  """
+  isClickAndCollect: Boolean
+
+  """Filter based on whether a gift card was used in the order."""
+  isGiftCardUsed: Boolean
+
+  """Filter based on whether the order includes a gift card purchase."""
+  isGiftCardBought: Boolean
+
+  """Filter by voucher code used in the order."""
+  voucherCode: StringFilterInput
+
+  """Filter by whether the order has any invoices."""
+  hasInvoices: Boolean
+
+  """Filter by invoice data associated with the order."""
+  invoices: InvoiceFilterInput
+
+  """Filter by whether the order has any fulfillments."""
+  hasFulfillments: Boolean
+
+  """Filter by fulfillment data associated with the order."""
+  fulfillments: FulfillmentFilterInput
+
+  """Filter by metadata fields of order lines."""
+  lines: LinesFilterInput
+
+  """Filter by number of lines in the order."""
+  linesCount: IntFilterInput
+
+  """Filter by transaction data associated with the order."""
+  transactions: TransactionFilterInput
+
+  """Filter by total gross amount of the order."""
+  totalGross: PriceFilterInput
+
+  """Filter by total net amount of the order."""
+  totalNet: PriceFilterInput
+
+  """Filter by the product type of related order lines."""
+  productTypeId: GlobalIDFilterInput
+
+  """Filter by order events."""
+  events: OrderEventFilterInput
+
+  """Filter by billing address of the order."""
+  billingAddress: AddressFilterInput
+
+  """Filter by shipping address of the order."""
+  shippingAddress: AddressFilterInput
+
+  """List of conditions that must be met."""
+  AND: [OrderWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [OrderWhereInput!]
+}
+
+"""Define the filtering options for integer fields."""
+input IntFilterInput {
+  """The value equal to."""
+  eq: Int
+
+  """The value included in."""
+  oneOf: [Int!]
+
+  """The value in range."""
+  range: IntRangeInput
+}
+
+"""Filter by authorize status."""
+input OrderAuthorizeStatusEnumFilterInput @doc(category: "Orders") {
+  """The value equal to."""
+  eq: OrderAuthorizeStatusEnum
+
+  """The value included in."""
+  oneOf: [OrderAuthorizeStatusEnum!]
+}
+
+"""Filter by charge status."""
+input OrderChargeStatusEnumFilterInput @doc(category: "Orders") {
+  """The value equal to."""
+  eq: OrderChargeStatusEnum
+
+  """The value included in."""
+  oneOf: [OrderChargeStatusEnum!]
+}
+
+"""Filter by order status."""
+input OrderStatusEnumFilterInput @doc(category: "Orders") {
+  """The value equal to."""
+  eq: OrderStatus
+
+  """The value included in."""
+  oneOf: [OrderStatus!]
+}
+
+"""Define the filtering options for string fields."""
+input UUIDFilterInput {
+  """The value equal to."""
+  eq: UUID
+
+  """The value included in."""
+  oneOf: [UUID!]
+}
+
+"""Filter input for invoices."""
+input InvoiceFilterInput @doc(category: "Orders") {
+  """Filter invoices by creation date."""
+  createdAt: DateTimeRangeInput
+}
+
+"""Filter input for order fulfillments data."""
+input FulfillmentFilterInput @doc(category: "Orders") {
+  """Filter by fulfillment status."""
+  status: FulfillmentStatusEnumFilterInput
+
+  """Filter by metadata fields."""
+  metadata: MetadataFilterInput
+}
+
+"""Filter by fulfillment status."""
+input FulfillmentStatusEnumFilterInput @doc(category: "Orders") {
+  """The value equal to."""
+  eq: FulfillmentStatus
+
+  """The value included in."""
+  oneOf: [FulfillmentStatus!]
+}
+
+"""Filter input for order lines data."""
+input LinesFilterInput @doc(category: "Orders") {
+  """Filter by metadata fields of order lines."""
+  metadata: MetadataFilterInput
+}
+
+"""Filter input for transactions."""
+input TransactionFilterInput @doc(category: "Orders") {
+  """Filter by payment method details used to pay for the order."""
+  paymentMethodDetails: PaymentMethodDetailsFilterInput
+
+  """Filter by metadata fields of transactions."""
+  metadata: MetadataFilterInput
+}
+
+input PaymentMethodDetailsFilterInput {
+  """Filter by payment method type used to pay for the order."""
+  type: PaymentMethodTypeEnumFilterInput
+
+  """
+  Filter by card details used to pay for the order. Skips `type` filter if provided.
+  """
+  card: PaymentMethodDetailsCardFilterInput
+}
+
+input PaymentMethodTypeEnumFilterInput {
+  """The value equal to."""
+  eq: PaymentMethodTypeEnum
+
+  """The value included in."""
+  oneOf: [PaymentMethodTypeEnum!]
+}
+
+"""
+Represents possible payment method types.
+
+    The following types are possible:
+    CARD - represents a card payment method.
+    OTHER - represents any payment method that is not a card payment.
+"""
+enum PaymentMethodTypeEnum @doc(category: "Payments") {
+  CARD
+  OTHER
+}
+
+input PaymentMethodDetailsCardFilterInput {
+  """Filter by payment method brand used to pay for the order."""
+  brand: StringFilterInput
+}
+
+input PriceFilterInput {
+  """The currency of the price to filter by."""
+  currency: String
+
+  """The amount of the price to filter by."""
+  amount: DecimalFilterInput!
+}
+
+"""Filter input for order events data."""
+input OrderEventFilterInput @doc(category: "Orders") {
+  """Filter order events by date."""
+  date: DateTimeRangeInput
+
+  """Filter order events by type."""
+  type: OrderEventTypeEnumFilterInput
+}
+
+input OrderEventTypeEnumFilterInput {
+  """The value equal to."""
+  eq: OrderEventsEnum
+
+  """The value included in."""
+  oneOf: [OrderEventsEnum!]
+}
+
+"""Filtering options for addresses."""
+input AddressFilterInput @doc(category: "Users") {
+  phoneNumber: StringFilterInput
+  country: CountryCodeEnumFilterInput
+}
+
+"""Filter by country code."""
+input CountryCodeEnumFilterInput @doc(category: "Users") {
+  """The value equal to."""
+  eq: CountryCode
+
+  """The value included in."""
+  oneOf: [CountryCode!]
+
+  """The value not included in."""
+  notOneOf: [CountryCode!]
+}
+
 input OrderDraftFilterInput @doc(category: "Orders") {
   customer: String
   created: DateRangeInput
   search: String
   metadata: [MetadataFilter!]
   channels: [ID!]
+}
+
+input DraftOrderWhereInput @doc(category: "Orders") {
+  """Filter by metadata fields."""
+  metadata: MetadataFilterInput
+  ids: [ID!]
+
+  """Filter by order number."""
+  number: IntFilterInput
+
+  """Filter by channel."""
+  channelId: GlobalIDFilterInput
+
+  """Filter order by created at date."""
+  createdAt: DateTimeRangeInput
+
+  """Filter order by updated at date."""
+  updatedAt: DateTimeRangeInput
+
+  """Filter by user."""
+  user: GlobalIDFilterInput
+
+  """Filter by user email."""
+  userEmail: StringFilterInput
+
+  """Filter by authorize status."""
+  authorizeStatus: OrderAuthorizeStatusEnumFilterInput
+
+  """Filter by charge status."""
+  chargeStatus: OrderChargeStatusEnumFilterInput
+
+  """
+  Filter by whether the order uses the click and collect delivery method.
+  """
+  isClickAndCollect: Boolean
+
+  """Filter by voucher code used in the order."""
+  voucherCode: StringFilterInput
+
+  """Filter by metadata fields of order lines."""
+  lines: LinesFilterInput
+
+  """Filter by number of lines in the order."""
+  linesCount: IntFilterInput
+
+  """Filter by transaction data associated with the order."""
+  transactions: TransactionFilterInput
+
+  """Filter by total gross amount of the order."""
+  totalGross: PriceFilterInput
+
+  """Filter by total net amount of the order."""
+  totalNet: PriceFilterInput
+
+  """Filter by the product type of related order lines."""
+  productTypeId: GlobalIDFilterInput
+
+  """Filter by order events."""
+  events: OrderEventFilterInput
+
+  """Filter by billing address of the order."""
+  billingAddress: AddressFilterInput
+
+  """Filter by shipping address of the order."""
+  shippingAddress: AddressFilterInput
+
+  """List of conditions that must be met."""
+  AND: [DraftOrderWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [DraftOrderWhereInput!]
 }
 
 type MenuCountableConnection @doc(category: "Menu") {
@@ -12993,10 +13805,10 @@ enum SaleSortField @doc(category: "Discounts") {
   """Sort sales by type."""
   TYPE
 
-  """Sort sales by created at."""
+  """Sort sales by creation date."""
   CREATED_AT
 
-  """Sort sales by last modified at."""
+  """Sort sales by last modification date."""
   LAST_MODIFIED_AT
 }
 
@@ -13046,7 +13858,7 @@ input VoucherSortingInput @doc(category: "Discounts") {
 
 enum VoucherSortField {
   """Sort vouchers by code."""
-  CODE
+  CODE @deprecated
 
   """
   Sort vouchers by name.
@@ -13497,7 +14309,7 @@ enum PromotionSortField @doc(category: "Discounts") {
   """Sort promotions by end date."""
   END_DATE
 
-  """Sort promotions by created at."""
+  """Sort promotions by creation date."""
   CREATED_AT
 }
 
@@ -13601,7 +14413,7 @@ input ExportFileSortingInput {
 enum ExportFileSortField {
   STATUS
   CREATED_AT
-  UPDATED_AT
+  UPDATED_AT @deprecated(reason: "Use `LAST_MODIFIED_AT` instead.")
   LAST_MODIFIED_AT
 }
 
@@ -13904,6 +14716,45 @@ input CustomerFilterInput @doc(category: "Users") {
   """Filter by ids."""
   ids: [ID!]
   updatedAt: DateTimeRangeInput
+}
+
+input CustomerWhereInput @doc(category: "Users") {
+  """Filter by metadata fields."""
+  metadata: MetadataFilterInput
+  ids: [ID!]
+
+  """Filter by email address."""
+  email: StringFilterInput
+
+  """Filter by first name."""
+  firstName: StringFilterInput
+
+  """Filter by last name."""
+  lastName: StringFilterInput
+
+  """Filter by whether the user is active."""
+  isActive: Boolean
+
+  """Filter by date joined."""
+  dateJoined: DateTimeRangeInput
+
+  """Filter by last updated date."""
+  updatedAt: DateTimeRangeInput
+
+  """Filter by date when orders were placed."""
+  placedOrdersAt: DateTimeRangeInput
+
+  """Filter by addresses data associated with user."""
+  addresses: AddressFilterInput
+
+  """Filter by number of orders placed by the user."""
+  numberOfOrders: IntFilterInput
+
+  """List of conditions that must be met."""
+  AND: [CustomerWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [CustomerWhereInput!]
 }
 
 input UserSortingInput @doc(category: "Users") {
@@ -15326,7 +16177,7 @@ type Mutation {
     actionType: TransactionActionEnum!
 
     """
-    Transaction request amount. If empty for refund or capture, maximal possible amount will be used.
+    Transaction request amount. If empty, maximal possible amount will be used.
     """
     amount: PositiveDecimal
 
@@ -15390,6 +16241,13 @@ type Mutation {
     The message related to the event. The maximum length is 512 characters; any text exceeding this limit will be truncated.
     """
     message: String
+
+    """
+    Details of the payment method used for the transaction.
+    
+    Added in Saleor 3.22.
+    """
+    paymentMethodDetails: PaymentMethodDetailsInput
 
     """PSP Reference of the event to report."""
     pspReference: String!
@@ -18100,7 +18958,9 @@ type Mutation {
   - STAFF_SET_PASSWORD_REQUESTED (async): Setting a new password for the staff account is requested.
   """
   requestPasswordReset(
-    """Slug of a channel which will be used for notify user."""
+    """
+    Slug of a channel which will be used to notify the user. It is needed for customers, if not provided, the notification may not happen. Please note that mutation will not fail if the channel is not provided.
+    """
     channel: String
 
     """Email of the user that will be used for password recovery."""
@@ -19159,6 +20019,13 @@ input TaxConfigurationUpdateInput @doc(category: "Taxes") {
   removeCountriesConfiguration: [CountryCode!]
 
   """
+  Determines whether to use weighted tax for shipping. When set to true, the tax rate for shipping will be calculated based on the weighted average of tax rates from the order or checkout lines. Default value is `False`.Can be used only with `taxCalculationStrategy` set to `FLAT_RATES`.
+  
+  Added in Saleor 3.21.
+  """
+  useWeightedTaxForShipping: Boolean
+
+  """
   The tax app `App.identifier` that will be used to calculate the taxes for the given channel. Empty value for `TAX_APP` set as `taxCalculationStrategy` means that Saleor will iterate over all installed tax apps. If multiple tax apps exist with provided tax app id use the `App` with newest `created` date. It's possible to set plugin by using prefix `plugin:` with `PLUGIN_ID` e.g. with Avalara `plugin:mirumee.taxes.avalara`.Will become mandatory in 4.0 for `TAX_APP` `taxCalculationStrategy`.
   
   Added in Saleor 3.19.
@@ -19189,6 +20056,13 @@ input TaxConfigurationPerCountryInput @doc(category: "Taxes") {
   Added in Saleor 3.19.
   """
   taxAppId: String
+
+  """
+  Determines whether to use weighted tax for shipping. When set to true, the tax rate for shipping will be calculated based on the weighted average of tax rates from the order or checkout lines. Default value is `False`.Can be used only with `taxCalculationStrategy` set to `FLAT_RATES`.
+  
+  Added in Saleor 3.21.
+  """
+  useWeightedTaxForShipping: Boolean
 }
 
 """
@@ -22355,6 +23229,63 @@ input TransactionCreateInput @doc(category: "Payments") {
   The url that will allow to redirect user to payment provider page with transaction event details.
   """
   externalUrl: String
+
+  """
+  Details of the payment method used for the transaction.
+  
+  Added in Saleor 3.22.
+  """
+  paymentMethodDetails: PaymentMethodDetailsInput
+}
+
+"""
+Details of the payment method used for the transaction. One of `card` or `other` is required.
+
+Added in Saleor 3.22.
+"""
+input PaymentMethodDetailsInput {
+  """Details of the card payment method used for the transaction."""
+  card: CardPaymentMethodDetailsInput
+
+  """Details of the non-card payment method used for this transaction."""
+  other: OtherPaymentMethodDetailsInput
+}
+
+input CardPaymentMethodDetailsInput {
+  """
+  Name of the payment method used for the transaction. Max length is 256 characters.
+  """
+  name: String!
+
+  """
+  Brand of the payment method used for the transaction. Max length is 40 characters.
+  """
+  brand: String
+
+  """
+  First digits of the card used for the transaction. Max length is 4 characters.
+  """
+  firstDigits: String
+
+  """
+  Last digits of the card used for the transaction. Max length is 4 characters.
+  """
+  lastDigits: String
+
+  """
+  Expiration month of the card used for the transaction. Value must be between 1 and 12.
+  """
+  expMonth: Int
+
+  """
+  Expiration year of the card used for the transaction. Value must be between 2000 and 9999.
+  """
+  expYear: Int
+}
+
+input OtherPaymentMethodDetailsInput {
+  """Name of the payment method used for the transaction."""
+  name: String!
 }
 
 input TransactionEventInput @doc(category: "Payments") {
@@ -22440,6 +23371,13 @@ input TransactionUpdateInput @doc(category: "Payments") {
   The url that will allow to redirect user to payment provider page with transaction event details.
   """
   externalUrl: String
+
+  """
+  Details of the payment method used for the transaction.
+  
+  Added in Saleor 3.22.
+  """
+  paymentMethodDetails: PaymentMethodDetailsInput
 }
 
 """
@@ -23281,6 +24219,13 @@ input DraftOrderCreateInput @doc(category: "Orders") {
   """
   privateMetadata: [MetadataInput!]
 
+  """
+  Order language code.
+  
+  Added in Saleor 3.21.
+  """
+  languageCode: LanguageCodeEnum
+
   """Variant line input consisting of variant ID and quantity of products."""
   lines: [OrderLineCreateInput!]
 }
@@ -23423,6 +24368,13 @@ input DraftOrderInput @doc(category: "Orders") {
   Warning: never store sensitive information, including financial data such as credit card details.
   """
   privateMetadata: [MetadataInput!]
+
+  """
+  Order language code.
+  
+  Added in Saleor 3.21.
+  """
+  languageCode: LanguageCodeEnum
 }
 
 """
@@ -23783,13 +24735,13 @@ input OrderGrantRefundCreateInput @doc(category: "Orders") {
   grantRefundForShipping: Boolean
 
   """
-  The ID of the transaction item related to the granted refund. If `amount` provided in the input, the transaction.chargedAmount needs to be equal or greater than provided `amount`.If `amount` is not provided in the input and calculated automatically by Saleor, the `min(calculatedAmount, transaction.chargedAmount)` will be used.Field will be required starting from Saleor 3.21.
+  The ID of the transaction item related to the granted refund. If `amount` provided in the input, the transaction.chargedAmount needs to be equal or greater than provided `amount`.If `amount` is not provided in the input and calculated automatically by Saleor, the `min(calculatedAmount, transaction.chargedAmount)` will be used. Field required starting from Saleor 3.21.
   
   Added in Saleor 3.20.
   
   Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
-  transactionId: ID
+  transactionId: ID!
 }
 
 input OrderGrantRefundCreateLineInput @doc(category: "Orders") {
@@ -24166,6 +25118,13 @@ input OrderUpdateInput @doc(category: "Orders") {
   Warning: never store sensitive information, including financial data such as credit card details.
   """
   privateMetadata: [MetadataInput!]
+
+  """
+  Order language code.
+  
+  Added in Saleor 3.21.
+  """
+  languageCode: LanguageCodeEnum
 }
 
 """
@@ -27463,6 +28422,16 @@ input OrderSettingsInput @doc(category: "Orders") {
   Note: this API is currently in Feature Preview and can be subject to changes at later point.
   """
   draftOrderLinePriceFreezePeriod: Hour
+
+  """
+  This flag only affects orders created from checkout and applies specifically to vouchers of the types: `SPECIFIC_PRODUCT` and `ENTIRE_ORDER` with `applyOncePerOrder` enabled.
+  - When legacy propagation is enabled, discounts from these vouchers are represented as `OrderDiscount` objects, attached to the order and returned in the `Order.discounts` field. Additionally, percentage-based vouchers are converted to fixed-value discounts.
+  - When legacy propagation is disabled, discounts are represented as `OrderLineDiscount` objects, attached to individual lines and returned in the `OrderLine.discounts` field. In this case, percentage-based vouchers retain their original type.
+  In future releases, `OrderLineDiscount` will become the default behavior, and this flag will be deprecated and removed.
+  
+  Added in Saleor 3.21.
+  """
+  useLegacyLineDiscountPropagation: Boolean
 }
 
 input CheckoutSettingsInput @doc(category: "Checkout") {
@@ -27484,6 +28453,27 @@ input PaymentSettingsInput @doc(category: "Payments") {
   Determine the transaction flow strategy to be used. Include the selected option in the payload sent to the payment app, as a requested action for the transaction.
   """
   defaultTransactionFlowStrategy: TransactionFlowStrategyEnum
+
+  """
+  Determine if the funds for expired checkouts should be released automatically.
+  
+  Added in Saleor 3.20.
+  """
+  releaseFundsForExpiredCheckouts: Boolean
+
+  """
+  The time in hours after which funds for expired checkouts will be released.
+  
+  Added in Saleor 3.20.
+  """
+  checkoutTtlBeforeReleasingFunds: Hour
+
+  """
+  Specifies the earliest date on which funds for expired checkouts can begin to be released. Expired checkouts dated before this cut-off will not have their funds released. Additionally, no funds will be released for checkouts that are more than one year old, regardless of the cut-off date.
+  
+  Added in Saleor 3.20.
+  """
+  checkoutReleaseFundsCutOffDate: DateTime
 }
 
 """
@@ -28416,7 +29406,7 @@ type Manifest @doc(category: "Apps") {
   configurationUrl: String @deprecated(reason: "Use `appUrl` instead.")
 
   """
-  Endpoint used during process of app installation, [see installing an app.](https://docs.saleor.io/docs/3.x/developer/extending/apps/installing-apps#installing-an-app)
+  Endpoint used during process of app installation, [see installing an app.](https://docs.saleor.io/developer/extending/apps/installing-apps#installing-an-app)
   """
   tokenTargetUrl: String
 
@@ -28433,7 +29423,7 @@ type Manifest @doc(category: "Apps") {
   supportUrl: String
 
   """
-  List of extensions that will be mounted in Saleor's dashboard. For details, please [see the extension section.](https://docs.saleor.io/docs/3.x/developer/extending/apps/extending-dashboard-with-apps#key-concepts)
+  List of extensions that will be mounted in Saleor's dashboard. For details, please [see the extension section.](https://docs.saleor.io/developer/extending/apps/extending-dashboard-with-apps#key-concepts)
   """
   extensions: [AppManifestExtension!]!
 
@@ -29661,7 +30651,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   draftOrderCreated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): DraftOrderCreated @doc(category: "Orders")
@@ -29675,7 +30665,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   draftOrderUpdated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): DraftOrderUpdated @doc(category: "Orders")
@@ -29689,7 +30679,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   draftOrderDeleted(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): DraftOrderDeleted @doc(category: "Orders")
@@ -29703,7 +30693,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderCreated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderCreated @doc(category: "Orders")
@@ -29717,7 +30707,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderUpdated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderUpdated @doc(category: "Orders")
@@ -29731,7 +30721,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderConfirmed(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderConfirmed @doc(category: "Orders")
@@ -29745,7 +30735,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderPaid(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderPaid @doc(category: "Orders")
@@ -29759,7 +30749,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderFullyPaid(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderFullyPaid @doc(category: "Orders")
@@ -29773,7 +30763,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderRefunded(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderRefunded @doc(category: "Orders")
@@ -29787,7 +30777,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderFullyRefunded(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderFullyRefunded @doc(category: "Orders")
@@ -29801,7 +30791,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderFulfilled(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderFulfilled @doc(category: "Orders")
@@ -29815,7 +30805,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderCancelled(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderCancelled @doc(category: "Orders")
@@ -29829,7 +30819,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderExpired(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderExpired @doc(category: "Orders")
@@ -29843,7 +30833,7 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderMetadataUpdated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderMetadataUpdated @doc(category: "Orders")
@@ -29857,10 +30847,66 @@ type Subscription @doc(category: "Miscellaneous") {
   """
   orderBulkCreated(
     """
-    List of channel slugs. The event will be sent only if the order belongs to one of the provided channels. If the channel slug list is empty, orders that belong to any channel will be sent. Maximally 500 items.
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
     """
     channels: [String!]
   ): OrderBulkCreated @doc(category: "Orders")
+
+  """
+  Event sent when new checkout is created.
+  
+  Added in Saleor 3.21.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  checkoutCreated(
+    """
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
+    """
+    channels: [String!]
+  ): CheckoutCreated @doc(category: "Checkout")
+
+  """
+  Event sent when checkout is updated.
+  
+  Added in Saleor 3.21.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  checkoutUpdated(
+    """
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
+    """
+    channels: [String!]
+  ): CheckoutUpdated @doc(category: "Checkout")
+
+  """
+  Event sent when checkout is fully-paid.
+  
+  Added in Saleor 3.21.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  checkoutFullyPaid(
+    """
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
+    """
+    channels: [String!]
+  ): CheckoutFullyPaid @doc(category: "Checkout")
+
+  """
+  Event sent when checkout metadata is updated.
+  
+  Added in Saleor 3.21.
+  
+  Note: this API is currently in Feature Preview and can be subject to changes at later point.
+  """
+  checkoutMetadataUpdated(
+    """
+    List of channel slugs. The event will be sent only if the object belongs to one of the provided channels. If the channel slug list is empty, objects that belong to any channel will be sent. Maximally 500 items.
+    """
+    channels: [String!]
+  ): CheckoutMetadataUpdated @doc(category: "Checkout")
 }
 
 interface Event {
@@ -30149,6 +31195,80 @@ type OrderBulkCreated implements Event @doc(category: "Orders") {
 
   """The orders the event relates to."""
   orders: [Order!]
+}
+
+"""Event sent when new checkout is created."""
+type CheckoutCreated implements Event @doc(category: "Checkout") {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The checkout the event relates to."""
+  checkout: Checkout
+}
+
+"""Event sent when checkout is updated."""
+type CheckoutUpdated implements Event @doc(category: "Checkout") {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The checkout the event relates to."""
+  checkout: Checkout
+}
+
+"""
+Event sent when checkout is fully paid with transactions. The checkout is considered as fully paid when the checkout `charge_status` is `FULL` or `OVERCHARGED`. The event is not sent when the checkout authorization flow strategy is used.
+"""
+type CheckoutFullyPaid implements Event @doc(category: "Checkout") {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The checkout the event relates to."""
+  checkout: Checkout
+}
+
+"""Event sent when checkout metadata is updated."""
+type CheckoutMetadataUpdated implements Event @doc(category: "Checkout") {
+  """Time of the event."""
+  issuedAt: DateTime
+
+  """Saleor version that triggered the event."""
+  version: String
+
+  """The user or application that triggered the event."""
+  issuingPrincipal: IssuingPrincipal
+
+  """The application receiving the webhook."""
+  recipient: App
+
+  """The checkout the event relates to."""
+  checkout: Checkout
 }
 
 enum DistanceUnitsEnum {
@@ -31923,80 +33043,6 @@ type CollectionMetadataUpdated implements Event @doc(category: "Products") {
   ): Collection
 }
 
-"""Event sent when new checkout is created."""
-type CheckoutCreated implements Event @doc(category: "Checkout") {
-  """Time of the event."""
-  issuedAt: DateTime
-
-  """Saleor version that triggered the event."""
-  version: String
-
-  """The user or application that triggered the event."""
-  issuingPrincipal: IssuingPrincipal
-
-  """The application receiving the webhook."""
-  recipient: App
-
-  """The checkout the event relates to."""
-  checkout: Checkout
-}
-
-"""Event sent when checkout is updated."""
-type CheckoutUpdated implements Event @doc(category: "Checkout") {
-  """Time of the event."""
-  issuedAt: DateTime
-
-  """Saleor version that triggered the event."""
-  version: String
-
-  """The user or application that triggered the event."""
-  issuingPrincipal: IssuingPrincipal
-
-  """The application receiving the webhook."""
-  recipient: App
-
-  """The checkout the event relates to."""
-  checkout: Checkout
-}
-
-"""
-Event sent when checkout is fully paid with transactions. The checkout is considered as fully paid when the checkout `charge_status` is `FULL` or `OVERCHARGED`. The event is not sent when the checkout authorization flow strategy is used.
-"""
-type CheckoutFullyPaid implements Event @doc(category: "Checkout") {
-  """Time of the event."""
-  issuedAt: DateTime
-
-  """Saleor version that triggered the event."""
-  version: String
-
-  """The user or application that triggered the event."""
-  issuingPrincipal: IssuingPrincipal
-
-  """The application receiving the webhook."""
-  recipient: App
-
-  """The checkout the event relates to."""
-  checkout: Checkout
-}
-
-"""Event sent when checkout metadata is updated."""
-type CheckoutMetadataUpdated implements Event @doc(category: "Checkout") {
-  """Time of the event."""
-  issuedAt: DateTime
-
-  """Saleor version that triggered the event."""
-  version: String
-
-  """The user or application that triggered the event."""
-  issuingPrincipal: IssuingPrincipal
-
-  """The application receiving the webhook."""
-  recipient: App
-
-  """The checkout the event relates to."""
-  checkout: Checkout
-}
-
 """Event sent when new page is created."""
 type PageCreated implements Event @doc(category: "Pages") {
   """Time of the event."""
@@ -32882,8 +33928,8 @@ type TransactionAction @doc(category: "Payments") {
   """Determines the action type."""
   actionType: TransactionActionEnum!
 
-  """Transaction request amount. Null when action type is VOID."""
-  amount: PositiveDecimal
+  """Transaction request amount."""
+  amount: PositiveDecimal!
 
   """Currency code."""
   currency: String!

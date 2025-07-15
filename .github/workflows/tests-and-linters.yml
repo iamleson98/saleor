@@ -7,7 +7,7 @@ on:
       - "**.py"
       - Dockerfile
       - "saleor/**"
-      - "tests-and-linters.yml"
+      - .github/workflows/tests-and-linters.yml
       - pyproject.toml
       - poetry.lock
   push:
@@ -18,7 +18,7 @@ on:
       - "**.py"
       - Dockerfile
       - "saleor/**"
-      - "tests-and-linters.yml"
+      - .github/workflows/tests-and-linters.yml
       - pyproject.toml
       - poetry.lock
 
@@ -91,11 +91,18 @@ jobs:
             --cov \
             --cov-report= \
             --junitxml=junit/test-results.xml \
+            -o junit_family=legacy \
             --django-db-bench=${{ env.BENCH_PATH }} \
             -n logical
 
+      - name: Upload test results to Codecov
+        if: ${{ !cancelled() }} # Run even if tests fail
+        uses: codecov/test-results-action@v1
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       # Publish coverage and test results
-      - uses: codecov/codecov-action@v4
+      - uses: codecov/codecov-action@v5
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
@@ -157,6 +164,13 @@ jobs:
           # Ticket: https://github.com/python-poetry/poetry/issues/7190
           echo "$(poetry env info -p)"/bin >> $GITHUB_PATH
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/pre-commit
+          key: ${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pre-commit-
+
       # Run linters and Django related checks
       # `git config` command is a workaround for https://github.com/actions/runner-images/issues/6775
       - name: Run Linters and Checks
@@ -164,10 +178,3 @@ jobs:
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
           pre-commit run --all --show-diff-on-failure
         if: ${{ always() }}
-
-      - uses: actions/cache@v4
-        with:
-          path: ~/.cache/pre-commit
-          key: ${{ runner.os }}-pre-commit-${{ hashFiles('**/.pre-commit-config.yaml') }}
-          restore-keys: |
-            ${{ runner.os }}-pre-commit-

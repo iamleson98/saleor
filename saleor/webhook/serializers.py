@@ -31,7 +31,7 @@ def serialize_checkout_lines(checkout: "Checkout") -> list[dict]:
         base_price = line_info.undiscounted_unit_price
         total_discount_amount_for_line = sum(
             [discount.amount_value for discount in line_info.get_promotion_discounts()],
-            Decimal("0"),
+            Decimal(0),
         )
         if total_discount_amount_for_line:
             unit_discount_amount = (
@@ -77,7 +77,7 @@ def serialize_checkout_lines_for_tax_calculation(
     checkout_info: "CheckoutInfo",
     lines: list["CheckoutLineInfo"],
 ) -> list[dict]:
-    charge_taxes = get_charge_taxes_for_checkout(checkout_info, lines)
+    charge_taxes = get_charge_taxes_for_checkout(checkout_info)
     return [
         {
             **_get_checkout_line_payload_data(line_info),
@@ -119,7 +119,7 @@ def serialize_product_attributes(product: "Product") -> list[dict]:
         values_map[av.value.attribute_id].append(av.value)
 
     for attribute_product in attribute_products:
-        attribute = attribute_product.attribute  # type: ignore[attr-defined]
+        attribute = attribute_product.attribute
 
         attr_id = graphene.Node.to_global_id("Attribute", attribute.pk)
         attr_data: dict[Any, Any] = {

@@ -1,4 +1,3 @@
-import copy
 import datetime
 from collections.abc import Iterable
 from decimal import Decimal
@@ -12,18 +11,16 @@ from django.contrib.postgres.search import SearchVectorField
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.db.models import JSONField, TextField
-from django.forms.models import model_to_dict
 from django.urls import reverse
 from django.utils import timezone
 from django_measurement.models import MeasurementField
-from django_prices.models import MoneyField
 from measurement.measures import Weight
 from mptt.managers import TreeManager
 from mptt.models import MPTTModel
 from prices import Money
 
 from ..channel.models import Channel
-from ..core.db.fields import SanitizedJSONField
+from ..core.db.fields import MoneyField, SanitizedJSONField
 from ..core.models import (
     ModelWithExternalReference,
     ModelWithMetadata,
@@ -378,6 +375,14 @@ class ProductVariant(SortableModel, ModelWithMetadata, ModelWithExternalReferenc
     class Meta(ModelWithMetadata.Meta):
         ordering = ("sort_order", "sku")
         app_label = "product"
+        indexes = [
+            *ModelWithMetadata.Meta.indexes,
+            GinIndex(
+                name="variant_gin",
+                fields=["name", "sku"],
+                opclasses=["gin_trgm_ops"] * 2,
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.name or self.sku or f"ID:{self.pk}"
@@ -459,25 +464,6 @@ class ProductVariant(SortableModel, ModelWithMetadata, ModelWithExternalReferenc
         return self.is_preorder and (
             self.preorder_end_date is None or timezone.now() <= self.preorder_end_date
         )
-
-    @property
-    def comparison_fields(self):
-        return [
-            "sku",
-            "name",
-            "track_inventory",
-            "is_preorder",
-            "quantity_limit_per_customer",
-            "weight",
-            "external_reference",
-            "metadata",
-            "private_metadata",
-            "preorder_end_date",
-            "preorder_global_threshold",
-        ]
-
-    def serialize_for_comparison(self):
-        return copy.deepcopy(model_to_dict(self, fields=self.comparison_fields))
 
 
 class ProductVariantTranslation(Translation):
@@ -635,7 +621,12 @@ class DigitalContentUrl(models.Model):
     ):
         if not self.token:
             self.token = str(uuid4()).replace("-", "")
-        super().save(force_insert, force_update, using, update_fields)
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=update_fields,
+        )
 
     def get_absolute_url(self) -> str | None:
         url = reverse("digital-product", kwargs={"token": str(self.token)})

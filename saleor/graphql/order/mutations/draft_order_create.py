@@ -9,6 +9,7 @@ from ....core.taxes import TaxError
 from ....core.tracing import traced_atomic_transaction
 from ....discount.utils.voucher import (
     create_or_update_voucher_discount_objects_for_order,
+    get_customer_email_for_voucher_usage,
     increase_voucher_usage,
 )
 from ....order import OrderOrigin, OrderStatus, events, models
@@ -29,12 +30,9 @@ from ...account.types import AddressInput
 from ...app.dataloaders import get_app_promise
 from ...core import ResolveInfo
 from ...core.context import SyncWebhookControlContext
-from ...core.descriptions import (
-    ADDED_IN_318,
-    ADDED_IN_321,
-    DEPRECATED_IN_3X_INPUT,
-)
+from ...core.descriptions import ADDED_IN_318, ADDED_IN_321, DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_ORDERS
+from ...core.enums import LanguageCodeEnum
 from ...core.mutations import ModelWithRestrictedChannelAccessMutation
 from ...core.scalars import PositiveDecimal
 from ...core.types import BaseInputObjectType, NonNullList, OrderError
@@ -50,11 +48,7 @@ from ..utils import (
     validate_variant_channel_listings,
 )
 from . import draft_order_cleaner
-from .utils import (
-    ShippingMethodUpdateMixin,
-    get_variant_rule_info_map,
-    save_addresses,
-)
+from .utils import ShippingMethodUpdateMixin, get_variant_rule_info_map, save_addresses
 
 
 class OrderLineInput(BaseInputObjectType):
@@ -162,6 +156,12 @@ class DraftOrderInput(BaseInputObjectType):
         required=False,
     )
 
+    language_code = graphene.Argument(
+        LanguageCodeEnum,
+        required=False,
+        description=(f"Order language code.{ADDED_IN_321}"),
+    )
+
     class Meta:
         doc_category = DOC_CATEGORY_ORDERS
 
@@ -252,6 +252,7 @@ class DraftOrderCreate(
         cls.clean_lines(cleaned_input, lines, channel)
         cleaned_input["status"] = OrderStatus.DRAFT
         cleaned_input["origin"] = OrderOrigin.DRAFT
+        cleaned_input["lines_count"] = len(cleaned_input.get("lines_data", []))
 
         cls.clean_addresses(
             info, instance, cleaned_input, shipping_address, billing_address, manager
@@ -368,8 +369,8 @@ class DraftOrderCreate(
 
     @staticmethod
     def _save_lines(info, instance, lines_data, app, manager):
+        lines = []
         if lines_data:
-            lines = []
             for line_data in lines_data:
                 new_line = create_order_line(
                     instance,
@@ -415,11 +416,6 @@ class DraftOrderCreate(
                         instance, method, manager, update_shipping_discount=False
                     )
 
-            if instance.undiscounted_base_shipping_price_amount is None:
-                instance.undiscounted_base_shipping_price_amount = (
-                    instance.base_shipping_price_amount
-                )
-
             if "voucher" in cleaned_input:
                 cls.handle_order_voucher(
                     cleaned_input,
@@ -454,9 +450,7 @@ class DraftOrderCreate(
         create_or_update_voucher_discount_objects_for_order(instance)
 
         # handle voucher usage
-        user_email = instance.user_email
-        if not user_email and instance.user:
-            user_email = instance.user.email
+        user_email = get_customer_email_for_voucher_usage(instance)
 
         channel = instance.channel
         if not channel.include_draft_order_in_voucher_usage:

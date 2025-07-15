@@ -6,8 +6,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urljoin
 
-import opentracing
-import opentracing.tags
 import requests
 from django.core.cache import cache
 from requests.auth import HTTPBasicAuth
@@ -17,6 +15,7 @@ from ...checkout import base_calculations
 from ...checkout.utils import get_address_for_checkout_taxes, is_shipping_required
 from ...core.http_client import HTTPClient
 from ...core.taxes import TaxError
+from ...core.telemetry import saleor_attributes, tracer
 from ...discount import DiscountType, VoucherType
 from ...discount.utils.voucher import is_order_level_voucher
 from ...order import base_calculations as base_order_calculations
@@ -288,7 +287,7 @@ def generate_request_data_from_checkout_lines(
 ) -> list[dict[str, str | int | bool | None]]:
     data: list[dict[str, str | int | bool | None]] = []
 
-    charge_taxes = get_charge_taxes_for_checkout(checkout_info, lines_info)
+    charge_taxes = get_charge_taxes_for_checkout(checkout_info)
     prices_entered_with_tax = checkout_info.tax_configuration.prices_entered_with_tax
 
     voucher = checkout_info.voucher
@@ -345,7 +344,7 @@ def generate_request_data_from_checkout_lines(
         }
 
         append_line_to_data(
-            **append_line_to_data_kwargs,
+            **append_line_to_data_kwargs,  # type: ignore[arg-type]
             amount=checkout_line_total.amount,
             ref1=line_info.variant.sku,
         )
@@ -404,7 +403,7 @@ def get_order_lines_data(
             undiscounted_amount = prices_data.undiscounted_price.net.amount
             price_with_discounts_amount = prices_data.price_with_discounts.net.amount
 
-        append_line_to_data_kwargs = {
+        append_line_to_data_kwargs: dict[str, Any] = {
             "data": data,
             "quantity": line.quantity,
             # This is a workaround for Avatax and sending a lines with amount 0. Like
@@ -534,7 +533,7 @@ def _get_checkout_discount_amount(checkout_info, lines):
     Return the discount amount from the entire order or shipping voucher, or from
     order promotion discount if there is no voucher and any promotion is eligible.
     """
-    discount_amount = Decimal("0")
+    discount_amount = Decimal(0)
     if (voucher := checkout_info.voucher) or checkout_info.discounts:
         # for apply_once_per_order vouchers the discount is already applied on lines
         applicable_discount = True
@@ -554,7 +553,7 @@ def _get_checkout_discount_amount(checkout_info, lines):
         discount_amount = (
             checkout_info.checkout.discount_amount
             if applicable_discount
-            else Decimal("0")
+            else Decimal(0)
         )
     return discount_amount
 
@@ -565,12 +564,8 @@ def _fetch_new_taxes_data(
     transaction_url = urljoin(
         get_api_url(config.use_sandbox), "transactions/createoradjust"
     )
-    with opentracing.global_tracer().start_active_span(
-        "avatax.transactions.crateoradjust"
-    ) as scope:
-        span = scope.span
-        span.set_tag(opentracing.tags.COMPONENT, "tax")
-        span.set_tag("service.name", "avatax")
+    with tracer.start_as_current_span("avatax.transactions.crateoradjust") as span:
+        span.set_attribute(saleor_attributes.COMPONENT, "tax")
         response = api_post_request(transaction_url, data, config)
     if response and "error" not in response:
         cache.set(data_cache_key, (data, response), CACHE_TIME)
@@ -619,7 +614,7 @@ def get_order_request_data(order: "Order", config: AvataxConfiguration):
         else TransactionType.ORDER
     )
     discount_amount = get_total_order_discount_excluding_shipping(order).amount
-    discounted_lines = discount_amount != Decimal("0")
+    discounted_lines = discount_amount != Decimal(0)
     lines = get_order_lines_data(order, config, discounted=discounted_lines)
     # if there is no lines to sent we do not want to send the request to avalara
     if not lines:
@@ -676,12 +671,8 @@ def get_cached_tax_codes_or_fetch(
     tax_codes = cache.get(TAX_CODES_CACHE_KEY, {})
     if not tax_codes:
         tax_codes_url = urljoin(get_api_url(config.use_sandbox), "definitions/taxcodes")
-        with opentracing.global_tracer().start_active_span(
-            "avatax.definitions.taxcodes"
-        ) as scope:
-            span = scope.span
-            span.set_tag(opentracing.tags.COMPONENT, "tax")
-            span.set_tag("service.name", "avatax")
+        with tracer.start_as_current_span("avatax.definitions.taxcodes") as span:
+            span.set_attribute(saleor_attributes.COMPONENT, "tax")
             response = api_get_request(
                 tax_codes_url, config.username_or_account, config.password_or_license
             )

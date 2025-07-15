@@ -3,6 +3,8 @@ import pytest
 from django.utils import timezone
 from freezegun import freeze_time
 
+from .....attribute.models.base import AttributeValue
+from .....attribute.utils import associate_attribute_values_to_instance
 from .....page.models import Page
 from .....tests.utils import dummy_editorjs
 from ....tests.utils import get_graphql_content
@@ -56,6 +58,64 @@ def test_pages_query_with_filter(
     variables = {"filter": page_filter}
     staff_api_client.user.user_permissions.add(permission_manage_pages)
     response = staff_api_client.post_graphql(query, variables)
+    content = get_graphql_content(response)
+    assert content["data"]["pages"]["totalCount"] == count
+
+
+QUERY_PAGES_WITH_SEARCH = """
+    query ($search: String) {
+        pages(first: 5, search:$search) {
+            totalCount
+            edges {
+                node {
+                    id
+                }
+            }
+        }
+    }
+"""
+
+
+@pytest.mark.parametrize(
+    ("search", "count"),
+    [
+        ("Page1", 2),
+        ("about", 1),
+        ("test", 1),
+        ("slug", 3),
+        ("Page", 2),
+    ],
+)
+def test_pages_query_with_search(
+    search, count, staff_api_client, permission_manage_pages, page_type
+):
+    # given
+    query = QUERY_PAGES_WITH_SEARCH
+    Page.objects.create(
+        title="Page1",
+        slug="slug_page_1",
+        content=dummy_editorjs("Content for page 1"),
+        page_type=page_type,
+    )
+    Page.objects.create(
+        title="Page2",
+        slug="slug_page_2",
+        content=dummy_editorjs("Content for page 2"),
+        page_type=page_type,
+    )
+    Page.objects.create(
+        title="About",
+        slug="slug_about",
+        content=dummy_editorjs("About test content"),
+        page_type=page_type,
+    )
+    variables = {"search": search}
+    staff_api_client.user.user_permissions.add(permission_manage_pages)
+
+    # when
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
     content = get_graphql_content(response)
     assert content["data"]["pages"]["totalCount"] == count
 
@@ -311,3 +371,188 @@ def test_query_pages_by_customer(api_client, page_list, page):
     content = get_graphql_content(response)
     data = content["data"]["pages"]["edges"]
     assert len(data) == page_count - 1
+
+
+PAGES_QUERY_WITH_ATTRIBUTE_AND_CHANNEL = """
+    query ($channel: String) {
+        pages(first: 10, channel: $channel) {
+            edges {
+                node {
+                    id
+                    title
+                    slug
+                    pageType {
+                        id
+                    }
+                    content
+                    contentJson
+                    attributes {
+                        attribute {
+                            slug
+                        }
+                        values {
+                            id
+                            slug
+                            reference
+                            referencedObject {
+                                __typename
+                                ... on Page {
+                                    id
+                                }
+                                ... on ProductVariant {
+                                    id
+                                    pricing {
+                                    onSale
+                                    }
+                                }
+                                ... on Product {
+                                    id
+                                    created
+                                    pricing {
+                                    onSale
+                                    }
+                                }
+                                }
+                        }
+                    }
+                }
+            }
+        }
+    }
+"""
+
+
+def test_pages_attribute_with_referenced_product_variant_object_and_channel_slug(
+    staff_api_client,
+    page_type_variant_reference_attribute,
+    permission_manage_pages,
+    page,
+    product,
+    channel_USD,
+):
+    # given
+    staff_api_client.user.user_permissions.add(permission_manage_pages)
+
+    product_variant = product.variants.first()
+    page_type = page.page_type
+    page_type.page_attributes.all().delete()
+    page_type.page_attributes.add(page_type_variant_reference_attribute)
+
+    attribute_value = AttributeValue.objects.create(
+        attribute=page_type_variant_reference_attribute,
+        name=f"Variant {product_variant.pk}",
+        slug=f"variant-{product_variant.pk}",
+        reference_variant=product_variant,
+    )
+
+    associate_attribute_values_to_instance(
+        page,
+        {page_type_variant_reference_attribute.pk: [attribute_value]},
+    )
+
+    query = PAGES_QUERY_WITH_ATTRIBUTE_AND_CHANNEL
+
+    # when
+    variables = {
+        "channel": channel_USD.slug,
+    }
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    pages_data = content["data"]["pages"]["edges"]
+    assert len(pages_data) == 1
+    page_data = pages_data[0]["node"]
+    page_attributes = page_data["attributes"]
+    assert len(page_attributes) == 1
+
+    attribute_with_reference = page_attributes[0]
+    assert attribute_with_reference["attribute"]["slug"] == "variant-reference"
+
+    assert len(attribute_with_reference["values"]) == 1
+    value = attribute_with_reference["values"][0]
+    assert value["reference"] == graphene.Node.to_global_id(
+        "ProductVariant", product_variant.id
+    )
+    assert value["referencedObject"]["__typename"] == "ProductVariant"
+    # having pricing object means that we passed channel_slug to the variant
+    assert value["referencedObject"]["pricing"]
+
+
+def test_pages_attribute_with_referenced_product_object_and_channel_slug(
+    staff_api_client,
+    page_type_product_reference_attribute,
+    permission_manage_pages,
+    page,
+    product,
+    channel_USD,
+):
+    # given
+    staff_api_client.user.user_permissions.add(permission_manage_pages)
+
+    page_type = page.page_type
+    page_type.page_attributes.all().delete()
+    page_type.page_attributes.add(page_type_product_reference_attribute)
+
+    attribute_value = AttributeValue.objects.create(
+        attribute=page_type_product_reference_attribute,
+        name=f"Product {product.pk}",
+        slug=f"product-{product.pk}",
+        reference_product=product,
+    )
+
+    associate_attribute_values_to_instance(
+        page,
+        {page_type_product_reference_attribute.pk: [attribute_value]},
+    )
+
+    query = PAGES_QUERY_WITH_ATTRIBUTE_AND_CHANNEL
+
+    # when
+    variables = {
+        "channel": channel_USD.slug,
+    }
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    pages_data = content["data"]["pages"]["edges"]
+    assert len(pages_data) == 1
+    page_data = pages_data[0]["node"]
+    page_attributes = page_data["attributes"]
+    assert len(page_attributes) == 1
+
+    attribute_with_reference = page_attributes[0]
+    assert attribute_with_reference["attribute"]["slug"] == "product-reference"
+
+    assert len(attribute_with_reference["values"]) == 1
+    value = attribute_with_reference["values"][0]
+    assert value["reference"] == graphene.Node.to_global_id("Product", product.id)
+    assert value["referencedObject"]["__typename"] == "Product"
+    # having pricing object means that we passed channel_slug to the product
+    assert value["referencedObject"]["pricing"]
+
+
+def test_pages_attribute_with_incorrect_channel_slug(
+    staff_api_client,
+    page_type_variant_reference_attribute,
+    permission_manage_pages,
+    page,
+    product,
+    channel_USD,
+):
+    # given
+    staff_api_client.user.user_permissions.add(permission_manage_pages)
+
+    query = PAGES_QUERY_WITH_ATTRIBUTE_AND_CHANNEL
+
+    # when
+    variables = {
+        "channel": "non-existing-channel-slug",
+    }
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    pages_data = content["data"]["pages"]["edges"]
+    assert len(pages_data) == 0
