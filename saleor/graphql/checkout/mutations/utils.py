@@ -378,6 +378,9 @@ def group_lines_input_on_add(
         variant_id = cast(str, line.get("variant_id"))
         force_new_line = line.get("force_new_line")
         metadata_list_from_input = line.get("metadata", [])
+        # if metadata is None in input, it should be treated as empty list
+        if not metadata_list_from_input:
+            metadata_list_from_input = []
 
         _, variant_db_id = graphene.Node.from_global_id(variant_id)
 
@@ -487,7 +490,10 @@ def check_permissions_for_custom_prices(app, lines):
     if any("price" in line for line in lines) and (
         not app or not app.has_perm(CheckoutPermissions.HANDLE_CHECKOUTS)
     ):
-        raise PermissionDenied(permissions=[CheckoutPermissions.HANDLE_CHECKOUTS])
+        raise PermissionDenied(
+            message="Setting the custom price is allowed only for apps with `MANAGE_CHECKOUTS` permission.",
+            permissions=[CheckoutPermissions.HANDLE_CHECKOUTS],
+        )
 
 
 def find_line_id_when_variant_parameter_used(

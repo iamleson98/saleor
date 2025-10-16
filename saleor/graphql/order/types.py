@@ -64,7 +64,8 @@ from ..account.utils import (
 )
 from ..app.dataloaders import AppByIdLoader
 from ..app.types import App
-from ..channel.dataloaders import ChannelByIdLoader, ChannelByOrderIdLoader
+from ..channel.dataloaders.by_order import ChannelByOrderIdLoader
+from ..channel.dataloaders.by_self import ChannelByIdLoader
 from ..channel.types import Channel
 from ..checkout.utils import prevent_sync_event_circular_query
 from ..core.connection import CountableConnection
@@ -74,6 +75,7 @@ from ..core.descriptions import (
     ADDED_IN_319,
     ADDED_IN_320,
     ADDED_IN_321,
+    ADDED_IN_322,
     DEPRECATED_IN_3X_INPUT,
     PREVIEW_FEATURE,
 )
@@ -110,6 +112,8 @@ from ..invoice.dataloaders import InvoicesByOrderIdLoader
 from ..invoice.types import Invoice
 from ..meta.resolvers import check_private_metadata_privilege, resolve_metadata
 from ..meta.types import MetadataItem, ObjectWithMetadata
+from ..page.dataloaders import PageByIdLoader
+from ..page.types import Page
 from ..payment.dataloaders import (
     TransactionByPaymentIdLoader,
     TransactionItemByIDLoader,
@@ -267,7 +271,12 @@ class OrderGrantedRefund(
     created_at = DateTime(required=True, description="Time of creation.")
     updated_at = DateTime(required=True, description="Time of last update.")
     amount = graphene.Field(Money, required=True, description="Refund amount.")
-    reason = graphene.String(description="Reason of the refund.")
+    reason = graphene.String(description="Reason of the refund." + ADDED_IN_322)
+    reason_reference = graphene.Field(
+        Page,
+        required=False,
+        description="Reason Model (Page) reference for refund." + ADDED_IN_322,
+    )
     user = graphene.Field(
         User,
         description=(
@@ -277,7 +286,7 @@ class OrderGrantedRefund(
             f"{AuthorizationFilters.OWNER.name}."
         ),
     )
-    app = graphene.Field(App, description=("App that performed the action."))
+    app = graphene.Field(App, description="App that performed the action.")
     shipping_costs_included = graphene.Boolean(
         required=True,
         description=(
@@ -385,6 +394,31 @@ class OrderGrantedRefund(
             return None
         return TransactionItemByIDLoader(info.context).load(
             granted_refund.transaction_item_id
+        )
+
+    @staticmethod
+    def resolve_reason_reference(
+        root: SyncWebhookControlContext[models.OrderGrantedRefund], info
+    ):
+        if not root.node.reason_reference:
+            return None
+
+        def wrap_page_with_context(page):
+            if not page:
+                return None
+
+            return (
+                ChannelByOrderIdLoader(info.context)
+                .load(root.node.order_id)
+                .then(
+                    lambda channel: ChannelContext(node=page, channel_slug=channel.slug)
+                )
+            )
+
+        return (
+            PageByIdLoader(info.context)
+            .load(root.node.reason_reference_id)
+            .then(wrap_page_with_context)
         )
 
 
@@ -1059,7 +1093,7 @@ class OrderLine(
     )
     tax_class = PermissionsField(
         TaxClass,
-        description=("Denormalized tax class of the product in this order line."),
+        description="Denormalized tax class of the product in this order line.",
         required=False,
         permissions=[
             AuthorizationFilters.AUTHENTICATED_STAFF_USER,
@@ -1553,7 +1587,7 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     )
     available_collection_points = NonNullList(
         Warehouse,
-        description=("Collection points that can be used for this order."),
+        description="Collection points that can be used for this order.",
         required=True,
     )
     invoices = NonNullList(
@@ -1582,15 +1616,15 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
         description="User-friendly payment status.", required=True
     )
     authorize_status = OrderAuthorizeStatusEnum(
-        description=("The authorize status of the order."),
+        description="The authorize status of the order.",
         required=True,
     )
     charge_status = OrderChargeStatusEnum(
-        description=("The charge status of the order."),
+        description="The charge status of the order.",
         required=True,
     )
     tax_exemption = graphene.Boolean(
-        description=("Returns True if order has to be exempt from taxes."),
+        description="Returns True if order has to be exempt from taxes.",
         required=True,
     )
     transactions = NonNullList(
@@ -1736,7 +1770,7 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
     )
     delivery_method = graphene.Field(
         DeliveryMethod,
-        description=("The delivery method selected for this order."),
+        description="The delivery method selected for this order.",
     )
     language_code = graphene.String(
         deprecation_reason="Use the `languageCodeEnum` field to fetch the language code.",
@@ -1770,14 +1804,14 @@ class Order(SyncWebhookControlContextModelObjectType[ModelObjectType[models.Orde
         required=True,
     )
     display_gross_prices = graphene.Boolean(
-        description=("Determines whether displayed prices should include taxes."),
+        description="Determines whether displayed prices should include taxes.",
         required=True,
     )
     external_reference = graphene.String(
         description="External ID of this order.", required=False
     )
     checkout_id = graphene.ID(
-        description=("ID of the checkout that the order was created from."),
+        description="ID of the checkout that the order was created from.",
         required=False,
     )
 

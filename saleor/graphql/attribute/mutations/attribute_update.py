@@ -3,11 +3,15 @@ from django.core.exceptions import ValidationError
 
 from ....attribute import models as models
 from ....attribute.error_codes import AttributeErrorCode
+from ....page.utils import mark_pages_search_vector_as_dirty_in_batches
 from ....permission.enums import ProductTypePermissions
+from ....product.utils.search_helpers import (
+    mark_products_search_vector_as_dirty_in_batches,
+)
 from ....webhook.event_types import WebhookEventAsyncType
 from ...core import ResolveInfo
 from ...core.context import ChannelContext
-from ...core.descriptions import DEPRECATED_IN_3X_INPUT
+from ...core.descriptions import ADDED_IN_322, DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_ATTRIBUTES
 from ...core.enums import MeasurementUnitsEnum
 from ...core.mutations import ModelWithExtRefMutation
@@ -17,7 +21,11 @@ from ...plugins.dataloaders import get_plugin_manager_promise
 from ..descriptions import AttributeDescriptions, AttributeValueDescriptions
 from ..types import Attribute
 from .attribute_create import AttributeValueInput
-from .mixins import AttributeMixin
+from .mixins import REFERENCE_TYPES_LIMIT, AttributeMixin
+from .utils import (
+    get_page_ids_to_search_index_update_for_attribute_values,
+    get_product_ids_to_search_index_update_for_attribute_values,
+)
 
 
 class AttributeValueUpdateInput(AttributeValueInput):
@@ -66,6 +74,21 @@ class AttributeUpdateInput(BaseInputObjectType):
     )
     external_reference = graphene.String(
         description="External ID of this product.", required=False
+    )
+    reference_types = NonNullList(
+        graphene.ID,
+        required=False,
+        description=(
+            "Specifies reference types to narrow down the choices of reference "
+            "objects. Applicable only for `REFERENCE` and `SINGLE_REFERENCE` "
+            "attributes with `PRODUCT`, `PRODUCT_VARIANT` and `PAGE` entity types. "
+            "Accepts `ProductType` IDs for `PRODUCT` and `PRODUCT_VARIANT` "
+            "entity types, and `PageType` IDs for `PAGE` entity type. "
+            "If omitted, all objects of the selected entity type are available "
+            "as attribute values.\n\n"
+            f"A maximum of {REFERENCE_TYPES_LIMIT} reference types can be specified."
+            + ADDED_IN_322
+        ),
     )
 
     class Meta:
@@ -137,11 +160,18 @@ class AttributeUpdate(AttributeMixin, ModelWithExtRefMutation):
     ):
         instance = cls.get_instance(info, external_reference=external_reference, id=id)
 
+        cls.validate_reference_types_limit(input)
         # Do cleaning and uniqueness checks
         cleaned_input = cls.clean_input(info, instance, input)
         cls.clean_attribute(instance, cleaned_input)
         cls.clean_values(cleaned_input, instance)
-        cls.clean_remove_values(cleaned_input, instance)
+        remove_values = cls.clean_remove_values(cleaned_input, instance)
+        product_ids = get_product_ids_to_search_index_update_for_attribute_values(
+            remove_values
+        )
+        page_ids = get_page_ids_to_search_index_update_for_attribute_values(
+            remove_values
+        )
 
         # Construct the attribute
         instance = cls.construct_instance(instance, cleaned_input)
@@ -151,6 +181,9 @@ class AttributeUpdate(AttributeMixin, ModelWithExtRefMutation):
         instance.save()
         cls._save_m2m(info, instance, cleaned_input)
         cls.post_save_action(info, instance, cleaned_input)
+        if remove_values:
+            mark_products_search_vector_as_dirty_in_batches(product_ids)
+            mark_pages_search_vector_as_dirty_in_batches(page_ids)
 
         # Return the attribute that was created
         return AttributeUpdate(attribute=ChannelContext(instance, None))

@@ -1,9 +1,6 @@
 from .attributes import (
     ProductAttributesAllByProductTypeIdLoader,
     ProductAttributesVisibleInStorefrontByProductTypeIdLoader,
-    SelectedAttributesAllByProductIdLoader,
-    SelectedAttributesByProductVariantIdLoader,
-    SelectedAttributesVisibleInStorefrontByProductIdLoader,
     VariantAttributesAllByProductTypeIdLoader,
     VariantAttributesVisibleInStorefrontByProductTypeIdLoader,
 )
@@ -71,9 +68,6 @@ __all__ = [
     "ProductVariantsByProductIdLoader",
     "ProductMediaByIdLoader",
     "MediaByProductVariantIdLoader",
-    "SelectedAttributesAllByProductIdLoader",
-    "SelectedAttributesByProductVariantIdLoader",
-    "SelectedAttributesVisibleInStorefrontByProductIdLoader",
     "ThumbnailByCategoryIdSizeAndFormatLoader",
     "ThumbnailByCollectionIdSizeAndFormatLoader",
     "ThumbnailByProductMediaIdSizeAndFormatLoader",

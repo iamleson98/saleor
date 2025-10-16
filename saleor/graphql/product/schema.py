@@ -7,7 +7,7 @@ from ...permission.utils import has_one_of_permissions
 from ...product import models
 from ...product.models import ALL_PRODUCTS_PERMISSIONS
 from ...product.search import search_products
-from ..channel.dataloaders import ChannelBySlugLoader
+from ..channel.dataloaders.by_self import ChannelBySlugLoader
 from ..channel.utils import get_default_channel_slug_or_graphql_error
 from ..core import ResolveInfo
 from ..core.connection import create_connection_slice, filter_connection_queryset
@@ -55,17 +55,11 @@ from .bulk_mutations import (
     ProductVariantStocksUpdate,
 )
 from .dataloaders.products import CategoryByIdLoader, CategoryBySlugLoader
-from .filters import (
-    CategoryFilterInput,
-    CategoryWhereInput,
-    CollectionFilterInput,
-    CollectionWhereInput,
-    ProductFilterInput,
-    ProductTypeFilterInput,
-    ProductVariantFilterInput,
-    ProductVariantWhereInput,
-    ProductWhereInput,
-)
+from .filters.category import CategoryFilterInput, CategoryWhereInput
+from .filters.collection import CollectionFilterInput, CollectionWhereInput
+from .filters.product import ProductFilterInput, ProductWhereInput
+from .filters.product_type import ProductTypeFilterInput
+from .filters.product_variant import ProductVariantFilterInput, ProductVariantWhereInput
 from .mutations import (
     CategoryCreate,
     CategoryDelete,

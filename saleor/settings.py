@@ -1,4 +1,5 @@
 import datetime
+import importlib.metadata
 import logging
 import os
 import os.path
@@ -10,7 +11,6 @@ import dj_database_url
 import dj_email_url
 import django_cache_url
 import django_stubs_ext
-import pkg_resources
 import sentry_sdk
 import sentry_sdk.utils
 from celery.schedules import crontab
@@ -358,6 +358,7 @@ LOGGING = {
             "datefmt": "%Y-%m-%dT%H:%M:%SZ",
             "format": (
                 "%(asctime)s %(levelname)s %(celeryTaskId)s %(celeryTaskName)s "
+                "%(message)s "
             ),
         },
         "celery_task_json": {
@@ -431,6 +432,11 @@ LOGGING = {
             "level": "INFO",
             "propagate": False,
         },
+        "celery.worker": {
+            "handlers": ["celery_app"],
+            "level": "INFO",
+            "propagate": False,
+        },
         "celery.task": {
             "handlers": ["celery_task"],
             "level": "INFO",
@@ -451,6 +457,7 @@ LOGGING = {
         "graphql.execution.executor": {"propagate": False, "handlers": ["null"]},
     },
 }
+
 
 AUTH_USER_MODEL = "account.User"
 
@@ -691,6 +698,11 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": datetime.timedelta(seconds=BEAT_UPDATE_SEARCH_SEC),
         "options": {"expires": BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC},
     },
+    "update-pages-search-vectors": {
+        "task": "saleor.page.tasks.update_pages_search_vector_task",
+        "schedule": datetime.timedelta(seconds=BEAT_UPDATE_SEARCH_SEC),
+        "options": {"expires": BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC},
+    },
     "expire-orders": {
         "task": "saleor.order.tasks.expire_orders_task",
         "schedule": BEAT_EXPIRE_ORDERS_AFTER_TIMEDELTA,
@@ -844,27 +856,27 @@ GRAPHQL_QUERY_MAX_COMPLEXITY = int(
 FEDERATED_QUERY_MAX_ENTITIES = int(os.environ.get("FEDERATED_QUERY_MAX_ENTITIES", 100))
 
 BUILTIN_PLUGINS = [
-    "saleor.plugins.avatax.plugin.AvataxPlugin",
+    "saleor.plugins.avatax.plugin.DeprecatedAvataxPlugin",
     "saleor.plugins.webhook.plugin.WebhookPlugin",
-    "saleor.payment.gateways.dummy.plugin.DummyGatewayPlugin",
-    "saleor.payment.gateways.dummy_credit_card.plugin.DummyCreditCardGatewayPlugin",
+    "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin",
+    "saleor.payment.gateways.dummy_credit_card.plugin.DeprecatedDummyCreditCardGatewayPlugin",
     "saleor.payment.gateways.stripe.plugin.StripeGatewayPlugin",
-    "saleor.payment.gateways.braintree.plugin.BraintreeGatewayPlugin",
-    "saleor.payment.gateways.razorpay.plugin.RazorpayGatewayPlugin",
+    "saleor.payment.gateways.braintree.plugin.DeprecatedBraintreeGatewayPlugin",
+    "saleor.payment.gateways.razorpay.plugin.DeprecatedRazorpayGatewayPlugin",
     "saleor.payment.gateways.adyen.plugin.AdyenGatewayPlugin",
     "saleor.payment.gateways.authorize_net.plugin.AuthorizeNetGatewayPlugin",
     "saleor.payment.gateways.np_atobarai.plugin.NPAtobaraiGatewayPlugin",
     "saleor.plugins.user_email.plugin.UserEmailPlugin",
     "saleor.plugins.admin_email.plugin.AdminEmailPlugin",
-    "saleor.plugins.sendgrid.plugin.SendgridEmailPlugin",
+    "saleor.plugins.sendgrid.plugin.DeprecatedSendgridEmailPlugin",
     "saleor.plugins.openid_connect.plugin.OpenIDConnectPlugin",
 ]
 
 # Plugin discovery
 EXTERNAL_PLUGINS = []
-installed_plugins = pkg_resources.iter_entry_points("saleor.plugins")
+installed_plugins = importlib.metadata.entry_points(group="saleor.plugins")
 for entry_point in installed_plugins:
-    plugin_path = f"{entry_point.module_name}.{entry_point.attrs[0]}"
+    plugin_path = f"{entry_point.module}.{entry_point.attr}"
     if plugin_path not in BUILTIN_PLUGINS and plugin_path not in EXTERNAL_PLUGINS:
         if entry_point.name not in INSTALLED_APPS:
             INSTALLED_APPS.append(entry_point.name)
@@ -926,8 +938,6 @@ TRANSACTION_BATCH_FOR_RELEASING_FUNDS = os.environ.get(
     "TRANSACTION_BATCH_FOR_RELEASING_FUNDS", 60
 )
 
-NESTED_QUERY_LIMIT = int(os.environ.get("NESTED_QUERY_LIMIT", 100))
-
 
 # The maximum SearchVector expression count allowed per index SQL statement
 # If the count is exceeded, the expression list will be truncated
@@ -946,6 +956,9 @@ PRODUCT_MAX_INDEXED_ATTRIBUTES = 1000
 PRODUCT_MAX_INDEXED_ATTRIBUTE_VALUES = 100
 PRODUCT_MAX_INDEXED_VARIANTS = 1000
 
+# Maximum related objects that can be indexed in a page
+PAGE_MAX_INDEXED_ATTRIBUTES = 1000
+PAGE_MAX_INDEXED_ATTRIBUTE_VALUES = 100
 
 # Patch SubscriberExecutionContext class from `graphql-core-legacy` package
 # to fix bug causing not returning errors for subscription queries.
@@ -1077,6 +1090,15 @@ TELEMETRY_METER_CLASS = "saleor.core.telemetry.metric.Meter"
 # Whether to raise or log exceptions for telemetry unit conversion errors
 # Disabled by default to prevent disruptions caused by unexpected unit conversion issues
 TELEMETRY_RAISE_UNIT_CONVERSION_ERRORS = False
+# The default threshold for slow operations is set to 1 second, based on production monitoring data.
+# Only a small percentage of queries are expected to exceed this threshold.
+TELEMETRY_SLOW_GRAPHQL_OPERATION_THRESHOLD = float(
+    os.environ.get("TELEMETRY_SLOW_GRAPHQL_OPERATION_THRESHOLD", 1.0)
+)
+
+# Additional hash suffix, allowing to invalidate cached schema. In production usually we want this to be empty.
+# For development envs, where schema may change often, it may be convenient to set it to e.g. commit hash value.
+GRAPHQL_CACHE_SUFFIX = os.environ.get("GRAPHQL_CACHE_SUFFIX", "")
 
 # Library `google-i18n-address` use `AddressValidationMetadata` form Google to provide address validation rules.
 # Patch `i18n` module to allows to override the default address rules.

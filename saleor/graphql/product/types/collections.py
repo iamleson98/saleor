@@ -12,7 +12,7 @@ from ....thumbnail.utils import (
     get_thumbnail_format,
     get_thumbnail_size,
 )
-from ...channel.dataloaders import ChannelBySlugLoader
+from ...channel.dataloaders.by_self import ChannelBySlugLoader
 from ...core import ResolveInfo
 from ...core.connection import (
     CountableConnection,
@@ -39,7 +39,7 @@ from ..dataloaders import (
     CollectionChannelListingByCollectionIdLoader,
     ThumbnailByCollectionIdSizeAndFormatLoader,
 )
-from ..filters import ProductFilterInput, ProductWhereInput
+from ..filters.product import ProductFilterInput, ProductWhereInput
 from ..sorters import ProductOrder
 from ..utils import check_for_sorting_by_rank
 from .channels import CollectionChannelListing

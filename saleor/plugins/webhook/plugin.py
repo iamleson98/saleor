@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import graphene
 from django.conf import settings
-from django.template.defaultfilters import truncatechars
 from pydantic import ValidationError
 
 from ...app.models import App
@@ -20,8 +19,9 @@ from ...core.models import EventDelivery
 from ...core.notify import NotifyEventType
 from ...core.taxes import TAX_ERROR_FIELD_LENGTH, TaxData, TaxDataError, TaxType
 from ...core.telemetry import get_task_context
-from ...core.utils import build_absolute_uri
+from ...core.utils import build_absolute_uri, get_domain
 from ...core.utils.json_serializer import CustomJsonEncoder
+from ...core.utils.text import safe_truncate
 from ...csv.notifications import get_default_export_payload
 from ...graphql.core.context import SaleorContext
 from ...graphql.webhook.subscription_payload import (
@@ -62,7 +62,7 @@ from ...payment.utils import (
 )
 from ...settings import WEBHOOK_SYNC_TIMEOUT
 from ...thumbnail.models import Thumbnail
-from ...webhook.const import WEBHOOK_CACHE_DEFAULT_TIMEOUT
+from ...webhook.const import WEBHOOK_CACHE_DEFAULT_TTL
 from ...webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
 from ...webhook.payloads import (
     generate_checkout_payload,
@@ -98,6 +98,7 @@ from ...webhook.response_schemas.transaction import (
 from ...webhook.response_schemas.utils.helpers import parse_validation_error
 from ...webhook.transport.asynchronous.transport import (
     WebhookPayloadData,
+    get_queue_name_for_webhook,
     send_webhook_request_async,
     trigger_webhooks_async,
     trigger_webhooks_async_for_multiple_objects,
@@ -2122,6 +2123,31 @@ class WebhookPlugin(BasePlugin):
             )
         return previous_value
 
+    def checkout_fully_authorized(
+        self, checkout: "Checkout", previous_value: None, webhooks=None
+    ) -> None:
+        if not self.active:
+            return previous_value
+        event_type = WebhookEventAsyncType.CHECKOUT_FULLY_AUTHORIZED
+        if webhooks := self._get_webhooks_for_channel_events(
+            event_type, checkout.channel.slug, webhooks
+        ):
+            checkout_data_generator = partial(
+                generate_checkout_payload,
+                checkout,
+                self.requestor,
+            )
+            self.trigger_webhooks_async(
+                None,
+                event_type,
+                webhooks,
+                checkout,
+                self.requestor,
+                legacy_data_generator=checkout_data_generator,
+                queue=settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
+            )
+        return previous_value
+
     def checkout_fully_paid(
         self, checkout: "Checkout", previous_value: None, webhooks=None
     ) -> None:
@@ -2723,8 +2749,20 @@ class WebhookPlugin(BasePlugin):
         if not self.active:
             return previous_value
         delivery_update(delivery, status=EventDeliveryStatus.PENDING)
-        send_webhook_request_async.delay(
-            delivery.pk, telemetry_context=get_task_context().to_dict()
+        domain = get_domain()
+        webhook = delivery.webhook
+        app = webhook.app
+        message_group_id = f"{domain}:{app.identifier or app.id}"
+        send_webhook_request_async.apply_async(
+            kwargs={
+                "event_delivery_id": delivery.pk,
+                "telemetry_context": get_task_context().to_dict(),
+            },
+            queue=get_queue_name_for_webhook(
+                webhook,
+                default_queue=settings.WEBHOOK_CELERY_QUEUE_NAME,
+            ),
+            MessageGroupId=message_group_id,  # for AWS SQS fair queues
         )
         return previous_value
 
@@ -2806,7 +2844,7 @@ class WebhookPlugin(BasePlugin):
                     self.allow_replica,
                     subscribable_object=list_payment_method_data,
                     request_timeout=WEBHOOK_SYNC_TIMEOUT,
-                    cache_timeout=WEBHOOK_CACHE_DEFAULT_TIMEOUT,
+                    cache_timeout=WEBHOOK_CACHE_DEFAULT_TTL,
                     requestor=self.requestor,
                 )
                 if response_data:
@@ -3512,7 +3550,7 @@ class WebhookPlugin(BasePlugin):
                 str(e),
                 extra={"errors": errors},
             )
-            error_msg = truncatechars(parse_validation_error(e), TAX_ERROR_FIELD_LENGTH)
+            error_msg = safe_truncate(parse_validation_error(e), TAX_ERROR_FIELD_LENGTH)
             raise TaxDataError(error_msg, errors=errors) from e
         return tax_data
 

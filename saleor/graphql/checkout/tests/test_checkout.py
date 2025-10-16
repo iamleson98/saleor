@@ -1,10 +1,12 @@
 import datetime
+import json
 from decimal import Decimal
 from unittest import mock
 
 import graphene
 import pytest
 from django.core.exceptions import ValidationError
+from django.db.models import F
 from django.test import override_settings
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -13,13 +15,18 @@ from measurement.measures import Weight
 from prices import Money
 
 from ....checkout import base_calculations, calculations
-from ....checkout.calculations import _fetch_checkout_prices_if_expired
+from ....checkout.calculations import (
+    _calculate_and_add_tax,
+    _fetch_checkout_prices_if_expired,
+    fetch_checkout_data,
+)
 from ....checkout.checkout_cleaner import (
     clean_checkout_payment,
     clean_checkout_shipping,
 )
 from ....checkout.error_codes import CheckoutErrorCode
 from ....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
+from ....checkout.models import Checkout
 from ....checkout.utils import (
     PRIVATE_META_APP_SHIPPING_ID,
     add_variant_to_checkout,
@@ -42,7 +49,7 @@ from ....product.models import (
     ProductVariant,
     ProductVariantChannelListing,
 )
-from ....shipping.models import ShippingMethodTranslation
+from ....shipping.models import ShippingMethod, ShippingMethodTranslation
 from ....shipping.utils import convert_to_shipping_method_data
 from ....tests import race_condition
 from ....tests.utils import dummy_editorjs
@@ -533,6 +540,7 @@ query getCheckout($id: ID) {
     checkout(id: $id) {
 		shippingMethods{
             id
+            name
         }
     }
 }
@@ -598,6 +606,68 @@ def test_query_checkout_with_address_with_shipping_method_without_exclude_webhoo
     # then webhook plugin is not executing excluded_shipping_methods_for_checkout
 
     mock_excluded_shipping_methods_for_checkout.assert_called_once()
+
+
+@mock.patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
+@override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+def test_preventing_circular_payload_generation_when_listing_shipping_methods_for_checkout(
+    mock_send_webhook_request_sync,
+    api_client,
+    checkout_with_item,
+    address,
+    subscription_shipping_list_methods_for_checkout_webhook,
+    caplog,
+):
+    # This test ensures that the listing external shipping methods are resistant to circular webhooks calls.
+    # We call `shipping_methods` field inside `ShippingListMethodsForCheckout` subscription. This resolver should
+    # always return only internal shipping methods.
+    # given
+    checkout_with_item.shipping_address = address
+    checkout_with_item.save()
+    expected_external_shipping_name = "Provider - Economy"
+    mock_send_webhook_request_sync.return_value = [
+        {
+            "amount": "10",
+            "currency": checkout_with_item.currency,
+            "id": "abcd",
+            "name": expected_external_shipping_name,
+        },
+    ]
+
+    # when
+    variables = {"id": to_global_id_or_none(checkout_with_item)}
+    response = api_client.post_graphql(GET_CHECKOUT_SHIPPING_METHODS_QUERY, variables)
+
+    # then
+    shipping_method = ShippingMethod.objects.get()
+    content = get_graphql_content(response)
+    # Check if webhook was called with correct payload
+    assert mock_send_webhook_request_sync.call_count == 1
+    event_delivery = mock_send_webhook_request_sync.call_args[0][0]
+    payload = event_delivery.payload.get_payload()
+    assert json.loads(payload) == {
+        "checkout": {
+            "id": to_global_id_or_none(checkout_with_item),
+        },
+        "shippingMethods": [
+            {
+                "id": graphene.Node.to_global_id("ShippingMethod", shipping_method.id),
+                "name": shipping_method.name,
+            },
+        ],
+    }
+    # Check if shipping methods are correct
+    shipping_method_names = {
+        shipping_method_data["name"]
+        for shipping_method_data in content["data"]["checkout"]["shippingMethods"]
+    }
+    assert shipping_method_names == {
+        expected_external_shipping_name,
+        shipping_method.name,
+    }
+    # Ensure that any logs are generated via circular webhook calls. When webhooks are called in this way, they can
+    # generate the 'Subscription did not return a payload' log.
+    assert len(caplog.records) == 0
 
 
 @pytest.mark.parametrize("minimum_order_weight_value", [0, 2, None])
@@ -1843,6 +1913,7 @@ query getCheckout($id: ID) {
     lines {
       id
       isGift
+      quantity
       variant {
         id
         pricing {
@@ -2045,7 +2116,7 @@ def test_checkout_prices(user_api_client, checkout_with_item):
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -2238,7 +2309,7 @@ def test_checkout_prices_with_promotion(
     assert data["token"] == str(checkout.token)
     assert len(data["lines"]) == checkout.lines.count()
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -2717,7 +2788,7 @@ def test_checkout_prices_with_promotion_line_deleted_in_meantime(
     # as the values cannot be fetched for deleted line
     lines[0].rules_info = []
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -2778,7 +2849,7 @@ def test_checkout_prices_with_promotion_one_line_deleted_in_meantime(
 
     line_count = checkout.lines.count()
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -2856,6 +2927,72 @@ def test_checkout_display_gross_prices_use_default(user_api_client, checkout_wit
     assert data["displayGrossPrices"] == tax_config.display_gross_prices
 
 
+@mock.patch(
+    "saleor.checkout.calculations._calculate_and_add_tax",
+    wraps=_calculate_and_add_tax,
+)
+@mock.patch(
+    "saleor.checkout.calculations.fetch_checkout_data",
+    wraps=fetch_checkout_data,
+)
+def test_checkout_prices_with_checkout_updated_during_price_recalculation(
+    mock_fetch_checkout_data,
+    mock_calculate_and_add_tax,
+    user_api_client,
+    checkout_with_prices,
+):
+    # given
+    expected_email = "new_email@example.com"
+    checkout = checkout_with_prices
+    variables = {
+        "id": to_global_id_or_none(checkout),
+    }
+    total_before_recalculation = checkout.total
+    lines_before_recalculation = list(checkout.lines.all())
+
+    # when
+    def modify_checkout(*args, **kwargs):
+        with allow_writer():
+            checkout_to_modify = Checkout.objects.get(pk=checkout.pk)
+            checkout_to_modify.lines.update(quantity=F("quantity") + 1)
+            checkout_to_modify.email = expected_email
+            checkout_to_modify.save(update_fields=["email", "last_change"])
+
+    with race_condition.RunAfter(
+        "saleor.checkout.calculations._calculate_and_add_tax", modify_checkout
+    ):
+        response = user_api_client.post_graphql(QUERY_CHECKOUT_PRICES, variables)
+    content = get_graphql_content(response)
+    data = content["data"]["checkout"]
+
+    # then
+    assert data["token"] == str(checkout.token)
+
+    # Ensure that the checkout prices recalculation was triggered more than one time
+    assert mock_fetch_checkout_data.call_count > 1
+
+    # Ensure that the checkout price are recalculated only one time
+    assert mock_calculate_and_add_tax.call_count == 1
+
+    checkout.refresh_from_db()
+    assert checkout.email == expected_email
+
+    # Confirm that total price hasn't changed in database due to recalculation
+    assert checkout.total == total_before_recalculation
+    # Confirm that total price has changed in query response due to recalculation
+    assert (
+        data["totalPrice"]["gross"]["amount"] != total_before_recalculation.gross.amount
+    )
+
+    for line_before_recalculation, result_line, line in zip(
+        lines_before_recalculation, data["lines"], checkout.lines.all(), strict=True
+    ):
+        # Confirm that returned line quantities are same as before simulated update was applied to the database
+        assert line_before_recalculation.quantity == result_line["quantity"]
+        # Confirm that line quantities have been updated in database
+        assert line_before_recalculation.quantity + 1 == line.quantity
+
+
 def test_checkout_display_gross_prices_use_country_exception(
     user_api_client, checkout_with_item
 ):
@@ -2898,7 +3035,7 @@ def test_checkout_prices_with_specific_voucher(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -2983,7 +3120,7 @@ def test_checkout_prices_with_specific_voucher_when_line_without_listing(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3057,7 +3194,7 @@ def test_checkout_prices_with_voucher_once_per_order(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3146,7 +3283,7 @@ def test_checkout_prices_with_voucher_once_per_order_when_line_without_listing(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3222,7 +3359,7 @@ def test_checkout_prices_with_voucher(user_api_client, checkout_with_item_and_vo
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3311,7 +3448,7 @@ def test_checkout_prices_with_voucher_when_line_without_listing(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3390,7 +3527,7 @@ def test_checkout_prices_with_voucher_code_that_doesnt_exist(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3481,7 +3618,7 @@ def test_checkout_prices_voucher_code_that_doesnt_exist_when_line_without_listin
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3576,7 +3713,7 @@ def test_checkout_prices_variant_listing_price_changed(
     assert data["token"] == str(checkout_with_item.token)
     assert len(data["lines"]) == checkout_with_item.lines.count()
 
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -3658,7 +3795,7 @@ def test_checkout_prices_expired_variant_listing_price_changed(
     assert len(data["lines"]) == checkout_with_item.lines.count()
 
     checkout_info.checkout.refresh_from_db()
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -4136,7 +4273,7 @@ def test_clean_checkout(checkout_with_item, payment_dummy, address, shipping_met
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     manager = get_plugins_manager(allow_replica=False)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 

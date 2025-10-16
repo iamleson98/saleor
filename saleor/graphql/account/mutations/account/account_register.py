@@ -58,6 +58,15 @@ class AccountRegisterInput(AccountBaseInput):
 
 
 class AccountRegister(DeprecatedModelMutation):
+    user = graphene.Field(
+        User,
+        deprecation_reason=(
+            "The field always returns a `User` object constructed from the input data. "
+            "The `user.id` is always empty. To determine whether the user exists "
+            "in Saleor, query via an external app with the required permissions."
+        ),
+    )
+
     class Arguments:
         input = AccountRegisterInput(
             description="Fields required to create a user.", required=True
@@ -102,7 +111,7 @@ class AccountRegister(DeprecatedModelMutation):
         )
         # we don't want to return id's as it will allow to deduce if user exists
         if response.user:
-            response.user.RETURN_ID_IN_API_RESPONSE = False
+            response.user.NEWLY_CREATED_USER = True
         return response
 
     @classmethod
@@ -187,6 +196,8 @@ class AccountRegister(DeprecatedModelMutation):
         context_data = RequestorAwareContext.create_context_data(info.context)
         cls.save_and_create_task(user_exists, instance, cleaned_input, context_data)
 
+        # Sets updated_at, to always return the time when mutation was called
+        instance.updated_at = instance.date_joined
         return cls.success_response(instance)
 
     @classmethod

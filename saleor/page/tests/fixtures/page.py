@@ -3,6 +3,7 @@ import pytest
 from ....attribute.utils import associate_attribute_values_to_instance
 from ....tests.utils import dummy_editorjs
 from ...models import Page
+from ...search import update_pages_search_vector
 
 
 @pytest.fixture
@@ -13,6 +14,7 @@ def page(db, page_type, size_page_attribute):
         "content": dummy_editorjs("Test content."),
         "is_published": True,
         "page_type": page_type,
+        "search_index_dirty": False,
     }
     page = Page.objects.create(**data)
 
@@ -21,6 +23,7 @@ def page(db, page_type, size_page_attribute):
     associate_attribute_values_to_instance(
         page, {size_page_attribute.pk: [page_attr_value]}
     )
+    update_pages_search_vector([page])
 
     return page
 
@@ -63,7 +66,23 @@ def page_list(db, page_type):
         "is_published": True,
         "page_type": page_type,
     }
-    pages = Page.objects.bulk_create([Page(**data_1), Page(**data_2)])
+    data_3 = {
+        "slug": "test3",
+        "title": "Test page3",
+        "content": dummy_editorjs("Test content."),
+        "is_published": True,
+        "page_type": page_type,
+    }
+    data_4 = {
+        "slug": "test4",
+        "title": "Test page4",
+        "content": dummy_editorjs("Test content."),
+        "is_published": True,
+        "page_type": page_type,
+    }
+    pages = Page.objects.bulk_create(
+        [Page(**data_1), Page(**data_2), Page(**data_3), Page(**data_4)]
+    )
     return pages
 
 

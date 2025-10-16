@@ -4,7 +4,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-from ...checkout.calculations import checkout_total
+from ...checkout.calculations import calculate_checkout_total
 from ...checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ...core.prices import quantize_price
 from ...plugins.manager import PluginsManager, get_plugins_manager
@@ -119,7 +119,7 @@ def test_create_payment(checkout_with_item, address):
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
-    total = checkout_total(
+    total = calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -160,7 +160,7 @@ def test_create_payment_from_checkout_requires_billing_address(checkout_with_ite
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
-    total = checkout_total(
+    total = calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=None
     )
 
@@ -202,7 +202,7 @@ def test_create_payment_information_for_checkout_payment(address, checkout_with_
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
-    total = checkout_total(
+    total = calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -338,7 +338,7 @@ def test_create_payment_information_store(checkout_with_item, address, store):
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
-    total = checkout_total(
+    total = calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -373,7 +373,7 @@ def test_create_payment_information_metadata(checkout_with_item, address, metada
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout_with_item)
     checkout_info = fetch_checkout_info(checkout_with_item, lines, manager)
-    total = checkout_total(
+    total = calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -486,7 +486,7 @@ def test_gateway_charge_errors(payment_dummy, transaction_token, settings):
             amount=Decimal(1000000),
             channel_slug=payment_dummy.order.channel.slug,
         )
-    assert exc.value.message == ("Unable to charge more than un-captured amount.")
+    assert exc.value.message == "Unable to charge more than un-captured amount."
 
 
 def test_gateway_refund_errors(payment_txn_captured):
@@ -690,7 +690,7 @@ def test_is_currency_supported(
     manager = get_plugins_manager(allow_replica=False)
     dummy_gateway_config.supported_currencies = "USD, EUR"
     monkeypatch.setattr(
-        "saleor.payment.gateways.dummy.plugin.DummyGatewayPlugin._get_gateway_config",
+        "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin._get_gateway_config",
         lambda _: dummy_gateway_config,
     )
 

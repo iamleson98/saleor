@@ -38,7 +38,7 @@ from ..meta.types import ObjectWithMetadata
 from ..tax.dataloaders import TaxConfigurationByChannelId
 from ..warehouse.dataloaders import WarehousesByChannelIdLoader
 from ..warehouse.types import Warehouse
-from .dataloaders import ChannelWithHasOrdersByIdLoader
+from .dataloaders.by_order import ChannelWithHasOrdersByIdLoader
 from .enums import (
     AllocationStrategyEnum,
     MarkAsPaidStrategyEnum,
@@ -132,7 +132,7 @@ class OrderSettings(ObjectType):
     )
     delete_expired_orders_after = Day(
         required=True,
-        description=("The time in days after expired orders will be deleted."),
+        description="The time in days after expired orders will be deleted.",
     )
     allow_unpaid_orders = graphene.Boolean(
         required=True,
@@ -296,7 +296,7 @@ class Channel(ModelObjectType):
     )
     stock_settings = PermissionsField(
         StockSettings,
-        description=("Define the stock setting for this channel."),
+        description="Define the stock setting for this channel.",
         required=True,
         permissions=[
             AuthorizationFilters.AUTHENTICATED_APP,

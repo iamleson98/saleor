@@ -24,6 +24,7 @@ from ...core.db.connection import allow_writer
 from ...core.exceptions import PermissionDenied
 from ...core.utils import metadata_manager
 from ...core.utils.events import call_event
+from ...core.utils.update_mutation_manager import InstanceTracker
 from ...permission.auth_filters import AuthorizationFilters
 from ...permission.enums import BasePermissionEnum
 from ...permission.utils import (
@@ -57,6 +58,8 @@ from .utils import (
     snake_to_camel_case,
 )
 from .utils.error_codes import get_error_code_from_error
+
+MISSING_NODE_ERROR_MESSAGE_PREFIX = "Couldn't resolve to a node:"
 
 
 def get_model_name(model):
@@ -370,7 +373,7 @@ class BaseMutation(graphene.Mutation):
                 raise ValidationError(
                     {
                         field: ValidationError(
-                            f"Couldn't resolve to a node: {node_id}", code=code
+                            f"{MISSING_NODE_ERROR_MESSAGE_PREFIX} {node_id}", code=code
                         )
                     }
                 )
@@ -656,6 +659,7 @@ class DeprecatedModelMutation(BaseMutation):
         model=None,
         return_field_name=None,
         object_type=None,
+        instance_tracker_fields=None,
         _meta=None,
         **options,
     ):
@@ -673,9 +677,13 @@ class DeprecatedModelMutation(BaseMutation):
         if arguments is None:
             arguments = {}
 
+        if instance_tracker_fields is None:
+            instance_tracker_fields = []
+
         _meta.model = model
         _meta.object_type = object_type
         _meta.return_field_name = return_field_name
+        _meta.instance_tracker_fields = instance_tracker_fields
         super().__init_subclass_with_meta__(_meta=_meta, **options)
 
         model_type = cls.get_type_for_model()
@@ -684,7 +692,9 @@ class DeprecatedModelMutation(BaseMutation):
                 f"GraphQL type for model {cls._meta.model.__name__} could not be "
                 f"resolved for {cls.__name__}"
             )
-        fields = {return_field_name: graphene.Field(model_type)}
+        fields = {}
+        if not cls._meta.fields.get(return_field_name):
+            fields[return_field_name] = graphene.Field(model_type)
 
         cls._update_mutation_arguments_and_fields(arguments=arguments, fields=fields)
 
@@ -748,7 +758,14 @@ class DeprecatedModelMutation(BaseMutation):
         return cls(**{cls._meta.return_field_name: instance, "errors": []})
 
     @classmethod
-    def save(cls, _info: ResolveInfo, instance, _cleaned_input, /):
+    def save(
+        cls,
+        _info: ResolveInfo,
+        instance,
+        _cleaned_input,
+        /,
+        instance_tracker: InstanceTracker | None = None,
+    ):
         instance.save()
 
     @classmethod
@@ -800,7 +817,13 @@ class DeprecatedModelMutation(BaseMutation):
         that this is an "update" mutation. Otherwise, a new instance is
         created based on the model associated with this mutation.
         """
+        instance_tracker = None
         instance = cls.get_instance(info, **data)
+        if cls._meta.instance_tracker_fields:
+            instance_tracker = InstanceTracker(
+                instance, cls._meta.instance_tracker_fields
+            )
+
         data = data.get("input")
         cleaned_input = cls.clean_input(info, instance, data)
 
@@ -822,7 +845,7 @@ class DeprecatedModelMutation(BaseMutation):
             instance, metadata_collection, private_metadata_collection
         )
         cls.clean_instance(info, instance)
-        cls.save(info, instance, cleaned_input)
+        cls.save(info, instance, cleaned_input, instance_tracker)
         cls._save_m2m(info, instance, cleaned_input)
 
         # add to cleaned_input popped metadata to allow running post save events

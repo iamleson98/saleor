@@ -38,7 +38,7 @@ from ...webhook.const import MAX_FILTERABLE_CHANNEL_SLUGS_LIMIT
 from ...webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
 from ..account.types import User as UserType
 from ..app.types import App as AppType
-from ..channel.dataloaders import ChannelByIdLoader
+from ..channel.dataloaders.by_self import ChannelByIdLoader
 from ..channel.enums import TransactionFlowStrategyEnum
 from ..core import ResolveInfo
 from ..core.context import (
@@ -80,7 +80,10 @@ from ..shipping.dataloaders import ShippingMethodChannelListingByChannelSlugLoad
 from ..shipping.types import ShippingMethod
 from ..translations import types as translation_types
 from ..warehouse.dataloaders import WarehouseByIdLoader
-from .resolvers import resolve_shipping_methods_for_checkout
+from .resolvers import (
+    resolve_only_internal_shipping_methods_for_checkout,
+    resolve_shipping_methods_for_checkout,
+)
 
 TRANSLATIONS_TYPES_MAP = {
     ProductTranslation: translation_types.ProductTranslation,
@@ -1317,7 +1320,7 @@ class FulfillmentTrackingNumberUpdated(SubscriptionObjectType, FulfillmentBase):
 
 class FulfillmentCreated(SubscriptionObjectType, FulfillmentBase):
     notify_customer = graphene.Boolean(
-        description=("If true, the app should send a notification to the customer."),
+        description="If true, the app should send a notification to the customer.",
         required=True,
     )
 
@@ -1506,11 +1509,25 @@ class CheckoutFullyPaid(SubscriptionObjectType, CheckoutBase):
         enable_dry_run = True
         interfaces = (Event,)
         description = (
-            "Event sent when checkout is fully paid with transactions."
-            " The checkout is considered as fully paid when the checkout "
-            "`charge_status` is `FULL` or `OVERCHARGED`. "
-            "The event is not sent when the checkout authorization flow strategy "
-            "is used."
+            "Event sent when a checkout was fully paid. A checkout is "
+            "considered fully paid when its `chargeStatus` is `FULL` "
+            "or `OVERCHARGED`. This event is not sent if payments are only "
+            "authorized but not fully charged."
+            "\n\nIt is triggered only for checkouts whose payments are "
+            "processed through the Transaction API."
+        )
+
+
+class CheckoutFullyAuthorized(SubscriptionObjectType, CheckoutBase):
+    class Meta:
+        root_type = "Checkout"
+        enable_dry_run = True
+        interfaces = (Event,)
+        description = (
+            "Event sent when a checkout was fully authorized. A checkout is "
+            "considered fully authorized when its `authorizeStatus` is `FULL`."
+            "\n\nIt is triggered only for checkouts whose payments are processed through "
+            "the Transaction API."
         )
 
 
@@ -1975,7 +1992,7 @@ class TransactionSessionBase(SubscriptionObjectType, AbstractType):
 
 class TransactionInitializeSession(TransactionSessionBase):
     idempotency_key = graphene.String(
-        description=("Idempotency key assigned to the transaction initialize."),
+        description="Idempotency key assigned to the transaction initialize.",
         required=True,
     )
 
@@ -2467,9 +2484,11 @@ class ShippingListMethodsForCheckout(SubscriptionObjectType, CheckoutBase):
     @staticmethod
     @plugin_manager_promise_callback
     def resolve_shipping_methods(root, info: ResolveInfo, manager):
+        # We should only use internal shipping methods to prevent the generation of circular payloads.
+        # We aren't able to list shipping methods that are not internal for listing shipping methods webhook type.
         _, checkout = root
         database_connection_name = get_database_connection_name(info.context)
-        return resolve_shipping_methods_for_checkout(
+        return resolve_only_internal_shipping_methods_for_checkout(
             info, checkout, manager, database_connection_name
         )
 
@@ -2783,6 +2802,17 @@ class Subscription(SubscriptionObjectType):
         channels=channels_argument,
         doc_category=DOC_CATEGORY_CHECKOUT,
     )
+    checkout_fully_authorized = BaseField(
+        CheckoutFullyAuthorized,
+        description=(
+            "Event sent when checkout is fully authorized."
+            + ADDED_IN_321
+            + PREVIEW_FEATURE
+        ),
+        resolver=default_channel_filterable_resolver,
+        channels=channels_argument,
+        doc_category=DOC_CATEGORY_CHECKOUT,
+    )
     checkout_metadata_updated = BaseField(
         CheckoutMetadataUpdated,
         description=(
@@ -3007,6 +3037,7 @@ ASYNC_WEBHOOK_TYPES_MAP = {
     WebhookEventAsyncType.COLLECTION_METADATA_UPDATED: CollectionMetadataUpdated,
     WebhookEventAsyncType.CHECKOUT_CREATED: CheckoutCreated,
     WebhookEventAsyncType.CHECKOUT_UPDATED: CheckoutUpdated,
+    WebhookEventAsyncType.CHECKOUT_FULLY_AUTHORIZED: CheckoutFullyAuthorized,
     WebhookEventAsyncType.CHECKOUT_FULLY_PAID: CheckoutFullyPaid,
     WebhookEventAsyncType.CHECKOUT_METADATA_UPDATED: CheckoutMetadataUpdated,
     WebhookEventAsyncType.PAGE_CREATED: PageCreated,

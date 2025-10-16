@@ -53,7 +53,7 @@ def test_checkout_add_payment_without_shipping_method_and_not_shipping_required(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -96,7 +96,7 @@ def test_checkout_add_payment_without_shipping_method_with_shipping_required(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -132,7 +132,7 @@ def test_checkout_add_payment_with_shipping_method_and_shipping_required(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -177,7 +177,7 @@ def test_checkout_add_payment(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -224,7 +224,7 @@ def test_checkout_add_payment_default_amount(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -260,7 +260,7 @@ def test_checkout_add_payment_bad_amount(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
 
@@ -295,7 +295,7 @@ def test_checkout_add_payment_no_checkout_email(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -321,7 +321,7 @@ def test_checkout_add_payment_no_checkout_email(
 
 
 @patch(
-    "saleor.payment.gateways.dummy.plugin.DummyGatewayPlugin.CONFIGURATION_PER_CHANNEL",
+    "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin.CONFIGURATION_PER_CHANNEL",
     False,
 )
 def test_checkout_add_payment_not_supported_currency(
@@ -371,7 +371,10 @@ def test_checkout_add_payment_not_existing_gateway(
     assert data["errors"][0]["field"] == "gateway"
 
 
-@patch("saleor.payment.gateways.dummy.plugin.DummyGatewayPlugin.DEFAULT_ACTIVE", False)
+@patch(
+    "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin.DEFAULT_ACTIVE",
+    False,
+)
 def test_checkout_add_payment_gateway_inactive(
     user_api_client, checkout_without_shipping_required, address
 ):
@@ -403,7 +406,7 @@ def test_use_checkout_billing_address_as_payment_billing(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -456,7 +459,7 @@ def test_create_payment_for_checkout_with_active_payments(
 
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -509,7 +512,7 @@ def test_create_payment_with_store(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -543,7 +546,7 @@ def test_create_payment_with_store_as_none(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -579,7 +582,7 @@ def test_create_payment_with_metadata(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -617,7 +620,7 @@ def test_checkout_add_payment_no_variant_channel_listings(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -663,7 +666,7 @@ def test_checkout_add_payment_no_product_channel_listings(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -708,7 +711,7 @@ def test_checkout_add_payment_checkout_without_lines(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -746,7 +749,7 @@ def test_checkout_add_payment_run_multiple_times(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     variables = {
@@ -824,7 +827,7 @@ def test_checkout_payment_create_checkout_locked(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -864,7 +867,7 @@ def test_checkout_payment_create_checkout_locked_time_pass(
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
-    total = calculations.checkout_total(
+    total = calculations.calculate_checkout_total(
         manager=manager, checkout_info=checkout_info, lines=lines, address=address
     )
     return_url = "https://www.example.com"
@@ -886,3 +889,45 @@ def test_checkout_payment_create_checkout_locked_time_pass(
     data = content["data"]["checkoutPaymentCreate"]
     assert not data["errors"]
     assert data["payment"]
+
+
+def test_checkout_payment_create_is_not_allowed_when_checkout_has_transaction(
+    user_api_client,
+    checkout_without_shipping_required,
+    address,
+    transaction_item_generator,
+):
+    # given
+    checkout = checkout_without_shipping_required
+    checkout.billing_address = address
+    checkout.save()
+
+    manager = get_plugins_manager(allow_replica=False)
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, manager)
+    total = calculations.calculate_checkout_total(
+        manager=manager, checkout_info=checkout_info, lines=lines, address=address
+    )
+
+    transaction_item_generator(
+        checkout_id=checkout.pk, charged_value=total.gross.amount
+    )
+
+    # when
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "input": {
+            "gateway": DUMMY_GATEWAY,
+            "token": "sample-token",
+            "amount": total.gross.amount,
+        },
+    }
+    response = user_api_client.post_graphql(CREATE_PAYMENT_MUTATION, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["checkoutPaymentCreate"]
+    errors = data["errors"]
+    assert len(errors) == 1
+    assert errors[0]["field"] is None
+    assert errors[0]["code"] == PaymentErrorCode.CHECKOUT_HAS_TRANSACTION.name

@@ -22,7 +22,6 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
     permission_manage_pages,
     permission_manage_products,
     permission_manage_product_types_and_attributes,
-    site_settings,
 ):
     # Before
     permissions = [
@@ -52,6 +51,7 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
         attr_bool_id,
         attr_swatch_id,
         attr_reference_id,
+        attr_single_reference_id,
         attr_file_id,
     ) = prepare_all_attributes_in_bulk(
         e2e_staff_api_client, attribute_type="PRODUCT_TYPE", entity_type="PAGE"
@@ -69,6 +69,7 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
         attr_bool_id,
         attr_swatch_id,
         attr_reference_id,
+        attr_single_reference_id,
         attr_file_id,
     ]
     product_type_data = create_product_type(
@@ -77,13 +78,13 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
         product_attributes=add_attributes,
     )
     product_type_id = product_type_data["id"]
-    assert len(product_type_data["productAttributes"]) == 11
+    assert len(product_type_data["productAttributes"]) == len(add_attributes)
 
     # Step 3 - Create product with all attributes
     expected_base_text = "Test rich attribute text"
     expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
     new_value = "new_test_value.txt"
-    file_url = f"http://{site_settings.site.domain}{settings.MEDIA_URL}{new_value}"
+    file_url = f"{settings.PUBLIC_URL}{settings.MEDIA_URL}{new_value}"
     file_content_type = "text/plain"
 
     attributes = [
@@ -100,6 +101,7 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
         {"id": attr_bool_id, "boolean": True},
         {"id": attr_swatch_id, "values": ["blue"]},
         {"id": attr_reference_id, "references": [page_id]},
+        {"id": attr_single_reference_id, "reference": page_id},
         {"id": attr_file_id, "file": file_url, "contentType": file_content_type},
     ]
     product_data = create_product(
@@ -108,5 +110,4 @@ def test_create_product_with_attributes_created_in_bulk_core_0704(
         category_id,
         attributes=attributes,
     )
-    attributes = product_data["attributes"]
-    assert len(product_data["attributes"]) == 11
+    assert len(product_data["attributes"]) == len(attributes)

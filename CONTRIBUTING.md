@@ -39,15 +39,8 @@ Install & setup prerequisites via homebrew:
 
 ```shell
 brew install libmagic
-brew install pyenv
-
-pyenv install 3.12
-
-# optionally set python globally
-pyenv global 3.12
-
-brew install pipx
-pipx install poetry
+brew install uv
+uv python install 3.12
 ```
 
 Clone this [repository](https://github.com/saleor/saleor) and setup database and additional services in docker:
@@ -57,34 +50,16 @@ cd .devcontainer
 docker compose up db dashboard redis mailpit
 ```
 
-If you didn't set python version globally set [pyenv](https://github.com/pyenv/pyenv) local version:
-
-```shell
-pyenv local 3.12
-```
-
 To create virtualenv and install dependencies run in root of the repository:
 
 ```shell
-poetry sync
+uv sync
 ```
-
-After installation activate virtualenv:
-
-```shell
-eval $(poetry env activate)
-```
-
-See [poetry docs](https://python-poetry.org/docs/managing-environments/#bash-csh-zsh) for all supported shells.
-
-> [!TIP]
-> Your shell prompt should have virtualenv information available and should look similar to this:
-> `(saleor-py3.12) ~/D/saleor %`
 
 Install pre commit hooks:
 
 ```shell
-pre-commit install
+uv run pre-commit install
 ```
 
 Create environment variables, by creating a `.env` file. You can use existing example for development:
@@ -156,16 +131,15 @@ poe shell
 
 ## Managing dependencies
 
-### Poetry
+### uv
 
-To guarantee repeatable installations, all project dependencies are managed using [Poetry](https://python-poetry.org). The project's direct dependencies are listed in `pyproject.toml`.
-Running `poetry lock` generates `poetry.lock` which has all versions pinned.
+To guarantee repeatable installations, all project dependencies are managed using [uv](https://docs.astral.sh/uv/). The project's direct dependencies are listed in `pyproject.toml`.
+Running `uv lock` generates `uv.lock` which has all versions pinned.
 
-You can install Poetry by following the official installation [guide](https://python-poetry.org/docs/#installation).
-We recommend using at least version `2.1.1` as it contains many fixes and features that Saleor relies on.
+You can install uv by following the official installation [guide](https://docs.astral.sh/uv/getting-started/installation/).
 
 > [!TIP]
-> We recommend using this workflow and keeping `pyproject.toml` and `poetry.lock` under version control to ensure that all computers and environments run the same code.
+> We recommend using this workflow and keeping `pyproject.toml` and `uv.lock` under version control to ensure that all computers and environments run the same code.
 
 ## File structure
 
@@ -256,6 +230,9 @@ By default `poe test` is using the `--reuse-db` flag to speed up testing time.
 > [!TIP]
 > If you need to ignore `--reuse-db` (e.g when testing Saleor on different versions that have different migrations) add `--create-db` argument: `poe test --create-db`
 
+> [!TIP]
+> Depending on your setup, you may want to run your Postgres on host (not inside container) to improve the test execution speed
+
 ### How to run particular tests?
 
 As running all tests is quite time-consuming, sometimes you want to run only tests from one dictionary or even just a particular test.
@@ -325,10 +302,10 @@ It significantly improves test readability and clarifies what you are testing.
 ## Coding style
 
 Saleor uses various tools to maintain a common coding style and help with development.
-To install all the development tools, use [Poetry](https://python-poetry.org):
+To install all the development tools, use [uv](https://docs.astral.sh/uv/):
 
 ```shell
-poetry sync
+uv sync
 ```
 
 Saleor uses the [pre-commit](https://pre-commit.com/#install) tool to check and automatically fix any formatting issue before creating a git commit.
@@ -336,7 +313,7 @@ Saleor uses the [pre-commit](https://pre-commit.com/#install) tool to check and 
 Run the following command to install pre-commit into your git hooks and have it run on every commit:
 
 ```shell
-pre-commit install
+uv run pre-commit install
 ```
 
 For more information on how it works, see the `.pre-commit-config.yaml` configuration file.

@@ -738,7 +738,7 @@ def test_create_order_with_gift_card_partial_use(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
-    price_without_gift_card = calculations.checkout_total(
+    price_without_gift_card = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -797,7 +797,7 @@ def test_create_order_with_many_gift_cards(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
 
-    price_without_gift_card = calculations.checkout_total(
+    price_without_gift_card = calculations.calculate_checkout_total(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
@@ -1313,8 +1313,9 @@ def test_complete_checkout_0_total_captured_payment_creates_expected_events(
         )
 
     order.refresh_from_db()
+    assert order.charge_status == OrderChargeStatus.FULL
+    assert order.authorize_status == OrderAuthorizeStatus.FULL
     (
-        order_marked_as_paid,
         order_placed_event,
         order_fully_paid,
         order_confirmed_event,
@@ -1331,18 +1332,6 @@ def test_complete_checkout_0_total_captured_payment_creates_expected_events(
     assert order_placed_event.date
     # should not have any additional parameters
     assert not order_placed_event.parameters
-
-    # Ensure the correct order event was created
-    # is the event the expected type
-    assert order_marked_as_paid.type == OrderEvents.ORDER_MARKED_AS_PAID
-    # is the user anonymous/ the customer
-    assert order_marked_as_paid.user == checkout_user
-    # is the associated backref order valid
-    assert order_marked_as_paid.order is order
-    # ensure a date was set
-    assert order_marked_as_paid.date
-    # should not have any additional parameters
-    assert not order_marked_as_paid.parameters
 
     expected_order_payload = {
         "order": get_default_order_payload(order, checkout.redirect_url),

@@ -12,6 +12,7 @@ from ...discount.models import Promotion, PromotionRule
 from ..models import Product, ProductChannelListing, ProductVariantChannelListing
 from ..tasks import (
     _get_preorder_variants_to_clean,
+    mark_products_search_vector_as_dirty,
     recalculate_discounted_price_for_products_task,
     update_products_search_vector_task,
     update_variant_relations_for_active_promotion_rules_task,
@@ -308,7 +309,7 @@ def test_update_products_search_vector_task_with_static_number_of_queries(
         product_list[i].save(update_fields=["search_index_dirty"])
 
     # when & # then
-    with django_assert_num_queries(15):
+    with django_assert_num_queries(16):
         update_products_search_vector_task()
 
 
@@ -318,3 +319,19 @@ def test_mem_usage_recalculate_discounted_price_for_products_task(
     lots_of_products_with_variants,
 ):
     recalculate_discounted_price_for_products_task()
+
+
+def test_mark_products_search_vector_as_dirty(product_list):
+    # given
+    product_ids = [product.id for product in product_list]
+    Product.objects.all().update(search_index_dirty=False)
+
+    # when
+    mark_products_search_vector_as_dirty(product_ids)
+
+    # then
+    assert all(
+        Product.objects.filter(id__in=product_ids).values_list(
+            "search_index_dirty", flat=True
+        )
+    )

@@ -23,10 +23,22 @@ class InsufficientStockData:
     warehouse_pk: UUID | None = None
 
 
+class UnsupportedMediaProviderException(Exception):
+    def __init__(self, message: str = "Unsupported media provider or incorrect URL."):
+        self.message = message
+        super().__init__(message)
+
+
 class NonExistingCheckoutLines(Exception):
     def __init__(self, line_pks: set[UUID]):
         self.line_pks = line_pks
         super().__init__("Checkout lines don't exist.")
+
+
+class NonExistingCheckout(Exception):
+    def __init__(self, checkout_token: UUID):
+        self.checkout_token = checkout_token
+        super().__init__(f"Checkout: {checkout_token} doesn't exist.")
 
 
 class InsufficientStock(Exception):

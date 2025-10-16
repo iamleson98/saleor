@@ -3,43 +3,51 @@ import graphene
 from ...attribute import models as attribute_models
 from ...page import models
 from ...permission.enums import PagePermissions, PageTypePermissions
+from ...permission.utils import all_permissions_required
+from ..attribute.dataloaders.assigned_attributes import (
+    AttributeByPageIdAndAttributeSlugLoader,
+    AttributesByPageIdAndLimitLoader,
+    AttributesVisibleToCustomerByPageIdAndLimitLoader,
+)
 from ..attribute.filters import (
     AttributeFilterInput,
     AttributeWhereInput,
     filter_attribute_search,
 )
-from ..attribute.types import Attribute, AttributeCountableConnection, SelectedAttribute
+from ..attribute.types import (
+    Attribute,
+    AttributeCountableConnection,
+    ObjectWithAttributes,
+    SelectedAttribute,
+)
+from ..attribute.utils.shared import AssignedAttributeData
 from ..core import ResolveInfo
 from ..core.connection import (
     CountableConnection,
     create_connection_slice,
     filter_connection_queryset,
 )
+from ..core.const import DEFAULT_NESTED_LIST_LIMIT
 from ..core.context import (
     ChannelContext,
     ChannelQsContext,
     get_database_connection_name,
 )
-from ..core.descriptions import DEPRECATED_IN_3X_INPUT, RICH_CONTENT
+from ..core.descriptions import ADDED_IN_322, DEPRECATED_IN_3X_INPUT, RICH_CONTENT
 from ..core.doc_category import DOC_CATEGORY_PAGES
 from ..core.federation import federated_entity, resolve_federation_references
 from ..core.fields import FilterConnectionField, JSONString, PermissionsField
-from ..core.scalars import Date, DateTime
+from ..core.scalars import Date, DateTime, PositiveInt
 from ..core.types import ModelObjectType, NonNullList
 from ..core.types.context import ChannelContextType
 from ..meta.types import ObjectWithMetadata
 from ..translations.fields import TranslationField
 from ..translations.types import PageTranslation
-from ..utils import get_user_or_app_from_context
 from .dataloaders import (
     PageAttributesAllByPageTypeIdLoader,
     PageAttributesVisibleInStorefrontByPageTypeIdLoader,
     PagesByPageTypeIdLoader,
     PageTypeByIdLoader,
-    SelectedAttributeAllByPageIdAttributeSlugLoader,
-    SelectedAttributesAllByPageIdLoader,
-    SelectedAttributesVisibleInStorefrontPageIdLoader,
-    SelectedAttributeVisibleInStorefrontPageIdAttributeSlugLoader,
 )
 
 
@@ -93,12 +101,7 @@ class PageType(ModelObjectType[models.PageType]):
         def wrap_with_channel_context(attributes):
             return [ChannelContext(attribute, None) for attribute in attributes]
 
-        requestor = get_user_or_app_from_context(info.context)
-        if (
-            requestor
-            and requestor.is_active
-            and requestor.has_perm(PagePermissions.MANAGE_PAGES)
-        ):
+        if all_permissions_required(info.context, [PagePermissions.MANAGE_PAGES]):
             return (
                 PageAttributesAllByPageTypeIdLoader(info.context)
                 .load(root.pk)
@@ -185,11 +188,35 @@ class Page(ChannelContextType[models.Page]):
             required=True,
         ),
         description="Get a single attribute attached to page by attribute slug.",
+        deprecation_reason="Use `assignedAttribute` field instead.",
+    )
+    assigned_attribute = graphene.Field(
+        "saleor.graphql.attribute.types.AssignedAttribute",
+        slug=graphene.Argument(
+            graphene.String,
+            description="Slug of the attribute",
+            required=True,
+        ),
+        description="Get a single attribute attached to page by attribute slug."
+        + ADDED_IN_322,
+    )
+    assigned_attributes = NonNullList(
+        "saleor.graphql.attribute.types.AssignedAttribute",
+        required=True,
+        description="List of attributes assigned to this page." + ADDED_IN_322,
+        limit=PositiveInt(
+            description=(
+                "Maximum number of attributes to return. "
+                f"Default is {DEFAULT_NESTED_LIST_LIMIT}."
+            ),
+            default_value=DEFAULT_NESTED_LIST_LIMIT,
+        ),
     )
     attributes = NonNullList(
         SelectedAttribute,
         required=True,
         description="List of attributes assigned to this page.",
+        deprecation_reason="Use `assignedAttributes` field instead.",
     )
 
     class Meta:
@@ -198,7 +225,7 @@ class Page(ChannelContextType[models.Page]):
             "A static page that can be manually added by a shop operator through the "
             "dashboard."
         )
-        interfaces = [graphene.relay.Node, ObjectWithMetadata]
+        interfaces = [graphene.relay.Node, ObjectWithMetadata, ObjectWithAttributes]
         model = models.Page
 
     @staticmethod
@@ -218,79 +245,82 @@ class Page(ChannelContextType[models.Page]):
         content = root.node.content
         return content if content is not None else {}
 
-    @staticmethod
-    def resolve_attributes(root: ChannelContext[models.Page], info: ResolveInfo):
+    @classmethod
+    def resolve_assigned_attributes(
+        cls,
+        root: ChannelContext[models.Page],
+        info: ResolveInfo,
+        limit: int = DEFAULT_NESTED_LIST_LIMIT,
+    ):
+        return cls._resolve_assigned_attributes(root, info, limit)
+
+    @classmethod
+    def resolve_assigned_attribute(
+        cls, root: ChannelContext[models.Page], info: ResolveInfo, slug: str
+    ):
+        return cls._resolve_assigned_attribute(root, info, slug)
+
+    @classmethod
+    def resolve_attributes(cls, root: ChannelContext[models.Page], info: ResolveInfo):
+        return cls._resolve_assigned_attributes(root, info)
+
+    @classmethod
+    def _resolve_assigned_attributes(
+        cls,
+        root: ChannelContext[models.Page],
+        info: ResolveInfo,
+        limit: int | None = None,
+    ):
         page = root.node
 
-        def wrap_with_channel_context(
-            attributes: list[dict[str, list]] | None,
-        ) -> list[SelectedAttribute] | None:
-            if attributes is None:
-                return None
+        def get_assigned_attributes(
+            attributes: list[attribute_models.Attribute],
+        ) -> list[AssignedAttributeData]:
             return [
-                SelectedAttribute(
-                    attribute=ChannelContext(attribute["attribute"], root.channel_slug),
-                    values=[
-                        ChannelContext(value, root.channel_slug)
-                        for value in attribute["values"]
-                    ],
+                AssignedAttributeData(
+                    attribute=attribute,
+                    page_id=page.id,
+                    channel_slug=root.channel_slug,
                 )
                 for attribute in attributes
             ]
 
-        requestor = get_user_or_app_from_context(info.context)
-        if (
-            requestor
-            and requestor.is_active
-            and requestor.has_perm(PagePermissions.MANAGE_PAGES)
-        ):
-            return (
-                SelectedAttributesAllByPageIdLoader(info.context)
-                .load(page.id)
-                .then(wrap_with_channel_context)
-            )
-        return (
-            SelectedAttributesVisibleInStorefrontPageIdLoader(info.context)
-            .load(page.id)
-            .then(wrap_with_channel_context)
-        )
+        if all_permissions_required(info.context, [PagePermissions.MANAGE_PAGES]):
+            dataloader = AttributesByPageIdAndLimitLoader(info.context)
+        else:
+            dataloader = AttributesVisibleToCustomerByPageIdAndLimitLoader(info.context)
+        return dataloader.load((page.id, limit)).then(get_assigned_attributes)
 
-    @staticmethod
+    @classmethod
     def resolve_attribute(
-        root: ChannelContext[models.Page], info: ResolveInfo, slug: str
+        cls, root: ChannelContext[models.Page], info: ResolveInfo, slug: str
+    ):
+        return cls._resolve_assigned_attribute(root, info, slug)
+
+    @classmethod
+    def _resolve_assigned_attribute(
+        cls, root: ChannelContext[models.Page], info: ResolveInfo, slug: str
     ):
         page = root.node
 
-        def wrap_with_channel_context(
-            attribute_data: dict[str, dict | list[dict]] | None,
-        ) -> SelectedAttribute | None:
-            if attribute_data is None:
+        def with_assigned_attribute(attribute: attribute_models.Attribute | None):
+            if not attribute:
                 return None
-            return SelectedAttribute(
-                attribute=ChannelContext(
-                    attribute_data["attribute"], root.channel_slug
-                ),
-                values=[
-                    ChannelContext(value, root.channel_slug)
-                    for value in attribute_data["values"]
-                ],
+            has_permission = all_permissions_required(
+                info.context, [PagePermissions.MANAGE_PAGES]
+            )
+            if not has_permission and not attribute.visible_in_storefront:
+                return None
+            return AssignedAttributeData(
+                attribute=attribute,
+                page_id=page.id,
+                channel_slug=root.channel_slug,
             )
 
-        requestor = get_user_or_app_from_context(info.context)
-        if (
-            requestor
-            and requestor.is_active
-            and requestor.has_perm(PagePermissions.MANAGE_PAGES)
-        ):
-            return (
-                SelectedAttributeAllByPageIdAttributeSlugLoader(info.context)
-                .load((page.id, slug))
-                .then(wrap_with_channel_context)
-            )
         return (
-            SelectedAttributeVisibleInStorefrontPageIdAttributeSlugLoader(info.context)
+            AttributeByPageIdAndAttributeSlugLoader(info.context)
             .load((page.id, slug))
-            .then(wrap_with_channel_context)
+            .then(with_assigned_attribute)
         )
 
 

@@ -6,7 +6,7 @@ ENV PYTHONUNBUFFERED=1
 RUN apt-get update \
   && apt-get install -y \
   libffi8 \
-  libgdk-pixbuf2.0-0 \
+  libgdk-pixbuf-2.0-0\
   liblcms2-2 \
   libopenjp2-7 \
   libssl3 \
@@ -14,13 +14,13 @@ RUN apt-get update \
   libwebp7 \
   libpq5 \
   shared-mime-info \
-  mime-support \
-  pipx
+  libmagic1 \
+  # Required to allows to identify file types when handling file uploads
+  media-types
 
-RUN pipx ensurepath
-
-WORKDIR /app
-RUN pipx install poetry==2.1.1
-RUN poetry config virtualenvs.create false
-COPY poetry.lock pyproject.toml /app/
-RUN poetry sync
+COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /uvx /bin/
+ENV UV_COMPILE_BYTECODE=1 UV_SYSTEM_PYTHON=1 UV_PROJECT_ENVIRONMENT=/usr/local
+RUN --mount=type=cache,target=/root/.cache/uv \
+    --mount=type=bind,source=uv.lock,target=uv.lock \
+    --mount=type=bind,source=pyproject.toml,target=pyproject.toml \
+    uv sync --locked --no-install-project --no-editable

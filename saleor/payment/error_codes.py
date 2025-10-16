@@ -20,6 +20,7 @@ class PaymentErrorCode(Enum):
     UNAVAILABLE_VARIANT_IN_CHANNEL = "unavailable_variant_in_channel"
     NO_CHECKOUT_LINES = "no_checkout_lines"
     CHECKOUT_COMPLETION_IN_PROGRESS = "checkout_completion_in_progress"
+    CHECKOUT_HAS_TRANSACTION = "checkout_has_transaction"
 
 
 class TransactionCreateErrorCode(Enum):
@@ -42,6 +43,7 @@ class TransactionUpdateErrorCode(Enum):
 
 class TransactionRequestActionErrorCode(Enum):
     INVALID = "invalid"
+    REQUIRED = "required"
     GRAPHQL_ERROR = "graphql_error"
     NOT_FOUND = "not_found"
     MISSING_TRANSACTION_ACTION_REQUEST_WEBHOOK = (

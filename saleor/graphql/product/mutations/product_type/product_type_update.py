@@ -3,6 +3,9 @@ import graphene
 from .....permission.enums import ProductTypePermissions
 from .....product import models
 from .....product.tasks import update_variants_names
+from .....product.utils.search_helpers import (
+    mark_products_search_vector_as_dirty_in_batches,
+)
 from ....core import ResolveInfo
 from ....core.types import ProductError
 from ...types import ProductType
@@ -29,7 +32,7 @@ class ProductTypeUpdate(ProductTypeCreate):
         return data.get("kind", instance.kind)
 
     @classmethod
-    def save(cls, info: ResolveInfo, instance, cleaned_input):
+    def save(cls, info: ResolveInfo, instance, cleaned_input, instance_tracker=None):
         variant_attr = cleaned_input.get("variant_attributes")
         if variant_attr:
             variant_attr = set(variant_attr)
@@ -43,6 +46,9 @@ class ProductTypeUpdate(ProductTypeCreate):
             "product_attributes" in cleaned_input
             or "variant_attributes" in cleaned_input
         ):
-            models.Product.objects.filter(product_type=instance).update(
-                search_index_dirty=True
+            product_ids = list(
+                models.Product.objects.filter(product_type=instance).values_list(
+                    "id", flat=True
+                )
             )
+            mark_products_search_vector_as_dirty_in_batches(product_ids)

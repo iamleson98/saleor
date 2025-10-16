@@ -18,6 +18,7 @@ from .....payment.interface import PaymentMethodDetails
 from .....payment.transaction_item_calculations import recalculate_transaction_amounts
 from .....payment.utils import (
     create_manual_adjustment_events,
+    process_order_or_checkout_with_transaction,
     truncate_transaction_event_message,
     update_transaction_item_with_payment_method_details,
 )
@@ -40,7 +41,6 @@ from .shared import (
     get_payment_method_details,
     validate_payment_method_details_input,
 )
-from .utils import process_order_or_checkout_with_transaction
 
 if TYPE_CHECKING:
     pass
@@ -50,7 +50,7 @@ class TransactionCreateInput(BaseInputObjectType):
     name = graphene.String(description="Payment name of the transaction.")
     message = graphene.String(description="The message of the transaction.")
 
-    psp_reference = graphene.String(description=("PSP Reference of the transaction. "))
+    psp_reference = graphene.String(description="PSP Reference of the transaction.")
     available_actions = graphene.List(
         graphene.NonNull(TransactionActionEnum),
         description="List of all possible actions for the transaction",
@@ -90,9 +90,7 @@ class TransactionCreateInput(BaseInputObjectType):
 
 
 class TransactionEventInput(BaseInputObjectType):
-    psp_reference = graphene.String(
-        description=("PSP Reference related to this action.")
-    )
+    psp_reference = graphene.String(description="PSP Reference related to this action.")
 
     message = graphene.String(description="The message related to the event.")
 
@@ -117,7 +115,7 @@ class TransactionCreate(BaseMutation):
         )
 
     class Meta:
-        description = "Create transaction for checkout or order."
+        description = "Creates transaction for checkout or order."
         doc_category = DOC_CATEGORY_PAYMENTS
         error_type_class = common_types.TransactionCreateError
         permissions = (PaymentPermissions.HANDLE_PAYMENTS,)

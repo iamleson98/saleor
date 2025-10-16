@@ -9,7 +9,7 @@ from ....permission.enums import PageTypePermissions, ProductTypePermissions
 from ....webhook.event_types import WebhookEventAsyncType
 from ...core import ResolveInfo
 from ...core.context import ChannelContext
-from ...core.descriptions import DEPRECATED_IN_3X_INPUT
+from ...core.descriptions import ADDED_IN_322, DEPRECATED_IN_3X_INPUT
 from ...core.doc_category import DOC_CATEGORY_ATTRIBUTES
 from ...core.enums import MeasurementUnitsEnum
 from ...core.fields import JSONString
@@ -20,7 +20,7 @@ from ...plugins.dataloaders import get_plugin_manager_promise
 from ..descriptions import AttributeDescriptions, AttributeValueDescriptions
 from ..enums import AttributeEntityTypeEnum, AttributeInputTypeEnum, AttributeTypeEnum
 from ..types import Attribute
-from .mixins import AttributeMixin
+from .mixins import REFERENCE_TYPES_LIMIT, AttributeMixin
 
 
 class AttributeValueInput(BaseInputObjectType):
@@ -94,6 +94,21 @@ class AttributeCreateInput(BaseInputObjectType):
     external_reference = graphene.String(
         description="External ID of this attribute.", required=False
     )
+    reference_types = NonNullList(
+        graphene.ID,
+        required=False,
+        description=(
+            "Specifies reference types to narrow down the choices of reference "
+            "objects. Applicable only for `REFERENCE` and `SINGLE_REFERENCE` "
+            "attributes with `PRODUCT`, `PRODUCT_VARIANT` and `PAGE` entity types. "
+            "Accepts `ProductType` IDs for `PRODUCT` and `PRODUCT_VARIANT` "
+            "entity types, and `PageType` IDs for `PAGE` entity type. "
+            "If omitted, all objects of the selected entity type are available "
+            "as attribute values.\n\n"
+            f"A maximum of {REFERENCE_TYPES_LIMIT} reference types can be specified."
+            + ADDED_IN_322
+        ),
+    )
 
     class Meta:
         doc_category = DOC_CATEGORY_ATTRIBUTES
@@ -133,13 +148,15 @@ class AttributeCreate(AttributeMixin, DeprecatedModelMutation):
     @classmethod
     def clean_input(cls, info: ResolveInfo, instance, data, **kwargs):
         cleaned_input = super().clean_input(info, instance, data, **kwargs)
-        if cleaned_input.get(
-            "input_type"
-        ) == AttributeInputType.REFERENCE and not cleaned_input.get("entity_type"):
+        is_reference_type = cleaned_input.get("input_type") in [
+            AttributeInputType.REFERENCE,
+            AttributeInputType.SINGLE_REFERENCE,
+        ]
+        if is_reference_type and not cleaned_input.get("entity_type"):
             raise ValidationError(
                 {
                     "entity_type": ValidationError(
-                        "Entity type is required when REFERENCE input type is used.",
+                        "Entity type is required for reference input type.",
                         code=AttributeErrorCode.REQUIRED.value,
                     )
                 }
@@ -159,6 +176,7 @@ class AttributeCreate(AttributeMixin, DeprecatedModelMutation):
         if not cls.check_permissions(info.context, permissions):
             raise PermissionDenied(permissions=permissions)
 
+        cls.validate_reference_types_limit(input)
         instance = models.Attribute()
 
         # Do cleaning and uniqueness checks

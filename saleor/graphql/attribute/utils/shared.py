@@ -18,6 +18,22 @@ if TYPE_CHECKING:
 
 T_INSTANCE = product_models.Product | product_models.ProductVariant | page_models.Page
 T_ERROR_DICT = dict[tuple[str, str], list]
+T_REFERENCE = (
+    product_models.Product
+    | product_models.ProductVariant
+    | product_models.Category
+    | product_models.Collection
+    | page_models.Page
+)
+
+
+@dataclass
+class AssignedAttributeData:
+    attribute: attribute_models.Attribute
+    channel_slug: str | None
+    product_id: int | None = None
+    page_id: int | None = None
+    variant_id: int | None = None
 
 
 @dataclass
@@ -36,7 +52,9 @@ class AttrValuesInput:
     swatch: AttrValuesForSelectableFieldInput | None = None
     multiselect: list[AttrValuesForSelectableFieldInput] | None = None
     numeric: str | None = None
-    references: list[str] | list[page_models.Page] | None = None
+    reference: str | None = None
+    references: list[str] | None = None
+    reference_objects: list[T_REFERENCE] | None = None
     file_url: str | None = None
     content_type: str | None = None
     rich_text: dict | None = None

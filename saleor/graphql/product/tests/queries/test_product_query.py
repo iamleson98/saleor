@@ -576,7 +576,7 @@ QUERY_PRODUCT_BY_ID_WITH_MEDIA = """
 
 
 def test_query_product_thumbnail_with_size_and_format_proxy_url_returned(
-    staff_api_client, product_with_image, channel_USD, site_settings
+    staff_api_client, product_with_image, channel_USD
 ):
     # given
     format = ThumbnailFormatEnum.WEBP.name
@@ -599,14 +599,13 @@ def test_query_product_thumbnail_with_size_and_format_proxy_url_returned(
         "ProductMedia", product_with_image.media.first().pk
     )
     expected_url = (
-        f"http://{site_settings.site.domain}"
-        f"/thumbnail/{product_media_id}/128/{format.lower()}/"
+        f"https://example.com/thumbnail/{product_media_id}/128/{format.lower()}/"
     )
     assert data["thumbnail"]["url"] == expected_url
 
 
 def test_query_product_thumbnail_with_size_and_proxy_url_returned(
-    staff_api_client, product_with_image, channel_USD, site_settings
+    staff_api_client, product_with_image, channel_USD
 ):
     # given
     id = graphene.Node.to_global_id("Product", product_with_image.pk)
@@ -627,12 +626,12 @@ def test_query_product_thumbnail_with_size_and_proxy_url_returned(
     )
     assert (
         data["thumbnail"]["url"]
-        == f"http://{site_settings.site.domain}/thumbnail/{product_media_id}/128/"
+        == f"https://example.com/thumbnail/{product_media_id}/128/"
     )
 
 
 def test_query_product_thumbnail_with_size_and_thumbnail_url_returned(
-    staff_api_client, product_with_image, channel_USD, site_settings
+    staff_api_client, product_with_image, channel_USD
 ):
     # given
     product_media = product_with_image.media.first()
@@ -658,12 +657,12 @@ def test_query_product_thumbnail_with_size_and_thumbnail_url_returned(
     data = content["data"]["product"]
     assert (
         data["thumbnail"]["url"]
-        == f"http://{site_settings.site.domain}/media/thumbnails/{thumbnail_mock.name}"
+        == f"https://example.com/media/thumbnails/{thumbnail_mock.name}"
     )
 
 
 def test_query_product_thumbnail_only_format_provided_default_size_is_used(
-    staff_api_client, product_with_image, channel_USD, site_settings
+    staff_api_client, product_with_image, channel_USD
 ):
     # given
     format = ThumbnailFormatEnum.WEBP.name
@@ -685,8 +684,7 @@ def test_query_product_thumbnail_only_format_provided_default_size_is_used(
         "ProductMedia", product_with_image.media.first().pk
     )
     expected_url = (
-        f"http://{site_settings.site.domain}"
-        f"/thumbnail/{product_media_id}/256/{format.lower()}/"
+        f"https://example.com/thumbnail/{product_media_id}/256/{format.lower()}/"
     )
     assert data["thumbnail"]["url"] == expected_url
 
@@ -1674,7 +1672,7 @@ def test_product_variant_without_price_as_staff_with_permission(
     assert variants_data[1]["node"]["pricing"] is None
 
 
-def test_get_product_with_sorted_attribute_values(
+def test_get_product_with_sorted_attribute_values_for_attributes_field(
     staff_api_client,
     product,
     permission_manage_products,
@@ -1734,6 +1732,71 @@ def test_get_product_with_sorted_attribute_values(
         graphene.Node.to_global_id("AttributeValue", val.pk)
         for val in [attr_value_2, attr_value_1]
     ]
+
+
+def test_get_product_with_sorted_attribute_values_for_assigned_attributes_field(
+    staff_api_client,
+    product,
+    permission_manage_products,
+    product_type_page_reference_attribute,
+    page_list,
+):
+    # given
+    query = """
+    query getProduct($productID: ID!) {
+      product(id: $productID) {
+        assignedAttributes(limit:10) {
+          ... on AssignedMultiPageReferenceAttribute {
+            value {
+              id
+            }
+          }
+        }
+      }
+    }
+    """
+    product_type = product.product_type
+    product_type.product_attributes.set([product_type_page_reference_attribute])
+
+    attr_value_1 = AttributeValue.objects.create(
+        attribute=product_type_page_reference_attribute,
+        name=page_list[0].title,
+        slug=f"{product.pk}_{page_list[0].pk}",
+        reference_page=page_list[0],
+    )
+    attr_value_2 = AttributeValue.objects.create(
+        attribute=product_type_page_reference_attribute,
+        name=page_list[1].title,
+        slug=f"{product.pk}_{page_list[1].pk}",
+        reference_page=page_list[1],
+    )
+
+    associate_attribute_values_to_instance(
+        product,
+        {product_type_page_reference_attribute.pk: [attr_value_2, attr_value_1]},
+    )
+
+    product_id = graphene.Node.to_global_id("Product", product.id)
+    variables = {"productID": product_id}
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+
+    # when
+    response = staff_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["product"]
+
+    assigned_attributes = data["assignedAttributes"]
+    assert len(assigned_attributes) == 1
+    assigned_values = assigned_attributes[0]["value"]
+    assert len(assigned_values) == 2
+    assert assigned_values[0]["id"] == graphene.Node.to_global_id(
+        "Page", page_list[1].pk
+    )
+    assert assigned_values[1]["id"] == graphene.Node.to_global_id(
+        "Page", page_list[0].pk
+    )
 
 
 QUERY_PRODUCT_IMAGE_BY_ID = """
@@ -1927,7 +1990,7 @@ def test_query_product_media_by_invalid_id(
 
 
 def test_query_product_media_by_id_with_size_and_format_proxy_url_returned(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -1947,15 +2010,14 @@ def test_query_product_media_by_id_with_size_and_format_proxy_url_returned(
 
     content = get_graphql_content(response)
     assert content["data"]["product"]["mediaById"]["id"]
-    domain = site_settings.site.domain
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{domain}/thumbnail/{media_id}/128/{format.lower()}/"
+        == f"https://example.com/thumbnail/{media_id}/128/{format.lower()}/"
     )
 
 
 def test_query_product_media_by_id_with_size_proxy_url_returned(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -1975,12 +2037,12 @@ def test_query_product_media_by_id_with_size_proxy_url_returned(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/thumbnail/{media_id}/128/"
+        == f"https://example.com/thumbnail/{media_id}/128/"
     )
 
 
 def test_query_product_media_by_id_with_size_thumbnail_url_returned(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -2005,12 +2067,12 @@ def test_query_product_media_by_id_with_size_thumbnail_url_returned(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/media/thumbnails/{thumbnail_mock.name}"
+        == f"https://example.com/media/thumbnails/{thumbnail_mock.name}"
     )
 
 
 def test_query_product_media_by_id_zero_size_custom_format_provided(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -2032,12 +2094,12 @@ def test_query_product_media_by_id_zero_size_custom_format_provided(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/media/{media.image.name}"
+        == f"https://example.com/media/{media.image.name}"
     )
 
 
 def test_query_product_media_by_id_original_format(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -2059,12 +2121,12 @@ def test_query_product_media_by_id_original_format(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/thumbnail/{media_id}/128/"
+        == f"https://example.com/thumbnail/{media_id}/128/"
     )
 
 
 def test_query_product_media_by_id_avif_format(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -2086,12 +2148,12 @@ def test_query_product_media_by_id_avif_format(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/thumbnail/{media_id}/128/avif/"
+        == f"https://example.com/thumbnail/{media_id}/128/avif/"
     )
 
 
 def test_query_product_media_by_id_zero_size_value_original_image_returned(
-    user_api_client, product_with_image, channel_USD, site_settings
+    user_api_client, product_with_image, channel_USD
 ):
     query = QUERY_PRODUCT_MEDIA_BY_ID
     media = product_with_image.media.first()
@@ -2111,7 +2173,7 @@ def test_query_product_media_by_id_zero_size_value_original_image_returned(
     assert content["data"]["product"]["mediaById"]["id"]
     assert (
         content["data"]["product"]["mediaById"]["url"]
-        == f"http://{site_settings.site.domain}/media/{media.image.name}"
+        == f"https://example.com/media/{media.image.name}"
     )
 
 
@@ -2361,7 +2423,7 @@ def test_query_product_for_federation_as_staff_user_channel_not_active(
 
 
 def test_query_product_media_for_federation(
-    api_client, product_with_image, channel_USD, site_settings
+    api_client, product_with_image, channel_USD
 ):
     media = product_with_image.media.first()
     media_id = graphene.Node.to_global_id("ProductMedia", media.pk)
@@ -2391,7 +2453,7 @@ def test_query_product_media_for_federation(
         {
             "__typename": "ProductMedia",
             "id": media_id,
-            "url": f"http://{site_settings.site.domain}/media/products/product.jpg",
+            "url": "https://example.com/media/products/product.jpg",
         }
     ]
 
@@ -2654,7 +2716,19 @@ query Product($id: ID!, $channel: String, $slug: String!) {
                 slug
             }
         }
+        assignedAttribute(slug: $slug) {
+            attribute {
+                id
+                slug
+            }
+        }
         attributes {
+            attribute {
+                id
+                slug
+            }
+        }
+        assignedAttributes(limit:10) {
             attribute {
                 id
                 slug
@@ -2684,8 +2758,11 @@ def test_product_attribute_field_filtering(staff_api_client, product, channel_US
     # then
     expected_slug = "color"
     content = get_graphql_content(response)
-    queried_slug = content["data"]["product"]["attribute"]["attribute"]["slug"]
-    assert queried_slug == expected_slug
+    product_data = content["data"]["product"]
+    attribute_queried_slug = product_data["attribute"]["attribute"]["slug"]
+    assigned_queried_slug = product_data["assignedAttribute"]["attribute"]["slug"]
+    assert assigned_queried_slug == expected_slug
+    assert attribute_queried_slug == expected_slug
 
 
 def test_product_attribute_field_filtering_not_found(
@@ -2709,6 +2786,7 @@ def test_product_attribute_field_filtering_not_found(
     # then
     content = get_graphql_content(response)
     assert content["data"]["product"]["attribute"] is None
+    assert content["data"]["product"]["assignedAttribute"] is None
 
 
 def test_product_attribute_not_visible_in_storefront_for_customer_is_not_returned(
@@ -2744,6 +2822,7 @@ def test_product_attribute_not_visible_in_storefront_for_customer_is_not_returne
         }
     }
     assert attr_data not in content["data"]["product"]["attributes"]
+    assert attr_data not in content["data"]["product"]["assignedAttributes"]
 
 
 def test_product_attribute_visible_in_storefront_for_customer_is_returned(
@@ -2767,9 +2846,9 @@ def test_product_attribute_visible_in_storefront_for_customer_is_returned(
 
     # then
     content = get_graphql_content(response)
-    assert (
-        content["data"]["product"]["attribute"]["attribute"]["slug"] == attribute.slug
-    )
+    product_data = content["data"]["product"]
+    assert product_data["attribute"]["attribute"]["slug"] == attribute.slug
+    assert product_data["assignedAttribute"]["attribute"]["slug"] == attribute.slug
 
 
 @pytest.mark.parametrize("visible_in_storefront", [False, True])
@@ -3037,3 +3116,49 @@ def test_query_product_variants_with_where(
 
     assert len(variants) == 1
     assert variants[0]["node"]["sku"] == sku_value
+
+
+def test_applies_limit_on_product_assigned_attributes(
+    product, channel_USD, user_api_client, size_attribute
+):
+    # given
+    query = """
+    query Product($id: ID!, $channel: String) {
+        product(id: $id, channel: $channel) {
+            assignedAttributes(limit:1) {
+                attribute {
+                    slug
+                }
+            }
+        }
+    }
+    """
+
+    associate_attribute_values_to_instance(
+        product,
+        {
+            size_attribute.pk: [size_attribute.values.first()],
+        },
+    )
+
+    assert product.attributevalues.count() == 2
+    first_attribute = product.attributevalues.first().value.attribute
+
+    product_id = graphene.Node.to_global_id("Product", product.id)
+    variables = {
+        "id": product_id,
+        "channel": channel_USD.slug,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+
+    expected_limit = 1
+    assert len(content["data"]["product"]["assignedAttributes"]) == expected_limit
+    assert (
+        content["data"]["product"]["assignedAttributes"][0]["attribute"]["slug"]
+        == first_attribute.slug
+    )

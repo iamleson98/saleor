@@ -1,10 +1,10 @@
 import datetime
 
 import pytest
-from django.template.defaultfilters import truncatechars
 
 from ....core.units import MeasurementUnits
 from ....core.utils.editorjs import clean_editor_js
+from ....core.utils.text import safe_truncate
 from ....tests.utils import dummy_editorjs
 from ... import AttributeEntityType, AttributeInputType, AttributeType
 from ...models import Attribute, AttributeValue
@@ -325,7 +325,7 @@ def rich_text_attribute(db):
     text = "Rich text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=truncatechars(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
+        name=safe_truncate(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
         slug=f"instance_{attribute.id}",
         rich_text=dummy_editorjs(text),
     )
@@ -346,7 +346,7 @@ def rich_text_attribute_page_type(db):
     text = "Rich text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=truncatechars(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
+        name=safe_truncate(clean_editor_js(dummy_editorjs(text), to_string=True), 50),
         slug=f"instance_{attribute.id}",
         rich_text=dummy_editorjs(text),
     )
@@ -362,7 +362,7 @@ def rich_text_attribute_with_many_values(rich_text_attribute):
         values.append(
             AttributeValue(
                 attribute=attribute,
-                name=truncatechars(
+                name=safe_truncate(
                     clean_editor_js(dummy_editorjs(text), to_string=True), 50
                 ),
                 slug=f"instance_{attribute.id}_{i}",
@@ -387,7 +387,7 @@ def plain_text_attribute(db):
     text = "Plain text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=truncatechars(text, 50),
+        name=safe_truncate(text, 50),
         slug=f"instance_{attribute.id}",
         plain_text=text,
     )
@@ -408,7 +408,7 @@ def plain_text_attribute_page_type(db):
     text = "Plain text attribute content."
     AttributeValue.objects.create(
         attribute=attribute,
-        name=truncatechars(text, 50),
+        name=safe_truncate(text, 50),
         slug=f"instance_{attribute.id}",
         plain_text=text,
     )
@@ -487,8 +487,12 @@ def numeric_attribute(db):
         filterable_in_dashboard=True,
         available_in_grid=True,
     )
-    AttributeValue.objects.create(attribute=attribute, name="9.5", slug="10_5")
-    AttributeValue.objects.create(attribute=attribute, name="15.2", slug="15_2")
+    AttributeValue.objects.create(
+        attribute=attribute, name="9.5", slug="10_5", numeric=9.5
+    )
+    AttributeValue.objects.create(
+        attribute=attribute, name="15.2", slug="15_2", numeric=15.2
+    )
     return attribute
 
 
@@ -503,8 +507,8 @@ def numeric_attribute_without_unit(db):
         filterable_in_dashboard=True,
         available_in_grid=True,
     )
-    AttributeValue.objects.create(attribute=attribute, name="9", slug="9")
-    AttributeValue.objects.create(attribute=attribute, name="15", slug="15")
+    AttributeValue.objects.create(attribute=attribute, name="9", slug="9", numeric=9)
+    AttributeValue.objects.create(attribute=attribute, name="15", slug="15", numeric=15)
     return attribute
 
 
@@ -564,7 +568,7 @@ def swatch_attribute(db):
         attribute=attribute,
         name="Logo",
         slug="logo",
-        file_url="http://mirumee.com/test_media/test_file.jpeg",
+        file_url="http://example.com/test_media/test_file.jpeg",
         content_type="image/jpeg",
     )
     return attribute
@@ -573,8 +577,8 @@ def swatch_attribute(db):
 @pytest.fixture
 def product_type_page_reference_attribute(db):
     return Attribute.objects.create(
-        slug="page-reference",
-        name="Page reference",
+        slug="product-page-reference",
+        name="Product page reference",
         type=AttributeType.PRODUCT_TYPE,
         input_type=AttributeInputType.REFERENCE,
         entity_type=AttributeEntityType.PAGE,
@@ -676,6 +680,116 @@ def page_type_collection_reference_attribute(db):
         name="Collection reference",
         type=AttributeType.PAGE_TYPE,
         input_type=AttributeInputType.REFERENCE,
+        entity_type=AttributeEntityType.COLLECTION,
+    )
+
+
+@pytest.fixture
+def product_type_page_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-page-reference",
+        name="Single page reference",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PAGE,
+    )
+
+
+@pytest.fixture
+def page_type_page_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-page-reference",
+        name="Single page reference",
+        type=AttributeType.PAGE_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PAGE,
+    )
+
+
+@pytest.fixture
+def product_type_product_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-product-reference",
+        name="Single product reference",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PRODUCT,
+    )
+
+
+@pytest.fixture
+def page_type_product_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-product-reference",
+        name="Single product reference",
+        type=AttributeType.PAGE_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PRODUCT,
+    )
+
+
+@pytest.fixture
+def product_type_variant_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-variant-reference",
+        name="Single variant reference",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PRODUCT_VARIANT,
+    )
+
+
+@pytest.fixture
+def page_type_variant_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-variant-reference",
+        name="Single variant reference",
+        type=AttributeType.PAGE_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.PRODUCT_VARIANT,
+    )
+
+
+@pytest.fixture
+def product_type_category_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-category-reference",
+        name="Single category reference",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.CATEGORY,
+    )
+
+
+@pytest.fixture
+def page_type_category_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-category-reference",
+        name="Single category reference",
+        type=AttributeType.PAGE_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.CATEGORY,
+    )
+
+
+@pytest.fixture
+def product_type_collection_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-collection-reference",
+        name="Single collection reference",
+        type=AttributeType.PRODUCT_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
+        entity_type=AttributeEntityType.COLLECTION,
+    )
+
+
+@pytest.fixture
+def page_type_collection_single_reference_attribute(db):
+    return Attribute.objects.create(
+        slug="single-collection-reference",
+        name="Single collection reference",
+        type=AttributeType.PAGE_TYPE,
+        input_type=AttributeInputType.SINGLE_REFERENCE,
         entity_type=AttributeEntityType.COLLECTION,
     )
 

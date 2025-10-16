@@ -1,20 +1,26 @@
 import datetime
 import json
 import os
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import graphene
+import PIL
 import pytest
 
 from .....attribute.tests.model_helpers import (
     get_product_attribute_values,
     get_product_attributes,
 )
+from .....core.exceptions import UnsupportedMediaProviderException
 from .....discount.utils.promotion import get_active_catalogue_promotion_rules
 from .....product.error_codes import ProductBulkCreateErrorCode
 from .....product.models import Product
-from .....product.tests.utils import create_image
+from .....product.tests.utils import (
+    create_image,
+    create_image_without_extension,
+    create_zip_file_with_image_ext,
+)
 from ....core.enums import ErrorPolicyEnum
 from ....tests.utils import (
     get_graphql_content,
@@ -22,64 +28,164 @@ from ....tests.utils import (
 )
 
 PRODUCT_BULK_CREATE_MUTATION = """
-    mutation ProductBulkCreate(
-        $products: [ProductBulkCreateInput!]!
-        $errorPolicy: ErrorPolicyEnum
-    ) {
-        productBulkCreate(products: $products, errorPolicy: $errorPolicy) {
-            results {
-                errors {
-                    path
-                    code
-                    message
-                    warehouses
-                    channels
-                }
-                product{
-                    id
-                    name
-                    slug
-                    media{
-                        url
-                        alt
-                        type
-                        oembedData
-                    }
-                    category{
-                        name
-                    }
-                    collections{
-                        id
-                    }
-                    description
-                    attributes{
-                        attribute{
-                          slug
-                        }
-                        values{
-                           value
-                        }
-                    }
-                    channelListings{
-                        id
-                        channel{
-                            name
-                        }
-                    }
-                    variants{
-                        name
-                        stocks{
-                            warehouse{
-                                slug
-                            }
-                            quantity
-                        }
-                    }
-                }
-            }
-            count
+mutation ProductBulkCreate($products: [ProductBulkCreateInput!]!, $errorPolicy: ErrorPolicyEnum) {
+  productBulkCreate(products: $products, errorPolicy: $errorPolicy) {
+    results {
+      errors {
+        path
+        code
+        message
+        warehouses
+        channels
+      }
+      product {
+        id
+        name
+        slug
+        media {
+          url
+          alt
+          type
+          oembedData
         }
+        category {
+          name
+        }
+        collections {
+          id
+        }
+        description
+        attributes {
+          attribute {
+            slug
+          }
+          values {
+            value
+            reference
+          }
+        }
+        assignedAttributes(limit:10) {
+          attribute {
+            slug
+          }
+          ... on AssignedNumericAttribute {
+            value
+          }
+          ... on AssignedTextAttribute {
+            text: value
+          }
+          ... on AssignedPlainTextAttribute {
+            plain_text: value
+          }
+          ... on AssignedFileAttribute {
+            file: value {
+              contentType
+              url
+            }
+          }
+          ... on AssignedMultiPageReferenceAttribute {
+            pages: value {
+              slug
+            }
+          }
+          ... on AssignedMultiProductReferenceAttribute {
+            products: value {
+              slug
+            }
+          }
+          ... on AssignedMultiCategoryReferenceAttribute {
+            categories: value {
+              slug
+            }
+          }
+          ... on AssignedMultiCollectionReferenceAttribute {
+            collections: value {
+              slug
+            }
+          }
+          ... on AssignedSinglePageReferenceAttribute {
+            page: value {
+              slug
+            }
+          }
+          ... on AssignedSingleProductReferenceAttribute {
+            product: value {
+              slug
+            }
+          }
+          ... on AssignedSingleProductVariantReferenceAttribute {
+            variant: value {
+              sku
+            }
+          }
+          ... on AssignedSingleCategoryReferenceAttribute {
+            category: value {
+              slug
+            }
+          }
+          ... on AssignedSingleCollectionReferenceAttribute {
+            collection: value {
+              slug
+            }
+          }
+          ... on AssignedMultiProductVariantReferenceAttribute {
+            variants: value {
+              sku
+            }
+          }
+          ... on AssignedSingleChoiceAttribute {
+            choice: value {
+              name
+              slug
+            }
+          }
+          ... on AssignedMultiChoiceAttribute {
+            multi: value {
+              name
+              slug
+            }
+          }
+          ... on AssignedSwatchAttribute {
+            swatch: value {
+              name
+              slug
+              hexColor
+              file {
+                url
+                contentType
+              }
+            }
+          }
+          ... on AssignedBooleanAttribute {
+            bool: value
+          }
+          ... on AssignedDateAttribute {
+            date: value
+          }
+          ... on AssignedDateTimeAttribute {
+            datetime: value
+          }
+        }
+        channelListings {
+          id
+          channel {
+            name
+          }
+        }
+        variants {
+          name
+          stocks {
+            warehouse {
+              slug
+            }
+            quantity
+          }
+        }
+      }
     }
+    count
+  }
+}
 """
 
 
@@ -611,6 +717,272 @@ def test_product_bulk_create_with_media(
     assert file_3_name.endswith(format)
 
 
+def test_product_bulk_create_with_media_invalid_extension(
+    staff_api_client,
+    product_type,
+    category,
+    description_json,
+    permission_manage_products,
+    media_root,
+):
+    # given
+    description_json_string = json.dumps(description_json)
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+    base_product_slug = "product-test-slug"
+    product_charge_taxes = True
+    product_tax_rate = "STANDARD"
+
+    image_file_1, image_name_1 = create_image(image_name="prod1_img1")
+    image_file_2, image_name_2 = create_image(image_name="prod1_img2")
+    invalid_image_file, invalid_image_name = create_image_without_extension(
+        image_name="prod2_img1_invalid"
+    )
+
+    media_1 = {
+        "alt": "",
+        "image": image_name_1,
+    }
+
+    media_2 = {
+        "alt": "",
+        "image": image_name_2,
+    }
+
+    media_3 = {
+        "alt": "",
+        "image": invalid_image_name,
+    }
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "weight": 2,
+            "media": [media_1, media_2],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_2,
+            "slug": f"{base_product_slug}-2",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "media": [media_3],
+        },
+    ]
+
+    files = [image_file_1, image_file_2, invalid_image_file]
+
+    map_dict = {
+        0: ["variables.products.0.media.0.image"],
+        1: ["variables.products.0.media.1.image"],
+        2: ["variables.products.1.media.0.image"],
+    }
+
+    # when
+    body = get_multipart_request_body_with_multiple_files(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}, files, map_dict
+    )
+
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_multipart(body)
+
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert data["count"] == 0
+    # Check in first product we have no errors
+    error_1 = data["results"][0]["errors"]
+    assert not error_1
+    # Check in second product we have error related to invalid image extension
+    error_2 = data["results"][1]["errors"]
+    assert error_2[0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+    assert error_2[0]["path"] == "media.0.image"
+    assert error_2[0]["message"] == "Lack of file extension."
+    assert len(error_2) == 1
+
+
+def test_product_bulk_create_with_media_invalid_media_type(
+    staff_api_client,
+    product_type,
+    category,
+    description_json,
+    permission_manage_products,
+    media_root,
+):
+    # given
+    description_json_string = json.dumps(description_json)
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+    base_product_slug = "product-test-slug"
+    product_charge_taxes = True
+    product_tax_rate = "STANDARD"
+
+    image_file_1, image_name_1 = create_image(image_name="prod1_img1")
+    image_file_2, image_name_2 = create_image(image_name="prod1_img2")
+    invalid_image_file, invalid_image_name = create_zip_file_with_image_ext()
+
+    media_1 = {
+        "alt": "",
+        "image": image_name_1,
+    }
+
+    media_2 = {
+        "alt": "",
+        "image": image_name_2,
+    }
+
+    media_3 = {
+        "alt": "",
+        "image": invalid_image_name,
+    }
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "weight": 2,
+            "media": [media_1, media_2],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_2,
+            "slug": f"{base_product_slug}-2",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "media": [media_3],
+        },
+    ]
+
+    files = [image_file_1, image_file_2, invalid_image_file]
+
+    map_dict = {
+        0: ["variables.products.0.media.0.image"],
+        1: ["variables.products.0.media.1.image"],
+        2: ["variables.products.1.media.0.image"],
+    }
+
+    # when
+    body = get_multipart_request_body_with_multiple_files(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}, files, map_dict
+    )
+
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_multipart(body)
+
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert data["count"] == 0
+    # Check in first product we have no errors
+    error_1 = data["results"][0]["errors"]
+    assert not error_1
+    # Check in second product we have error related to invalid image extension
+    error_2 = data["results"][1]["errors"]
+    assert error_2[0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+    assert error_2[0]["path"] == "media.0.image"
+    assert error_2[0]["message"] == "Invalid file type."
+    assert len(error_2) == 1
+
+
+@patch("saleor.graphql.core.validators.file.Image.open")
+def test_product_bulk_create_with_media_image_with_invalid_exif(
+    mocked_image_open,
+    staff_api_client,
+    product_type,
+    category,
+    description_json,
+    permission_manage_products,
+    media_root,
+):
+    # given
+    description_json_string = json.dumps(description_json)
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    base_product_slug = "product-test-slug"
+    product_charge_taxes = True
+    product_tax_rate = "STANDARD"
+
+    image_file_1, image_name_1 = create_image(image_name="img_with_invalid_exif")
+
+    def open_image_side_effect(img_file, *args, **kwargs):
+        img = PIL.Image.open(img_file)
+        img.getexif = Mock(side_effect=PIL.UnidentifiedImageError)
+        return img
+
+    mocked_image_open.return_value = open_image_side_effect
+
+    media_1 = {
+        "alt": "",
+        "image": image_name_1,
+    }
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "weight": 2,
+            "media": [media_1],
+        },
+    ]
+
+    files = [image_file_1]
+
+    map_dict = {
+        0: ["variables.products.0.media.0.image"],
+    }
+
+    # when
+    body = get_multipart_request_body_with_multiple_files(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}, files, map_dict
+    )
+
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_multipart(body)
+
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert data["count"] == 0
+    error_1 = data["results"][0]["errors"]
+    assert error_1[0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+    assert error_1[0]["path"] == "media.0.image"
+    assert error_1[0]["message"].startswith(
+        "Invalid file. The following error was raised during the attempt"
+    )
+    assert len(error_1) == 1
+
+
 @pytest.mark.vcr
 def test_product_bulk_create_with_media_with_media_url(
     staff_api_client,
@@ -705,6 +1077,138 @@ def test_product_bulk_create_with_media_with_media_url(
     )
 
 
+@patch(
+    "saleor.graphql.product.bulk_mutations.product_bulk_create.is_image_url",
+    return_value=False,
+)
+@patch(
+    "saleor.graphql.product.bulk_mutations.product_bulk_create.get_oembed_data",
+)
+def test_product_bulk_create_with_media_with_media_url_invalid_provider(
+    mocked_get_oembed_data,
+    _mocked_is_image_url,
+    staff_api_client,
+    product_type,
+    permission_manage_products,
+):
+    # given
+    mocked_get_oembed_data.side_effect = UnsupportedMediaProviderException()
+
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+
+    alt = "Invalid_image"
+    url = "https://www.example.com/image.webp"
+
+    media = {
+        "alt": alt,
+        "mediaUrl": url,
+    }
+
+    products = [
+        {
+            "productType": product_type_id,
+            "name": product_name_1,
+        },
+        {
+            "productType": product_type_id,
+            "name": product_name_2,
+            "media": [media],
+        },
+    ]
+
+    # when
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_graphql(
+        PRODUCT_BULK_CREATE_MUTATION,
+        {"products": products, "errorPolicy": ErrorPolicyEnum.REJECT_FAILED_ROWS.name},
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    # Only first product should be created to respect REJECT_FAILED_ROWS policy
+    assert data["count"] == 1
+    # Second product should have error related to unsupported media provider
+    errors = data["results"][1]["errors"]
+    assert (
+        errors[0]["code"] == ProductBulkCreateErrorCode.UNSUPPORTED_MEDIA_PROVIDER.name
+    )
+    assert errors[0]["path"] == "media.0.mediaUrl"
+    assert errors[0]["message"] == "Unsupported media provider or incorrect URL."
+    assert len(errors) == 1
+
+
+@patch(
+    "saleor.graphql.core.validators.file.is_supported_image_mimetype",
+    return_value=False,
+)
+@patch(
+    "saleor.graphql.core.validators.file.HTTPClient",
+)
+def test_product_bulk_create_with_media_with_media_url_invalid_image_type(
+    mocked_http_client,
+    mocked_is_supported_image_mimetype,
+    staff_api_client,
+    product_type,
+    category,
+    description_json,
+    permission_manage_products,
+    media_root,
+):
+    # given
+    description_json_string = json.dumps(description_json)
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    base_product_slug = "product-test-slug"
+    product_charge_taxes = True
+    product_tax_rate = "STANDARD"
+
+    alt = "Invalid_image"
+    url = "https://www.example.com/image.png"
+
+    media_1 = {
+        "alt": alt,
+        "mediaUrl": url,
+    }
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "description": description_json_string,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "weight": 2,
+            "media": [media_1],
+        },
+    ]
+
+    # when
+    body = get_multipart_request_body_with_multiple_files(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}, [], {}
+    )
+
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_multipart(body)
+
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert data["count"] == 0
+    error_1 = data["results"][0]["errors"]
+    assert error_1[0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+    assert error_1[0]["path"] == "media.0.mediaUrl"
+    assert error_1[0]["message"] == "Invalid file type."
+    assert len(error_1) == 1
+
+
 def test_product_bulk_create_with_attributes(
     staff_api_client,
     product_type,
@@ -790,11 +1294,327 @@ def test_product_bulk_create_with_attributes(
         == color_attr.slug
     )
 
+    first_p_assigned_attributes = data["results"][0]["product"]["assignedAttributes"]
+    assert len(first_p_assigned_attributes) == 2
+    assert first_p_assigned_attributes[0]["choice"]["name"] == color_value_name
+    assert first_p_assigned_attributes[1]["choice"]["name"] == non_existent_attr_value
+
+    second_p_assigned_attributes = data["results"][1]["product"]["assignedAttributes"]
+    assert len(second_p_assigned_attributes) == 2
+    assert second_p_assigned_attributes[0]["choice"]["name"] == color_value_name
+    assert second_p_assigned_attributes[1]["choice"]["name"] == non_existent_attr_value
+
     for product in products:
         product_attributes = get_product_attributes(product)
         assert len(product_attributes) == 2
         assert product_attributes[0] == color_attr
         assert get_product_attribute_values(product, color_attr).count() == 1
+
+
+def test_product_bulk_create_with_single_reference_attributes(
+    staff_api_client,
+    product_type,
+    category,
+    page,
+    product_type_page_single_reference_attribute,
+    description_json,
+    permission_manage_products,
+):
+    # given
+    description_json = json.dumps(description_json)
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+    base_product_slug = "product-test-slug"
+    product_charge_taxes = True
+    product_tax_rate = "STANDARD"
+
+    attribute = product_type_page_single_reference_attribute
+    product_type.product_attributes.clear()
+    product_type.product_attributes.add(attribute)
+    attr_id = graphene.Node.to_global_id("Attribute", attribute.id)
+    reference = graphene.Node.to_global_id("Page", page.pk)
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "description": description_json,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "weight": 2,
+            "attributes": [
+                {"id": attr_id, "reference": reference},
+            ],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_2,
+            "slug": f"{base_product_slug}-2",
+            "description": description_json,
+            "chargeTaxes": product_charge_taxes,
+            "taxCode": product_tax_rate,
+            "attributes": [
+                {"id": attr_id, "reference": reference},
+            ],
+        },
+    ]
+
+    # when
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_graphql(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    products = Product.objects.all()
+
+    assert not data["results"][0]["errors"]
+    assert not data["results"][1]["errors"]
+    assert data["count"] == 2
+    assert (
+        data["results"][0]["product"]["attributes"][0]["attribute"]["slug"]
+        == attribute.slug
+    )
+    assert (
+        data["results"][1]["product"]["attributes"][0]["attribute"]["slug"]
+        == attribute.slug
+    )
+
+    first_p_assigned_attributes = data["results"][0]["product"]["assignedAttributes"]
+    second_p_assigned_attributes = data["results"][1]["product"]["assignedAttributes"]
+
+    expected_assigned_page_attribute = {
+        "attribute": {"slug": product_type_page_single_reference_attribute.slug},
+        "page": {"slug": page.slug},
+    }
+    assert expected_assigned_page_attribute in first_p_assigned_attributes
+    assert expected_assigned_page_attribute in second_p_assigned_attributes
+
+
+def test_product_bulk_create_with_reference_attributes_and_reference_types_defined(
+    staff_api_client,
+    product_type,
+    product_type_page_single_reference_attribute,
+    product_type_product_reference_attribute,
+    product_type_variant_reference_attribute,
+    page,
+    product,
+    variant,
+    category,
+    permission_manage_products,
+):
+    # given
+    product_type.product_attributes.clear()
+    product_type.product_attributes.add(
+        product_type_page_single_reference_attribute,
+        product_type_product_reference_attribute,
+        product_type_variant_reference_attribute,
+    )
+
+    product_type_page_single_reference_attribute.reference_page_types.add(
+        page.page_type
+    )
+    product_type_product_reference_attribute.reference_product_types.add(
+        product.product_type
+    )
+    product_type_variant_reference_attribute.reference_product_types.add(
+        variant.product.product_type
+    )
+
+    page_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_page_single_reference_attribute.id
+    )
+    product_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_product_reference_attribute.id
+    )
+    variant_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_variant_reference_attribute.id
+    )
+    page_ref = graphene.Node.to_global_id("Page", page.pk)
+    product_ref = graphene.Node.to_global_id("Product", product.pk)
+    variant_ref = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+    base_product_slug = "product-test-slug"
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "attributes": [{"id": page_ref_attr_id, "reference": page_ref}],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_2,
+            "slug": f"{base_product_slug}-2",
+            "attributes": [{"id": product_ref_attr_id, "references": [product_ref]}],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": "test name 3",
+            "slug": f"{base_product_slug}-3",
+            "attributes": [{"id": variant_ref_attr_id, "references": [variant_ref]}],
+        },
+    ]
+
+    # when
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_graphql(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert not data["results"][0]["errors"]
+    assert not data["results"][1]["errors"]
+    assert not data["results"][2]["errors"]
+    assert data["count"] == 3
+
+    expected_attributes = [
+        {
+            "attribute": {"slug": product_type_page_single_reference_attribute.slug},
+            "values": [{"reference": page_ref, "value": ""}],
+        },
+        {
+            "attribute": {"slug": product_type_product_reference_attribute.slug},
+            "values": [{"reference": product_ref, "value": ""}],
+        },
+        {
+            "attribute": {"slug": product_type_variant_reference_attribute.slug},
+            "values": [{"reference": variant_ref, "value": ""}],
+        },
+    ]
+    expected_assigned_attributes = [
+        {
+            "attribute": {"slug": product_type_page_single_reference_attribute.slug},
+            "page": {"slug": page.slug},
+        },
+        {
+            "attribute": {"slug": product_type_product_reference_attribute.slug},
+            "products": [{"slug": product.slug}],
+        },
+        {
+            "attribute": {"slug": product_type_variant_reference_attribute.slug},
+            "variants": [{"sku": variant.sku}],
+        },
+    ]
+
+    for i, result in enumerate(data["results"]):
+        assert expected_attributes[i] in result["product"]["attributes"]
+        assert (
+            expected_assigned_attributes[i] in result["product"]["assignedAttributes"]
+        )
+
+
+def test_product_bulk_create_with_reference_attributes_refs_not_in_available_choices(
+    staff_api_client,
+    product_type,
+    product_type_page_reference_attribute,
+    product_type_product_single_reference_attribute,
+    product_type_variant_reference_attribute,
+    page,
+    product,
+    variant,
+    category,
+    permission_manage_products,
+    product_type_with_variant_attributes,
+    page_type_list,
+):
+    # given
+    product_type.product_attributes.clear()
+    product_type.product_attributes.add(
+        product_type_page_reference_attribute,
+        product_type_product_single_reference_attribute,
+        product_type_variant_reference_attribute,
+    )
+
+    product_type_page_reference_attribute.reference_page_types.add(page_type_list[1])
+    product_type_product_single_reference_attribute.reference_product_types.add(
+        product_type_with_variant_attributes
+    )
+    product_type_variant_reference_attribute.reference_product_types.add(
+        product_type_with_variant_attributes
+    )
+
+    page_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_page_reference_attribute.id
+    )
+    product_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_product_single_reference_attribute.id
+    )
+    variant_ref_attr_id = graphene.Node.to_global_id(
+        "Attribute", product_type_variant_reference_attribute.id
+    )
+    page_ref = graphene.Node.to_global_id("Page", page.pk)
+    product_ref = graphene.Node.to_global_id("Product", product.pk)
+    variant_ref = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    product_type_id = graphene.Node.to_global_id("ProductType", product_type.pk)
+    category_id = graphene.Node.to_global_id("Category", category.pk)
+
+    product_name_1 = "test name 1"
+    product_name_2 = "test name 2"
+    base_product_slug = "product-test-slug"
+
+    products = [
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_1,
+            "slug": f"{base_product_slug}-1",
+            "attributes": [{"id": page_ref_attr_id, "references": [page_ref]}],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": product_name_2,
+            "slug": f"{base_product_slug}-2",
+            "attributes": [{"id": product_ref_attr_id, "reference": product_ref}],
+        },
+        {
+            "productType": product_type_id,
+            "category": category_id,
+            "name": "test name 3",
+            "slug": f"{base_product_slug}-3",
+            "attributes": [{"id": variant_ref_attr_id, "references": [variant_ref]}],
+        },
+    ]
+
+    # when
+    staff_api_client.user.user_permissions.add(permission_manage_products)
+    response = staff_api_client.post_graphql(
+        PRODUCT_BULK_CREATE_MUTATION, {"products": products}
+    )
+    content = get_graphql_content(response)
+    data = content["data"]["productBulkCreate"]
+
+    # then
+    assert len(data["results"][0]["errors"]) == 1
+    assert len(data["results"][1]["errors"]) == 1
+    assert len(data["results"][2]["errors"]) == 1
+    assert data["count"] == 0
+
+    for result in data["results"]:
+        assert len(result["errors"]) == 1
+        assert result["errors"][0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+        assert result["errors"][0]["path"] == "attributes"
 
 
 def test_product_bulk_create_with_attributes_using_external_refs(
@@ -819,7 +1639,8 @@ def test_product_bulk_create_with_attributes_using_external_refs(
 
     # Default attribute defined in product_type fixture
     color_attr = product_type.product_attributes.get(name="Color")
-    color_value_external_reference = color_attr.values.first().external_reference
+    color_value = color_attr.values.first()
+    color_value_external_reference = color_value.external_reference
 
     # Add second attribute
     product_type.product_attributes.add(size_attribute)
@@ -863,6 +1684,11 @@ def test_product_bulk_create_with_attributes_using_external_refs(
         data["results"][0]["product"]["attributes"][0]["attribute"]["slug"]
         == color_attr.slug
     )
+
+    first_p_assigned_attributes = data["results"][0]["product"]["assignedAttributes"]
+    assert len(first_p_assigned_attributes) == 2
+    assert first_p_assigned_attributes[0]["choice"]["name"] == color_value.name
+    assert first_p_assigned_attributes[1]["choice"]["name"] == non_existent_attr_value
 
     for product in products:
         attributes = get_product_attributes(product)
@@ -938,6 +1764,11 @@ def test_product_bulk_create_with_attributes_and_create_new_value_with_external_
         data["results"][0]["product"]["attributes"][0]["attribute"]["slug"]
         == color_attr.slug
     )
+
+    first_p_assigned_attributes = data["results"][0]["product"]["assignedAttributes"]
+    assert len(first_p_assigned_attributes) == 1
+    assert first_p_assigned_attributes[0]["choice"]["name"] == new_value
+
     assert color_attr.values.count() == color_attr_values_count + 1
     attributes = get_product_attributes(product)
     first_attribute_assignment = attributes[0]
@@ -2054,9 +2885,11 @@ def test_product_bulk_create_with_media_incorrect_alt(
     error_1 = data["results"][0]["errors"]
     assert error_1
     assert len(error_1) == 2
-    for error in error_1:
+    for index, error in enumerate(error_1):
         assert error["code"] == ProductBulkCreateErrorCode.INVALID.name
+        assert error["path"] == f"media.{index}.alt"
     error_2 = data["results"][1]["errors"]
     assert error_2[0]["code"] == ProductBulkCreateErrorCode.INVALID.name
+    assert error_2[0]["path"] == "media.0.alt"
     assert len(error_2) == 1
     assert data["count"] == 0

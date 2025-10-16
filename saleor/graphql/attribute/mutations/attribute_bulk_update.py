@@ -1,17 +1,28 @@
 from collections import defaultdict
+from dataclasses import dataclass, field
 
 import graphene
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.utils.text import slugify
 from graphene.utils.str_converters import to_camel_case
 from graphql.error import GraphQLError
 from text_unidecode import unidecode
 
-from ....attribute import models
+from ....attribute import AttributeEntityType, models
 from ....attribute.error_codes import AttributeBulkUpdateErrorCode
+from ....attribute.lock_objects import (
+    attribute_reference_page_types_qs_select_for_update,
+    attribute_reference_product_types_qs_select_for_update,
+    attribute_value_qs_select_for_update,
+)
 from ....core.tracing import traced_atomic_transaction
+from ....page.utils import mark_pages_search_vector_as_dirty_in_batches
 from ....permission.enums import PageTypePermissions, ProductTypePermissions
+from ....product.utils.search_helpers import (
+    mark_products_search_vector_as_dirty_in_batches,
+)
 from ....webhook.utils import get_webhooks_for_event
 from ...core import ResolveInfo
 from ...core.context import ChannelContext
@@ -36,6 +47,19 @@ from ..enums import AttributeTypeEnum
 from ..types import Attribute
 from .attribute_bulk_create import DEPRECATED_ATTR_FIELDS, clean_values
 from .attribute_update import AttributeUpdateInput
+from .mixins import AttributeMixin
+from .utils import (
+    get_page_ids_to_search_index_update_for_attribute_values,
+    get_product_ids_to_search_index_update_for_attribute_values,
+)
+
+
+@dataclass
+class ReferenceTypeUpdateData:
+    create_product_reference_types: list[tuple[int, int]] = field(default_factory=list)
+    create_page_reference_types: list[tuple[int, int]] = field(default_factory=list)
+    delete_product_reference_types: list[tuple[int, int]] = field(default_factory=list)
+    delete_page_reference_types: list[tuple[int, int]] = field(default_factory=list)
 
 
 class AttributeBulkUpdateResult(BaseObjectType):
@@ -227,6 +251,19 @@ class AttributeBulkUpdate(BaseMutation):
                 cleaned_inputs_map[attribute_index] = None
                 continue
 
+            try:
+                AttributeMixin.validate_reference_types_limit(attribute_data.fields)
+            except ValidationError as e:
+                index_error_map[attribute_index].append(
+                    AttributeBulkUpdateError(
+                        path="referenceTypes",
+                        message=e.messages[0],
+                        code=AttributeBulkUpdateErrorCode.INVALID.value,
+                    )
+                )
+                cleaned_inputs_map[attribute_index] = None
+                continue
+
             cleaned_input = cls.clean_attribute_input(
                 info,
                 attribute_data,
@@ -293,6 +330,26 @@ class AttributeBulkUpdate(BaseMutation):
         return values_existing_external_refs, duplicated_values_external_ref
 
     @classmethod
+    def get_existing_reference_types(cls, cleaned_inputs_map: dict) -> dict[int, set]:
+        existing_reference_types = defaultdict(set)
+        ReferenceProductType = models.Attribute.reference_product_types.through
+        ReferencePageType = models.Attribute.reference_page_types.through
+        attr_ids = [
+            cleaned_input["instance"].pk
+            for cleaned_input in cleaned_inputs_map.values()
+            if cleaned_input and "instance" in cleaned_input
+        ]
+        for attr_id, product_type_id in ReferenceProductType.objects.filter(
+            attribute_id__in=attr_ids
+        ).values_list("attribute_id", "producttype_id"):
+            existing_reference_types[attr_id].add(product_type_id)
+        for attr_id, page_type_id in ReferencePageType.objects.filter(
+            attribute_id__in=attr_ids
+        ).values_list("attribute_id", "pagetype_id"):
+            existing_reference_types[attr_id].add(page_type_id)
+        return existing_reference_types
+
+    @classmethod
     def clean_attribute_input(
         cls,
         info: ResolveInfo,
@@ -342,6 +399,20 @@ class AttributeBulkUpdate(BaseMutation):
         attribute_data["fields"] = DeprecatedModelMutation.clean_input(
             info, None, attribute_data.fields, input_cls=AttributeUpdateInput
         )
+
+        try:
+            AttributeMixin.clean_reference_types(
+                attribute_data["fields"], attr.entity_type, attr.input_type
+            )
+        except ValidationError as e:
+            index_error_map[attribute_index].append(
+                AttributeBulkUpdateError(
+                    path="referenceTypes",
+                    message=e.messages[0],
+                    code=AttributeBulkUpdateErrorCode.INVALID.value,
+                )
+            )
+            return None
 
         if remove_values:
             cleaned_remove_values = cls.clean_remove_values(
@@ -410,6 +481,7 @@ class AttributeBulkUpdate(BaseMutation):
         cleaned_inputs_map: dict[int, dict],
         error_policy: str,
         index_error_map: dict[int, list[AttributeBulkUpdateError]],
+        existing_reference_types_map: dict[int, set],
     ) -> list[dict]:
         instances_data_and_errors_list: list[dict] = []
 
@@ -444,12 +516,18 @@ class AttributeBulkUpdate(BaseMutation):
                     )
                     continue
 
+            reference_types_update_data = cls.create_reference_types(
+                attr,
+                existing_reference_types_map.get(attr.pk, set()),
+                fields,
+            )
             data = {
                 "instance": attr,
                 "errors": index_error_map[index],
                 "remove_values": remove_values,
                 "add_values": [],
                 "attribute_updated": True if fields else False,
+                "reference_types_updated": reference_types_update_data,
             }
 
             if add_values:
@@ -493,6 +571,38 @@ class AttributeBulkUpdate(BaseMutation):
                             )
                         )
         return values
+
+    @classmethod
+    def create_reference_types(
+        cls,
+        attribute: models.Attribute,
+        existing_reference_types: set[int],
+        cleaned_input: dict,
+    ) -> ReferenceTypeUpdateData:
+        if "reference_types" not in cleaned_input:
+            return ReferenceTypeUpdateData()
+        reference_type_ids = [
+            ref_type.id for ref_type in cleaned_input["reference_types"]
+        ]
+        to_create = set(reference_type_ids) - existing_reference_types
+        to_delete = existing_reference_types - set(reference_type_ids)
+        if attribute.entity_type == AttributeEntityType.PAGE:
+            return ReferenceTypeUpdateData(
+                create_page_reference_types=[
+                    (attribute.pk, reference_type) for reference_type in to_create
+                ],
+                delete_page_reference_types=[
+                    (attribute.pk, reference_type) for reference_type in to_delete
+                ],
+            )
+        return ReferenceTypeUpdateData(
+            create_product_reference_types=[
+                (attribute.pk, reference_type) for reference_type in to_create
+            ],
+            delete_product_reference_types=[
+                (attribute.pk, reference_type) for reference_type in to_delete
+            ],
+        )
 
     @classmethod
     def get_attributes(
@@ -557,6 +667,10 @@ class AttributeBulkUpdate(BaseMutation):
         values_to_create: list = []
         values_to_remove: list = []
         updated_attributes: list = []
+        create_product_reference_types: list = []
+        create_page_reference_types: list = []
+        delete_product_reference_types_lookup: Q = Q()
+        delete_page_reference_types_lookup: Q = Q()
 
         for attribute_data in instances_data_with_errors_list:
             attribute = attribute_data["instance"]
@@ -572,27 +686,141 @@ class AttributeBulkUpdate(BaseMutation):
             values_to_remove.extend(attribute_data["remove_values"])
             values_to_create.extend(attribute_data["add_values"])
 
-        models.Attribute.objects.bulk_update(
-            attributes_to_update,
-            [
-                "name",
-                "slug",
-                "unit",
-                "value_required",
-                "visible_in_storefront",
-                "is_variant_only",
-                "filterable_in_dashboard",
-                "external_reference",
-            ],
+            delete_product_ref, delete_page_ref = (
+                cls._prepare_reference_types_for_saving(
+                    attribute_data["reference_types_updated"],
+                    create_product_reference_types,
+                    create_page_reference_types,
+                )
+            )
+            delete_product_reference_types_lookup |= delete_product_ref
+            delete_page_reference_types_lookup |= delete_page_ref
+
+        product_ids_to_update = (
+            get_product_ids_to_search_index_update_for_attribute_values(
+                values_to_remove
+            )
+        )
+        page_ids_to_update = get_page_ids_to_search_index_update_for_attribute_values(
+            values_to_remove
         )
 
-        models.AttributeValue.objects.filter(
-            id__in=[values_to_remove.id for values_to_remove in values_to_remove]
-        ).delete()
-        models.AttributeValue.objects.bulk_create(values_to_create)
+        with transaction.atomic():
+            models.Attribute.objects.bulk_update(
+                attributes_to_update,
+                [
+                    "name",
+                    "slug",
+                    "unit",
+                    "value_required",
+                    "visible_in_storefront",
+                    "is_variant_only",
+                    "filterable_in_dashboard",
+                    "external_reference",
+                ],
+            )
+            locked_ids = (
+                attribute_value_qs_select_for_update()
+                .filter(pk__in=[value.pk for value in values_to_remove])
+                .values_list("pk", flat=True)
+            )
+            models.AttributeValue.objects.filter(id__in=locked_ids).delete()
+
+            models.AttributeValue.objects.bulk_create(values_to_create)
+
+            cls._save_reference_types(
+                create_product_reference_types,
+                create_page_reference_types,
+                delete_product_reference_types_lookup,
+                delete_page_reference_types_lookup,
+            )
 
         updated_attributes.extend(attributes_to_update)
-        return updated_attributes, values_to_remove, values_to_create
+        return (
+            updated_attributes,
+            values_to_remove,
+            values_to_create,
+            product_ids_to_update,
+            page_ids_to_update,
+        )
+
+    @classmethod
+    def _prepare_reference_types_for_saving(
+        cls,
+        reference_update_data: ReferenceTypeUpdateData,
+        create_product_reference_types: list,
+        create_page_reference_types: list,
+    ) -> tuple[Q, Q]:
+        ModelProductReferenceType = models.Attribute.reference_product_types.through
+        ModelPageReferenceType = models.Attribute.reference_page_types.through
+        create_product_reference_types.extend(
+            ModelProductReferenceType(
+                attribute_id=attr_id,
+                producttype_id=product_type_id,
+            )
+            for attr_id, product_type_id in reference_update_data.create_product_reference_types
+        )
+        create_page_reference_types.extend(
+            ModelPageReferenceType(
+                attribute_id=attr_id,
+                pagetype_id=page_type_id,
+            )
+            for attr_id, page_type_id in reference_update_data.create_page_reference_types
+        )
+
+        delete_product_reference_types_lookup = Q()
+        delete_page_reference_types_lookup = Q()
+        for (
+            attr_id,
+            product_type_id,
+        ) in reference_update_data.delete_product_reference_types:
+            delete_product_reference_types_lookup |= Q(
+                attribute_id=attr_id,
+                producttype_id=product_type_id,
+            )
+        for attr_id, page_type_id in reference_update_data.delete_page_reference_types:
+            delete_page_reference_types_lookup |= Q(
+                attribute_id=attr_id,
+                pagetype_id=page_type_id,
+            )
+        return delete_product_reference_types_lookup, delete_page_reference_types_lookup
+
+    @classmethod
+    def _save_reference_types(
+        cls,
+        create_product_reference_types: list,
+        create_page_reference_types: list,
+        delete_product_reference_types_lookup: Q,
+        delete_page_reference_types_lookup: Q,
+    ):
+        ModelProductReferenceType = models.Attribute.reference_product_types.through
+        ModelPageReferenceType = models.Attribute.reference_page_types.through
+
+        if create_product_reference_types:
+            ModelProductReferenceType.objects.bulk_create(
+                create_product_reference_types
+            )
+        if create_page_reference_types:
+            ModelPageReferenceType.objects.bulk_create(create_page_reference_types)
+
+        if delete_product_reference_types_lookup:
+            _locked_ref_product_types = list(
+                attribute_reference_product_types_qs_select_for_update().filter(
+                    delete_product_reference_types_lookup
+                )
+            )
+            ModelProductReferenceType.objects.filter(
+                delete_product_reference_types_lookup
+            ).delete()
+        if delete_page_reference_types_lookup:
+            _locked_ref_page_types = list(
+                attribute_reference_page_types_qs_select_for_update().filter(
+                    delete_page_reference_types_lookup
+                )
+            )
+            ModelPageReferenceType.objects.filter(
+                delete_page_reference_types_lookup
+            ).delete()
 
     @classmethod
     def post_save_actions(
@@ -623,8 +851,15 @@ class AttributeBulkUpdate(BaseMutation):
         cleaned_inputs_map = cls.clean_attributes(
             info, data["attributes"], index_error_map
         )
+        existing_reference_types_map = cls.get_existing_reference_types(
+            cleaned_inputs_map
+        )
         instances_data_with_errors_list = cls.update_attributes(
-            info, cleaned_inputs_map, error_policy, index_error_map
+            info,
+            cleaned_inputs_map,
+            error_policy,
+            index_error_map,
+            existing_reference_types_map,
         )
 
         # check if errors occurred
@@ -640,12 +875,18 @@ class AttributeBulkUpdate(BaseMutation):
             return AttributeBulkUpdate(count=0, results=results)
 
         # save all objects
-        attributes, values_to_remove, values_to_create = cls.save(
-            instances_data_with_errors_list
-        )
+        (
+            attributes,
+            values_to_remove,
+            values_to_create,
+            product_ids_to_search_update,
+            page_ids_to_search_update,
+        ) = cls.save(instances_data_with_errors_list)
 
         # prepare and return data
         results = get_results(instances_data_with_errors_list)
         cls.post_save_actions(info, attributes, values_to_remove, values_to_create)
+        mark_products_search_vector_as_dirty_in_batches(product_ids_to_search_update)
+        mark_pages_search_vector_as_dirty_in_batches(page_ids_to_search_update)
 
         return AttributeBulkUpdate(count=len(attributes), results=results)

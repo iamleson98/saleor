@@ -146,7 +146,7 @@ class TaxConfigurationUpdate(DeprecatedModelMutation):
         )
 
     class Meta:
-        description = "Update tax configuration for a channel."
+        description = "Updates tax configuration for a channel."
         error_type_class = TaxConfigurationUpdateError
         model = models.TaxConfiguration
         object_type = TaxConfiguration
@@ -368,7 +368,7 @@ class TaxConfigurationUpdate(DeprecatedModelMutation):
         ).delete()
 
     @classmethod
-    def save(cls, _info, instance, cleaned_input):
+    def save(cls, _info, instance, cleaned_input, instance_tracker=None):
         instance.save()
         update_countries_configuration = cleaned_input.get(
             "update_countries_configuration", []

@@ -1280,7 +1280,7 @@ def test_product_media_created(
         {
             "productMedia": {
                 "id": media_id,
-                "url": f"http://mirumee.com{media.image.url}",
+                "url": f"https://example.com{media.image.url}",
                 "productId": graphene.Node.to_global_id("Product", media.product_id),
             }
         }
@@ -1303,7 +1303,7 @@ def test_product_media_updated(
         {
             "productMedia": {
                 "id": media_id,
-                "url": f"http://mirumee.com{media.image.url}",
+                "url": f"https://example.com{media.image.url}",
                 "productId": graphene.Node.to_global_id("Product", media.product_id),
             }
         }
@@ -1326,7 +1326,7 @@ def test_product_media_deleted(
         {
             "productMedia": {
                 "id": media_id,
-                "url": f"http://mirumee.com{media.image.url}",
+                "url": f"https://example.com{media.image.url}",
                 "productId": graphene.Node.to_global_id("Product", media.product_id),
             }
         }
@@ -2165,6 +2165,25 @@ def test_checkout_fully_paid(checkout, subscription_checkout_fully_paid_webhook)
     # given
     webhooks = [subscription_checkout_fully_paid_webhook]
     event_type = WebhookEventAsyncType.CHECKOUT_FULLY_PAID
+    checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
+
+    # when
+    deliveries = create_deliveries_for_subscriptions(event_type, checkout, webhooks)
+
+    # then
+    expected_payload = json.dumps({"checkout": {"id": checkout_id}})
+
+    assert deliveries[0].payload.get_payload() == expected_payload
+    assert len(deliveries) == len(webhooks)
+    assert deliveries[0].webhook == webhooks[0]
+
+
+def test_checkout_fully_authorized(
+    checkout, subscription_checkout_fully_authorized_webhook
+):
+    # given
+    webhooks = [subscription_checkout_fully_authorized_webhook]
+    event_type = WebhookEventAsyncType.CHECKOUT_FULLY_AUTHORIZED
     checkout_id = graphene.Node.to_global_id("Checkout", checkout.pk)
 
     # when

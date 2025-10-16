@@ -29,11 +29,9 @@ from ..payment import (
     PaymentError,
     TransactionAction,
     TransactionKind,
-    gateway,
 )
 from ..payment.interface import RefundData
 from ..payment.models import Payment, Transaction, TransactionItem
-from ..payment.utils import create_payment, create_transaction_for_order
 from ..plugins.manager import PluginsManager
 from ..shipping.models import ShippingMethodChannelListing
 from ..warehouse.management import (
@@ -186,6 +184,103 @@ def _trigger_order_sync_webhooks(
             manager,
             database_connection_name=database_connection_name,
         )
+
+
+def _get_extra_for_order_logger(order: "Order") -> dict:
+    return {
+        "order_id": order.id,
+        "currency": order.currency,
+        "status": order.status,
+        "origin": order.origin,
+        "checkout_id": order.checkout_token,
+        "undiscounted_base_shipping_price_amount": order.undiscounted_base_shipping_price_amount,
+        "base_shipping_price_amount": order.base_shipping_price_amount,
+        "shipping_price_net_amount": order.shipping_price_net_amount,
+        "shipping_price_gross_amount": order.shipping_price_gross_amount,
+        "undiscounted_total_net_amount": order.undiscounted_total_net_amount,
+        "total_net_amount": order.total_net_amount,
+        "undiscounted_total_gross_amount": order.undiscounted_total_gross_amount,
+        "total_gross_amount": order.total_gross_amount,
+        "subtotal_net_amount": order.subtotal_net_amount,
+        "subtotal_gross_amount": order.subtotal_gross_amount,
+        "has_voucher_code": bool(order.voucher_code),
+        "tax_exemption": order.tax_exemption,
+        "tax_error": order.tax_error,
+    }
+
+
+def _get_extra_for_order_line_logger(line: "OrderLine") -> dict:
+    return {
+        "line_id": line.id,
+        "variant_id": line.variant_id,
+        "quantity": line.quantity,
+        "is_gift_card": line.is_gift_card,
+        "is_price_overridden": line.is_price_overridden,
+        "unit_price_net_amount": line.unit_price_net_amount,
+        "unit_price_gross_amount": line.unit_price_gross_amount,
+        "total_price_net_amount": line.total_price_net_amount,
+        "total_price_gross_amount": line.total_price_gross_amount,
+        "has_voucher_code": line.voucher_code,
+        "unit_discount_amount": line.unit_discount_amount,
+        "unit_discount_type": line.unit_discount_type,
+        "unit_discount_reason": line.unit_discount_reason,
+    }
+
+
+def _order_has_negative_prices(order: "Order", lines: list["OrderLineInfo"]) -> bool:
+    if not order:
+        logger.error("Received None as order to check for negative prices")
+        return False
+
+    if list(
+        filter(
+            lambda x: x < 0,
+            [
+                order.shipping_price_net_amount,
+                order.shipping_price_gross_amount,
+                order.total_net_amount,
+                order.total_gross_amount,
+                order.subtotal_net_amount,
+                order.subtotal_gross_amount,
+            ],
+        )
+    ):
+        return True
+    if lines is None:
+        logger.error(
+            "Received None as order lines to check for negative prices",
+            extra=_get_extra_for_order_logger(order),
+        )
+        return False
+    for line_info in lines:
+        line = line_info.line
+        if not line:
+            logger.error(
+                "Received None as order line to check for negative prices",
+                extra=_get_extra_for_order_logger(order),
+            )
+            continue
+        if list(
+            filter(
+                lambda x: x < 0,
+                [
+                    line.unit_price_net_amount,
+                    line.unit_price_gross_amount,
+                    line.total_price_net_amount,
+                    line.total_price_gross_amount,
+                ],
+            )
+        ):
+            return True
+    return False
+
+
+def _log_order_with_negative_price(order: "Order", lines: list["OrderLineInfo"]):
+    extra = _get_extra_for_order_logger(order)
+    extra["lines"] = [
+        _get_extra_for_order_line_logger(line_info.line) for line_info in lines
+    ]
+    logger.error("Order with negative prices detected", extra=extra)
 
 
 def call_order_events(
@@ -343,6 +438,9 @@ def order_created(
     channel = order_info.channel
     if channel.automatically_confirm_all_new_orders:
         order_confirmed(order, user, app, manager, webhook_event_map=webhook_event_map)
+
+    if _order_has_negative_prices(order, order_info.lines_data):
+        _log_order_with_negative_price(order, order_info.lines_data)
 
 
 def order_confirmed(
@@ -802,6 +900,9 @@ def cancel_fulfillment(
                 fulfillment=fulfillment,
                 warehouse_pk=warehouse.pk,
             )
+        else:
+            decrease_fulfilled_quantity(fulfillment)
+
         fulfillment.status = FulfillmentStatus.CANCELED
         fulfillment.save(update_fields=["status"])
         update_order_status(fulfillment.order)
@@ -814,35 +915,14 @@ def cancel_fulfillment(
     return fulfillment
 
 
-def cancel_waiting_fulfillment(
-    fulfillment: Fulfillment,
-    user: User,
-    app: Optional["App"],
-    manager: "PluginsManager",
-):
-    """Cancel fulfillment which is in waiting for approval state."""
-    fulfillment = Fulfillment.objects.get(pk=fulfillment.pk)
-    # transaction ensures sending webhooks after order line is updated and events are
-    # successfully created
-    with traced_atomic_transaction():
-        events.fulfillment_canceled_event(
-            order=fulfillment.order, user=user, app=app, fulfillment=None
-        )
-
-        order_lines = []
-        for line in fulfillment:
-            order_line = line.order_line
-            order_line.quantity_fulfilled -= line.quantity
-            order_lines.append(order_line)
-        OrderLine.objects.bulk_update(order_lines, ["quantity_fulfilled"])
-
-        fulfillment.delete()
-        call_event(manager.fulfillment_canceled, fulfillment)
-        call_order_event(
-            manager,
-            WebhookEventAsyncType.ORDER_UPDATED,
-            fulfillment.order,
-        )
+def decrease_fulfilled_quantity(fulfillment: Fulfillment) -> None:
+    """Decrease the fulfilled quantity for order lines in the given fulfillment."""
+    order_lines = []
+    for line in fulfillment:
+        order_line = line.order_line
+        order_line.quantity_fulfilled -= line.quantity
+        order_lines.append(order_line)
+    OrderLine.objects.bulk_update(order_lines, ["quantity_fulfilled"])
 
 
 def approve_fulfillment(
@@ -937,6 +1017,9 @@ def mark_order_as_paid_with_transaction(
     Allows to create a transaction for an order.
     """
     with transaction.atomic():
+        # Circular imports
+        from ..payment.utils import create_transaction_for_order
+
         create_transaction_for_order(
             order=order,
             user=request_user,
@@ -978,6 +1061,9 @@ def mark_order_as_paid_with_payment(
     # transaction ensures that webhooks are triggered when payments and transactions are
     # properly created
     with traced_atomic_transaction():
+        # Circular imports
+        from ..payment.utils import create_payment
+
         payment = create_payment(
             gateway=CustomPaymentChoices.MANUAL,
             payment_token="",
@@ -2039,7 +2125,10 @@ def _process_refund(
             amount += order.shipping_price_gross_amount
     if amount and payment:
         amount = min(payment.captured_amount, amount)
-        gateway.refund(
+        # Circular imports
+        from ..payment.gateway import refund
+
+        refund(
             payment,
             manager,
             amount=amount,
