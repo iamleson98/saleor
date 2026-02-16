@@ -1,6 +1,6 @@
 import datetime
 from decimal import Decimal
-from typing import TYPE_CHECKING, Optional, cast
+from typing import TYPE_CHECKING, Optional
 
 from django.utils import timezone
 
@@ -19,6 +19,7 @@ from .fetch import (
     CheckoutLineInfo,
     fetch_checkout_info,
     fetch_checkout_lines,
+    get_or_fetch_checkout_deliveries,
 )
 from .models import Checkout
 from .payment_utils import (
@@ -89,8 +90,7 @@ def _trigger_checkout_sync_webhooks(
     webhook_event_map: dict[str, set["Webhook"]],
     address: Optional["Address"] = None,
 ):
-    _ = checkout_info.get_all_shipping_methods()
-
+    get_or_fetch_checkout_deliveries(checkout_info)
     # + timedelta(seconds=10) to confirm that triggered webhooks will still have
     # valid prices. Triggered only when we have active sync tax webhook.
     if webhook_event_map.get(
@@ -102,9 +102,6 @@ def _trigger_checkout_sync_webhooks(
             checkout_info=checkout_info,
             manager=manager,
             lines=lines,
-            address=address
-            or checkout_info.shipping_address
-            or checkout_info.billing_address,
             force_update=True,
         )
 
@@ -207,13 +204,11 @@ def update_last_transaction_modified_at_for_checkout(
 
 def transaction_amounts_for_checkout_updated(
     transaction: TransactionItem,
+    checkout: Checkout,
     manager: "PluginsManager",
     user: Optional["User"],
     app: Optional["App"],
 ):
-    if not transaction.checkout_id:
-        return
-    checkout = cast(Checkout, transaction.checkout)
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     previous_charge_status = checkout_info.checkout.charge_status
@@ -279,8 +274,6 @@ def _transaction_amounts_for_checkout_updated(
     user: Optional["User"],
     app: Optional["App"],
 ):
-    from .tasks import automatic_checkout_completion_task
-
     checkout = checkout_info.checkout
 
     previous_charge_status_is_fully_paid = previous_charge_status in [
@@ -324,14 +317,3 @@ def _transaction_amounts_for_checkout_updated(
             checkout_info=checkout_info,
             lines=lines,
         )
-
-    channel = checkout_info.channel
-    if (
-        channel.automatically_complete_fully_paid_checkouts
-        and
-        # ensure that checkout completion is triggered only once
-        (not previous_authorize_status_is_full and current_authorize_status_is_full)
-    ):
-        user_id = user.id if user else None
-        app_id = app.id if app else None
-        automatic_checkout_completion_task.delay(checkout.pk, user_id, app_id)

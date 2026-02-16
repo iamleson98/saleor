@@ -1,9 +1,11 @@
 import django_filters
+import graphene
 
 from ...app import models
-from ...app.types import AppExtensionTarget, AppType
+from ...app.types import AppType
+from ..core.descriptions import ADDED_IN_322
 from ..core.filters import EnumFilter, ListObjectTypeFilter
-from .enums import AppExtensionMountEnum, AppExtensionTargetEnum, AppTypeEnum
+from .enums import AppTypeEnum
 
 
 def filter_app_search(qs, _, value):
@@ -18,15 +20,15 @@ def filter_app_type(qs, _, value):
     return qs
 
 
-def filter_app_extension_target(qs, _, value):
-    if value in [target for target, _ in AppExtensionTarget.CHOICES]:
-        qs = qs.filter(target=value)
+def filter_app_extension_mount_name(qs, _, value):
+    if value:
+        qs = qs.filter(mount__in=[v.lower() for v in value])
     return qs
 
 
-def filter_app_extension_mount(qs, _, value):
+def filter_app_extension_target_name(qs, _, value):
     if value:
-        qs = qs.filter(mount__in=value)
+        qs = qs.filter(target=value.lower())
     return qs
 
 
@@ -41,13 +43,16 @@ class AppFilter(django_filters.FilterSet):
 
 
 class AppExtensionFilter(django_filters.FilterSet):
-    mount = ListObjectTypeFilter(
-        input_class=AppExtensionMountEnum, method=filter_app_extension_mount
+    mountName = ListObjectTypeFilter(
+        input_class=graphene.String,
+        method=filter_app_extension_mount_name,
+        help_text="Plain-text mount name (case insensitive)" + ADDED_IN_322,
     )
-    target = EnumFilter(
-        input_class=AppExtensionTargetEnum, method=filter_app_extension_target
+    targetName = django_filters.CharFilter(
+        method=filter_app_extension_target_name,
+        help_text="Plain-text target name (case insensitive)" + ADDED_IN_322,
     )
 
     class Meta:
         model = models.AppExtension
-        fields = ["mount", "target"]
+        fields = ["mountName", "targetName"]

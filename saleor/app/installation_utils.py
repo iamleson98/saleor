@@ -28,7 +28,7 @@ from ..webhook.models import Webhook, WebhookEvent
 from .error_codes import AppErrorCode
 from .manifest_validations import clean_manifest_data
 from .models import App, AppExtension, AppInstallation
-from .types import AppExtensionTarget, AppType
+from .types import DEFAULT_APP_TARGET, AppType
 
 MAX_ICON_FILE_SIZE = 1024 * 1024 * 10  # 10MB
 
@@ -241,10 +241,10 @@ def install_app(app_installation: AppInstallation, activate: bool = False):
 
     app.permissions.set(app_installation.permissions.all())
     for extension_data in manifest_data.get("extensions", []):
-        # Manifest is already "clean" so values are snake case
+        # Manifest is already "clean" so values use serialization aliases (camelCase)
         options = extension_data.get("options", {})
-        new_tab_target = options.get("new_tab_target")
-        widget_target = options.get("widget_target")
+        new_tab_target = options.get("newTabTarget")
+        widget_target = options.get("widgetTarget")
 
         # Ensure proper extraction of the method values from the options
         http_target_method = None
@@ -268,8 +268,9 @@ def install_app(app_installation: AppInstallation, activate: bool = False):
             label=extension_data.get("label"),
             url=extension_data.get("url"),
             mount=extension_data.get("mount"),
-            target=extension_data.get("target", AppExtensionTarget.POPUP),
+            target=extension_data.get("target", DEFAULT_APP_TARGET),
             http_target_method=http_target_method,
+            settings=extension_data.get("options", {}),
         )
         extension.permissions.set(extension_data.get("permissions", []))
 

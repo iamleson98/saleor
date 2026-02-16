@@ -15,6 +15,8 @@ mutation CheckoutComplete($checkoutId: ID!) {
       userEmail
       status
       paymentStatus
+      authorizeStatus
+      chargeStatus
       isPaid
       isShippingRequired
       total {
@@ -64,11 +66,7 @@ mutation CheckoutComplete($checkoutId: ID!) {
       lines {
         id
         quantity
-        totalPrice {
-          gross {
-            amount
-          }
-        }
+        isGift
         unitPrice {
           gross {
             amount
@@ -100,6 +98,14 @@ mutation CheckoutComplete($checkoutId: ID!) {
           unit{
             amount
           }
+        }
+        totalPrice {
+          gross {
+            amount
+          }
+        }
+        variant {
+          id
         }
       }
       discounts {

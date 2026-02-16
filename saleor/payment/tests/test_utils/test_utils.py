@@ -3,6 +3,7 @@ import logging
 from decimal import Decimal
 from unittest.mock import patch
 
+import graphene
 import pytest
 from freezegun import freeze_time
 
@@ -10,6 +11,9 @@ from ....checkout import CheckoutAuthorizeStatus, calculations
 from ....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from ....order import OrderChargeStatus, OrderGrantedRefundStatus
 from ....plugins.manager import get_plugins_manager
+from ....webhook.event_types import WebhookEventSyncType
+from ....webhook.models import Webhook
+from ....webhook.transport.utils import generate_cache_key_for_webhook
 from ... import TransactionEventType
 from ...interface import (
     PaymentLineData,
@@ -122,14 +126,12 @@ def test_create_payment_lines_information_checkout_with_flat_rates(
     tax_configuration_flat_rates,
     default_tax_class,
     address,
-    shipping_method,
 ):
     # given
     tax_configuration_flat_rates.prices_entered_with_tax = False
     tax_configuration_flat_rates.save()
 
     checkout_with_items.shipping_address = address
-    checkout_with_items.shipping_method = shipping_method
     checkout_with_items.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -314,6 +316,77 @@ def test_create_transaction_event_from_request_and_webhook_response_with_psp_ref
     assert request_event.psp_reference == expected_psp_reference
     assert request_event.include_in_calculations is True
     assert TransactionEvent.objects.count() == 1
+
+
+def test_create_transaction_event_with_psp_reference_checkout_search_index_dirty_updated(
+    transaction_item_generator,
+    checkout,
+    app,
+):
+    # given
+
+    transaction = transaction_item_generator(checkout_id=checkout.pk)
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=Decimal(11.00),
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+    expected_psp_reference = "psp:122:222"
+    response_data = {"pspReference": expected_psp_reference}
+
+    checkout.search_index_dirty = False
+    checkout.save(update_fields=["search_index_dirty"])
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    request_event.refresh_from_db()
+    assert request_event.psp_reference == expected_psp_reference
+    assert request_event.include_in_calculations is True
+    assert TransactionEvent.objects.count() == 1
+    checkout.refresh_from_db()
+    assert checkout.search_index_dirty is True
+
+
+def test_create_transaction_event_with_missing_psp_reference_checkout_search_index_dirty_not_updated(
+    transaction_item_generator,
+    checkout,
+    app,
+):
+    # given
+    transaction = transaction_item_generator(checkout_id=checkout.pk)
+    amount = Decimal(11.00)
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=amount,
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+
+    checkout.search_index_dirty = False
+    checkout.save(update_fields=["search_index_dirty"])
+
+    response_data = {
+        "amount": amount,
+        "result": TransactionEventType.CHARGE_FAILURE.upper(),
+    }
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    request_event.refresh_from_db()
+    assert request_event.psp_reference is None
+    assert request_event.include_in_calculations is False
+    assert TransactionEvent.objects.count() == 2
+    checkout.refresh_from_db()
+    assert checkout.search_index_dirty is False
 
 
 @pytest.mark.parametrize(
@@ -922,63 +995,6 @@ def test_create_transaction_event_from_request_when_authorized_logs_warnning(
     mocked_automatic_checkout_completion_task.assert_not_called()
     assert mocked_logger.call_count == 1
     assert len(mocked_logger.call_args) == 2
-
-
-@patch("saleor.checkout.tasks.automatic_checkout_completion_task.delay")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
-def test_create_transaction_event_from_request_when_paid_triggers_checkout_completion(
-    mocked_checkout_fully_paid,
-    mocked_checkout_fully_authorized,
-    mocked_automatic_checkout_completion_task,
-    transaction_item_generator,
-    app,
-    checkout_with_prices,
-    plugins_manager,
-    django_capture_on_commit_callbacks,
-):
-    # given
-    checkout = checkout_with_prices
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
-
-    channel = checkout_info.channel
-    channel.automatically_complete_fully_paid_checkouts = True
-    channel.save(update_fields=["automatically_complete_fully_paid_checkouts"])
-
-    transaction = transaction_item_generator(checkout_id=checkout.pk)
-    request_event = TransactionEvent.objects.create(
-        type=TransactionEventType.CHARGE_REQUEST,
-        amount_value=checkout.total.gross.amount,
-        currency="USD",
-        transaction_id=transaction.id,
-    )
-
-    event_amount = checkout.total.gross.amount
-    event_type = TransactionEventType.CHARGE_SUCCESS
-
-    expected_psp_reference = "psp:122:222"
-
-    response_data = {
-        "pspReference": expected_psp_reference,
-        "amount": event_amount,
-        "result": event_type.upper(),
-    }
-
-    # when
-    with django_capture_on_commit_callbacks(execute=True):
-        create_transaction_event_from_request_and_webhook_response(
-            request_event, app, response_data
-        )
-
-    # then
-    checkout.refresh_from_db()
-    assert checkout.authorize_status == CheckoutAuthorizeStatus.FULL
-    mocked_checkout_fully_paid.assert_called_once_with(checkout, webhooks=set())
-    mocked_checkout_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-    mocked_automatic_checkout_completion_task.assert_called_once_with(
-        checkout.pk, None, app.id
-    )
 
 
 @pytest.mark.parametrize(
@@ -1815,6 +1831,249 @@ def test_create_transaction_event_from_request_and_webhook_updates_modified_at(
     checkout.refresh_from_db()
     assert transaction.modified_at == calculation_time
     assert checkout.last_transaction_modified_at == calculation_time
+
+
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_create_transaction_event_invalidate_stored_payment_methods_for_order(
+    cache_delete_mock,
+    customer_user,
+    app,
+    order_with_lines,
+    transaction_item_generator,
+    permission_manage_payments,
+):
+    # given
+    order = order_with_lines
+    order.user = customer_user
+    order.save(update_fields=["user_id"])
+
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, order_id=order.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=expected_amount,
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+    channel = order.channel
+    expected_payload = {
+        "user_id": graphene.Node.to_global_id("User", customer_user.pk),
+        "channel_slug": channel.slug,
+    }
+    cache_key = generate_cache_key_for_webhook(
+        expected_payload,
+        webhook.target_url,
+        WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+        app.id,
+    )
+
+    response_data = {
+        "pspReference": expected_psp_reference,
+        "amount": expected_amount,
+        "result": TransactionEventType.CHARGE_SUCCESS.upper(),
+        "actions": ["CHARGE", "REFUND"],
+    }
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    cache_delete_mock.assert_called_once_with(cache_key)
+
+
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_create_transaction_event_invalidate_stored_payment_methods_for_checkout(
+    cache_delete_mock,
+    customer_user,
+    app,
+    checkout_with_items,
+    transaction_item_generator,
+    permission_manage_payments,
+):
+    # given
+    checkout = checkout_with_items
+    checkout.user = customer_user
+    checkout.save(update_fields=["user_id"])
+
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, checkout_id=checkout.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=expected_amount,
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+
+    channel = checkout.channel
+    expected_payload = {
+        "user_id": graphene.Node.to_global_id("User", customer_user.pk),
+        "channel_slug": channel.slug,
+    }
+    cache_key = generate_cache_key_for_webhook(
+        expected_payload,
+        webhook.target_url,
+        WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+        app.id,
+    )
+
+    response_data = {
+        "pspReference": expected_psp_reference,
+        "amount": expected_amount,
+        "result": TransactionEventType.CHARGE_SUCCESS.upper(),
+        "actions": ["CHARGE", "REFUND"],
+    }
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    cache_delete_mock.assert_called_once_with(cache_key)
+
+
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_create_transaction_event_stored_payment_methods_not_invalidated_for_order(
+    cache_delete_mock,
+    customer_user,
+    app,
+    order_with_lines,
+    transaction_item_generator,
+    permission_manage_payments,
+):
+    # given
+    order = order_with_lines
+    order.user = customer_user
+    order.save(update_fields=["user_id"])
+
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, order_id=order.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=expected_amount,
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+
+    response_data = {
+        "pspReference": expected_psp_reference,
+        "amount": expected_amount,
+        "result": TransactionEventType.CHARGE_FAILURE.upper(),
+        "actions": ["CHARGE", "REFUND"],
+    }
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    cache_delete_mock.assert_not_called()
+
+
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_create_transaction_event_stored_payment_methods_not_invalidated_for_checkout(
+    cache_delete_mock,
+    customer_user,
+    app,
+    checkout_with_items,
+    transaction_item_generator,
+    permission_manage_payments,
+):
+    # given
+    checkout = checkout_with_items
+    checkout.user = customer_user
+    checkout.save(update_fields=["user_id"])
+
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, checkout_id=checkout.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    request_event = TransactionEvent.objects.create(
+        type=TransactionEventType.CHARGE_REQUEST,
+        amount_value=expected_amount,
+        currency="USD",
+        transaction_id=transaction.id,
+    )
+
+    response_data = {
+        "pspReference": expected_psp_reference,
+        "amount": expected_amount,
+        "result": TransactionEventType.CHARGE_FAILURE.upper(),
+        "actions": ["CHARGE", "REFUND"],
+    }
+
+    # when
+    create_transaction_event_from_request_and_webhook_response(
+        request_event, app, response_data
+    )
+
+    # then
+    cache_delete_mock.assert_not_called()
 
 
 def test_recalculate_refundable_for_checkout_with_request_refund(

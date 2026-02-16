@@ -1,10 +1,8 @@
 import pytest
 
 from .....app.models import AppExtension
-from .....app.types import AppExtensionMount, AppExtensionTarget
 from .....core.jwt import jwt_decode
 from ....tests.utils import assert_no_permission, get_graphql_content
-from ...enums import AppExtensionMountEnum, AppExtensionTargetEnum
 
 QUERY_APP_EXTENSIONS = """
 query ($filter: AppExtensionFilterInput){
@@ -13,23 +11,11 @@ query ($filter: AppExtensionFilterInput){
       node{
         label
         url
-        mount
-        target
+        mountName
+        targetName
+        settings
         id
         accessToken
-        options {
-          ... on AppExtensionOptionsWidget{
-            widgetTarget {
-              method
-            }
-          }
-          ...on AppExtensionOptionsNewTab {
-            newTabTarget{
-              method
-            }
-          }
-
-        }
         permissions{
           code
         }
@@ -46,9 +32,9 @@ def test_app_extensions(staff_api_client, app, permission_manage_products):
         app=app,
         label="Create product with App",
         url="https://www.example.com/app-product",
-        mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+        mount="product_overview_more_actions",
         http_target_method="POST",
-        target=AppExtensionTarget.WIDGET,
+        target="widget",
     )
     app_extension.permissions.add(permission_manage_products)
     variables = {}
@@ -70,7 +56,7 @@ def test_app_extensions(staff_api_client, app, permission_manage_products):
     extension_data = extensions_data[0]["node"]
     assert app_extension.label == extension_data["label"]
     assert app_extension.url == extension_data["url"]
-    assert app_extension.mount == extension_data["mount"].lower()
+    assert app_extension.mount == extension_data["mountName"].lower()
 
     assert app_extension.permissions.count() == 1
     assert len(extension_data["permissions"]) == 1
@@ -81,7 +67,8 @@ def test_app_extensions(staff_api_client, app, permission_manage_products):
     decode_token = jwt_decode(extension_data["accessToken"])
     decode_token["permissions"] = ["MANAGE_PRODUCTS"]
 
-    assert extension_data["options"]["widgetTarget"]["method"] == "POST"
+    assert extension_data["mountName"] == "PRODUCT_OVERVIEW_MORE_ACTIONS"
+    assert extension_data["targetName"] == "WIDGET"
 
 
 def test_app_extensions_app_not_active(
@@ -94,7 +81,7 @@ def test_app_extensions_app_not_active(
         app=app,
         label="Create product with App",
         url="https://www.example.com/app-product",
-        mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+        mount="product_overview_more_actions",
     )
     app_extension.permissions.add(permission_manage_products)
     variables = {}
@@ -121,7 +108,7 @@ def test_app_extensions_app_removed_app(
         app=removed_app,
         label="Create product with App",
         url="https://www.example.com/app-product",
-        mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+        mount="product_overview_more_actions",
     )
     app_extension.permissions.add(permission_manage_products)
     variables = {}
@@ -148,7 +135,7 @@ def test_app_extensions_user_not_staff(
         app=app,
         label="Create product with App",
         url="https://www.example.com/app-product",
-        mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+        mount="product_overview_more_actions",
     )
     app_extension.permissions.add(permission_manage_products)
     variables = {}
@@ -167,25 +154,25 @@ def test_app_extensions_user_not_staff(
     ("filter", "expected_count"),
     [
         ({}, 4),
-        ({"target": AppExtensionTargetEnum.APP_PAGE.name}, 1),
-        ({"target": AppExtensionTargetEnum.POPUP.name}, 3),
-        ({"mount": [AppExtensionMountEnum.PRODUCT_OVERVIEW_MORE_ACTIONS.name]}, 1),
-        ({"mount": [AppExtensionMountEnum.PRODUCT_OVERVIEW_CREATE.name]}, 2),
+        ({"targetName": "APP_PAGE"}, 1),
+        ({"targetName": "POPUP"}, 3),
+        ({"mountName": ["PRODUCT_OVERVIEW_MORE_ACTIONS"]}, 1),
+        ({"mountName": ["PRODUCT_OVERVIEW_CREATE"]}, 2),
         (
             {
-                "mount": [
-                    AppExtensionMountEnum.PRODUCT_OVERVIEW_CREATE.name,
-                    AppExtensionMountEnum.PRODUCT_OVERVIEW_MORE_ACTIONS.name,
+                "mountName": [
+                    "PRODUCT_OVERVIEW_CREATE",
+                    "PRODUCT_OVERVIEW_MORE_ACTIONS",
                 ]
             },
             3,
         ),
         (
             {
-                "target": AppExtensionTargetEnum.APP_PAGE.name,
-                "mount": [
-                    AppExtensionMountEnum.PRODUCT_OVERVIEW_CREATE.name,
-                    AppExtensionMountEnum.PRODUCT_OVERVIEW_MORE_ACTIONS.name,
+                "targetName": "APP_PAGE",
+                "mountName": [
+                    "PRODUCT_OVERVIEW_CREATE",
+                    "PRODUCT_OVERVIEW_MORE_ACTIONS",
                 ],
             },
             1,
@@ -202,27 +189,27 @@ def test_app_extensions_with_filter(
                 app=app,
                 label="Create product with App1",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
-                target=AppExtensionTarget.APP_PAGE,
+                mount="product_overview_more_actions",
+                target="app_page",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App2",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_DETAILS_MORE_ACTIONS,
-                target=AppExtensionTarget.POPUP,
+                mount="product_details_more_actions",
+                target="popup",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App3",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_CREATE,
+                mount="product_overview_create",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App4",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_CREATE,
+                mount="product_overview_create",
             ),
         ]
     )
@@ -238,6 +225,190 @@ def test_app_extensions_with_filter(
     # then
     content = get_graphql_content(response)
 
+    extensions_data = content["data"]["appExtensions"]["edges"]
+
+    assert len(extensions_data) == expected_count
+
+
+@pytest.mark.parametrize(
+    ("filter", "expected_count"),
+    [
+        ({}, 4),
+        ({"targetName": "APP_PAGE"}, 1),
+        ({"targetName": "POPUP"}, 3),
+        ({"mountName": ["PRODUCT_OVERVIEW_MORE_ACTIONS"]}, 1),
+        ({"mountName": ["PRODUCT_OVERVIEW_CREATE"]}, 2),
+        ({"mountName": ["PRODUCT_DETAILS_MORE_ACTIONS"]}, 1),
+        (
+            {
+                "mountName": [
+                    "PRODUCT_OVERVIEW_CREATE",
+                    "PRODUCT_OVERVIEW_MORE_ACTIONS",
+                ]
+            },
+            3,
+        ),
+        (
+            {
+                "mountName": [
+                    "PRODUCT_OVERVIEW_CREATE",
+                    "PRODUCT_DETAILS_MORE_ACTIONS",
+                ]
+            },
+            3,
+        ),
+        (
+            {
+                "targetName": "APP_PAGE",
+                "mountName": ["PRODUCT_OVERVIEW_MORE_ACTIONS"],
+            },
+            1,
+        ),
+        (
+            {
+                "targetName": "POPUP",
+                "mountName": ["PRODUCT_OVERVIEW_CREATE"],
+            },
+            2,
+        ),
+        (
+            {
+                "targetName": "APP_PAGE",
+                "mountName": ["PRODUCT_DETAILS_MORE_ACTIONS"],
+            },
+            0,
+        ),
+        (
+            {
+                "targetName": "POPUP",
+                "mountName": [
+                    "PRODUCT_OVERVIEW_CREATE",
+                    "PRODUCT_DETAILS_MORE_ACTIONS",
+                ],
+            },
+            3,
+        ),
+    ],
+)
+def test_app_extensions_with_name_filter(
+    filter, expected_count, staff_api_client, app, permission_manage_products
+):
+    # given
+    AppExtension.objects.bulk_create(
+        [
+            AppExtension(
+                app=app,
+                label="Create product with App1",
+                url="https://www.example.com/app-product",
+                mount="product_overview_more_actions",
+                target="app_page",
+            ),
+            AppExtension(
+                app=app,
+                label="Create product with App2",
+                url="https://www.example.com/app-product",
+                mount="product_details_more_actions",
+                target="popup",
+            ),
+            AppExtension(
+                app=app,
+                label="Create product with App3",
+                url="https://www.example.com/app-product",
+                mount="product_overview_create",
+            ),
+            AppExtension(
+                app=app,
+                label="Create product with App4",
+                url="https://www.example.com/app-product",
+                mount="product_overview_create",
+            ),
+        ]
+    )
+    variables = {"filter": filter}
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_APP_EXTENSIONS,
+        variables,
+    )
+
+    # then
+    content = get_graphql_content(response)
+
+    extensions_data = content["data"]["appExtensions"]["edges"]
+
+    assert len(extensions_data) == expected_count
+
+
+# Behavior specific to 3.22 which handles backwards compatibility
+@pytest.mark.parametrize(
+    ("mount_value", "target_value", "filter", "expected_count"),
+    [
+        # Test with lowercase values in database, uppercase input
+        (
+            "order_details_widgets",
+            "widget",
+            {"mountName": ["ORDER_DETAILS_WIDGETS"]},
+            1,
+        ),
+        ("order_details_widgets", "widget", {"targetName": "WIDGET"}, 1),
+        (
+            "order_details_widgets",
+            "widget",
+            {"mountName": ["ORDER_DETAILS_WIDGETS"], "targetName": "WIDGET"},
+            1,
+        ),
+        # Test with lowercase values in database, lowercase input
+        (
+            "order_details_widgets",
+            "widget",
+            {"mountName": ["order_details_widgets"]},
+            1,
+        ),
+        ("order_details_widgets", "widget", {"targetName": "widget"}, 1),
+        (
+            "order_details_widgets",
+            "widget",
+            {"mountName": ["order_details_widgets"], "targetName": "widget"},
+            1,
+        ),
+        # Test mixed case input
+        (
+            "order_details_widgets",
+            "widget",
+            {"mountName": ["Order_Details_Widgets"]},
+            1,
+        ),
+        ("order_details_widgets", "widget", {"targetName": "WiDgEt"}, 1),
+    ],
+)
+def test_app_extensions_case_insensitive_filter(
+    mount_value,
+    target_value,
+    filter,
+    expected_count,
+    staff_api_client,
+    app,
+):
+    # given
+    AppExtension.objects.create(
+        app=app,
+        label="Test Extension",
+        url="https://www.example.com/app-extension",
+        mount=mount_value,
+        target=target_value,
+        http_target_method="POST",
+    )
+    variables = {"filter": filter}
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_APP_EXTENSIONS,
+        variables,
+    )
+
+    # then
+    content = get_graphql_content(response)
     extensions_data = content["data"]["appExtensions"]["edges"]
 
     assert len(extensions_data) == expected_count

@@ -34,11 +34,7 @@ from ...tax.dataloaders import (
     TaxConfigurationByChannelId,
     TaxConfigurationPerCountryByTaxConfigurationIDLoader,
 )
-from ..dataloaders import (
-    ProductVariantsByProductIdLoader,
-    VariantChannelListingByVariantIdAndChannelSlugLoader,
-    VariantsChannelListingByProductIdAndChannelSlugLoader,
-)
+from ..dataloaders.products import VariantChannelListingsByProductIdLoader
 
 
 class Margin(BaseObjectType):
@@ -135,79 +131,55 @@ class ProductChannelListing(ModelObjectType[models.ProductChannelListing]):
     @staticmethod
     @traced_resolver
     def resolve_purchase_cost(root: models.ProductChannelListing, info):
-        channel = ChannelByIdLoader(info.context).load(root.channel_id)
+        def calculate_margin_with_channel_listings(
+            variant_channel_listings: list[models.ProductVariantChannelListing | None],
+        ):
+            existing_listings: list[models.ProductVariantChannelListing] = []
+            for listing in variant_channel_listings:
+                if not listing:
+                    continue
+                if listing.channel_id == root.channel_id:
+                    existing_listings.append(listing)
 
-        def calculate_margin_with_variants(variants):
-            def calculate_margin_with_channel(channel):
-                def calculate_margin_with_channel_listings(
-                    variant_channel_listings: list[
-                        models.ProductVariantChannelListing | None
-                    ],
-                ):
-                    existing_listings = list(filter(None, variant_channel_listings))
-                    if not existing_listings:
-                        return None
+            if not existing_listings:
+                return None
 
-                    has_variants = True if len(variant_ids_channel_slug) > 0 else False
-                    purchase_cost, _margin = get_product_costs_data(
-                        existing_listings, has_variants, root.currency
-                    )
-                    return purchase_cost
-
-                variant_ids_channel_slug = [
-                    (variant.id, channel.slug) for variant in variants
-                ]
-                return (
-                    VariantChannelListingByVariantIdAndChannelSlugLoader(info.context)
-                    .load_many(variant_ids_channel_slug)
-                    .then(calculate_margin_with_channel_listings)
-                )
-
-            return channel.then(calculate_margin_with_channel)
+            purchase_cost, _margin = get_product_costs_data(
+                existing_listings, root.currency
+            )
+            return purchase_cost
 
         return (
-            ProductVariantsByProductIdLoader(info.context)
+            VariantChannelListingsByProductIdLoader(info.context)
             .load(root.product_id)
-            .then(calculate_margin_with_variants)
+            .then(calculate_margin_with_channel_listings)
         )
 
     @staticmethod
     @traced_resolver
     def resolve_margin(root: models.ProductChannelListing, info):
-        channel = ChannelByIdLoader(info.context).load(root.channel_id)
+        def calculate_margin_with_channel_listings(
+            variant_channel_listings: list[models.ProductVariantChannelListing | None],
+        ):
+            existing_listings: list[models.ProductVariantChannelListing] = []
+            for listing in variant_channel_listings:
+                if not listing:
+                    continue
+                if listing.channel_id == root.channel_id:
+                    existing_listings.append(listing)
 
-        def calculate_margin_with_variants(variants):
-            def calculate_margin_with_channel(channel):
-                def calculate_margin_with_channel_listings(
-                    variant_channel_listings: list[
-                        models.ProductVariantChannelListing | None
-                    ],
-                ):
-                    existing_listings = list(filter(None, variant_channel_listings))
-                    if not existing_listings:
-                        return None
+            if not existing_listings:
+                return None
 
-                    has_variants = True if len(variant_ids_channel_slug) > 0 else False
-                    _purchase_cost, margin = get_product_costs_data(
-                        existing_listings, has_variants, root.currency
-                    )
-                    return Margin(margin[0], margin[1])
-
-                variant_ids_channel_slug = [
-                    (variant.id, channel.slug) for variant in variants
-                ]
-                return (
-                    VariantChannelListingByVariantIdAndChannelSlugLoader(info.context)
-                    .load_many(variant_ids_channel_slug)
-                    .then(calculate_margin_with_channel_listings)
-                )
-
-            return channel.then(calculate_margin_with_channel)
+            _purchase_cost, margin = get_product_costs_data(
+                existing_listings, root.currency
+            )
+            return Margin(margin[0], margin[1])
 
         return (
-            ProductVariantsByProductIdLoader(info.context)
+            VariantChannelListingsByProductIdLoader(info.context)
             .load(root.product_id)
-            .then(calculate_margin_with_variants)
+            .then(calculate_margin_with_channel_listings)
         )
 
     @staticmethod
@@ -229,7 +201,16 @@ class ProductChannelListing(ModelObjectType[models.ProductChannelListing]):
                 def load_variant_channel_listings(data):
                     tax_configs_per_country = data
 
-                    def load_default_tax_rate(variants_channel_listing):
+                    def load_default_tax_rate(
+                        variants_channel_listings: list[
+                            models.ProductVariantChannelListing
+                        ],
+                    ):
+                        variants_channel_listing = []
+                        for listing in variants_channel_listings:
+                            if listing and listing.channel_id == channel.id:
+                                variants_channel_listing.append(listing)
+
                         if not variants_channel_listing:
                             return None
 
@@ -289,8 +270,8 @@ class ProductChannelListing(ModelObjectType[models.ProductChannelListing]):
                         )
 
                     return (
-                        VariantsChannelListingByProductIdAndChannelSlugLoader(context)
-                        .load((root.product_id, channel.slug))
+                        VariantChannelListingsByProductIdLoader(context)
+                        .load(root.product_id)
                         .then(load_default_tax_rate)
                     )
 
@@ -339,7 +320,9 @@ class ProductVariantChannelListing(
     cost_price = graphene.Field(Money, description="Cost price of the variant.")
     prior_price = graphene.Field(
         Money,
-        description="Prior price of the variant used for discount calculations."
+        description="Previous price of the variant in channel. Useful for providing "
+        "promotion information required by customer protection laws such as EU Omnibus "
+        "directive.\n\n Warning: This field is not updated automatically. Use Channel Listings mutation to update it manually."
         + ADDED_IN_321,
     )
     margin = PermissionsField(

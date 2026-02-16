@@ -1347,7 +1347,7 @@ def test_order_lines_create_triggers_webhooks(
     mocked_send_webhook_request_async.assert_called_once_with(
         kwargs={"event_delivery_id": order_delivery.id, "telemetry_context": ANY},
         queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
-        MessageGroupId="example.com:saleor.app.additional",
+        MessageGroupId="example.com:saleorappadditional",
     )
 
     # confirm each sync webhook was called without saving event delivery
@@ -1505,7 +1505,9 @@ def test_order_lines_create_apply_once_per_order_voucher_new_cheapest_line(
     order.voucher_code = voucher.codes.first().code
     order.save(update_fields=["voucher_code", "voucher_id", "status"])
     create_or_update_voucher_discount_objects_for_order(order)
-    order, lines = fetch_order_prices_if_expired(order, plugins_manager, None, True)
+    order, lines = fetch_order_prices_if_expired(
+        order, plugins_manager, None, None, True
+    ).get()
 
     line_1, line_2 = lines
     assert line_1.undiscounted_base_unit_price < line_2.undiscounted_base_unit_price
@@ -1704,7 +1706,9 @@ def test_order_lines_create_apply_once_per_order_voucher_existing_variant(
     order.voucher_code = voucher.codes.first().code
     order.save(update_fields=["voucher_code", "voucher_id", "status"])
     create_or_update_voucher_discount_objects_for_order(order)
-    order, lines = fetch_order_prices_if_expired(order, plugins_manager, None, True)
+    order, lines = fetch_order_prices_if_expired(
+        order, plugins_manager, None, None, True
+    ).get()
 
     line_1, line_2 = lines
     assert line_1.undiscounted_base_unit_price < line_2.undiscounted_base_unit_price
@@ -1869,7 +1873,9 @@ def test_order_lines_create_specific_product_voucher_existing_variant(
     order.voucher_code = voucher.codes.first().code
     order.save(update_fields=["voucher_code", "voucher_id", "status"])
     create_or_update_voucher_discount_objects_for_order(order)
-    order, lines = fetch_order_prices_if_expired(order, plugins_manager, None, True)
+    order, lines = fetch_order_prices_if_expired(
+        order, plugins_manager, None, None, True
+    ).get()
 
     line_1, line_2 = lines
     initial_unit_discount = (

@@ -598,6 +598,7 @@ class PluginsManager(PaymentInterface):
     def get_order_line_tax_rate(
         self,
         order: "Order",
+        order_line: "OrderLine",
         product: "Product",
         variant: "ProductVariant",
         address: Optional["Address"],
@@ -609,6 +610,7 @@ class PluginsManager(PaymentInterface):
             "get_order_line_tax_rate",
             default_value,
             order,
+            order_line,
             product,
             variant,
             address,
@@ -646,16 +648,6 @@ class PluginsManager(PaymentInterface):
             app_identifier,
             pregenerated_subscription_payloads=pregenerated_subscription_payloads,
             channel_slug=checkout_info.channel.slug,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def get_taxes_for_order(self, order: "Order", app_identifier) -> TaxData | None:
-        return self.__run_tax_method_until_first_success(
-            "get_taxes_for_order",
-            order,
-            app_identifier,
-            channel_slug=order.channel.slug,
         )
 
     def __run_tax_method_until_first_success(
@@ -2587,6 +2579,7 @@ class PluginsManager(PaymentInterface):
     def list_shipping_methods_for_checkout(
         self,
         checkout: "Checkout",
+        built_in_shipping_methods: list["ShippingMethodData"],
         channel_slug: str | None = None,
         active_only: bool = True,
     ) -> list["ShippingMethodData"]:
@@ -2602,7 +2595,9 @@ class PluginsManager(PaymentInterface):
         for plugin in shipping_plugins:
             shipping_methods.extend(
                 # https://github.com/python/mypy/issues/9975
-                getattr(plugin, "get_shipping_methods_for_checkout")(checkout, None)
+                getattr(plugin, "get_shipping_methods_for_checkout")(
+                    checkout, built_in_shipping_methods, None
+                )
             )
         return list(
             filter(
@@ -2610,22 +2605,6 @@ class PluginsManager(PaymentInterface):
                 shipping_methods,
             )
         )
-
-    def get_shipping_method(
-        self,
-        shipping_method_id: str,
-        checkout: Optional["Checkout"] = None,
-        channel_slug: str | None = None,
-    ):
-        if checkout:
-            methods = {
-                method.id: method
-                for method in self.list_shipping_methods_for_checkout(
-                    checkout=checkout, channel_slug=channel_slug
-                )
-            }
-            return methods.get(shipping_method_id)
-        return None
 
     def list_external_authentications(self, active_only: bool = True) -> list[dict]:
         auth_basic_method = "external_obtain_access_tokens"
@@ -2884,24 +2863,6 @@ class PluginsManager(PaymentInterface):
         plugin = self.get_plugin(plugin_id)
         return self.__run_method_on_single_plugin(
             plugin, "external_verify", default_value, data, request
-        )
-
-    def excluded_shipping_methods_for_order(
-        self,
-        order: "Order",
-        available_shipping_methods: list["ShippingMethodData"],
-    ) -> list[ExcludedShippingMethod]:
-        default_value: list[ExcludedShippingMethod] = []
-
-        if not available_shipping_methods:
-            return default_value
-
-        return self.__run_method_on_plugins(
-            "excluded_shipping_methods_for_order",
-            default_value,
-            order,
-            available_shipping_methods,
-            channel_slug=order.channel.slug,
         )
 
     def excluded_shipping_methods_for_checkout(

@@ -316,7 +316,7 @@ type Query {
   digitalContent(
     """ID of the digital content."""
     id: ID!
-  ): DigitalContent @doc(category: "Products")
+  ): DigitalContent @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """
   List of digital content.
@@ -339,7 +339,7 @@ type Query {
     Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
     """
     last: Int
-  ): DigitalContentCountableConnection @doc(category: "Products")
+  ): DigitalContentCountableConnection @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """List of the shop's categories."""
   categories(
@@ -661,7 +661,7 @@ type Query {
   """
   Look up a transaction by ID.
   
-  Requires one of the following permissions: HANDLE_PAYMENTS.
+  Requires one of the following permissions: HANDLE_PAYMENTS, MANAGE_ORDERS.
   """
   transaction(
     """
@@ -674,6 +674,34 @@ type Query {
     """
     token: UUID
   ): TransactionItem @doc(category: "Payments")
+
+  """
+  List of transactions. For apps with `MANAGE_ORDERS` permission, returns all transactions. For apps with just `HANDLE_PAYMENTS` permission, returns only transactions created by that app. For staff users, returns transactions from orders and checkouts in channels they have access to.
+  
+  Added in Saleor 3.22.
+  
+  Requires one of the following permissions: HANDLE_PAYMENTS, MANAGE_ORDERS.
+  """
+  transactions(
+    """Where filtering options for transactions."""
+    where: TransactionWhereInput
+
+    """Return the elements in the list that come before the specified cursor."""
+    before: String
+
+    """Return the elements in the list that come after the specified cursor."""
+    after: String
+
+    """
+    Retrieve the first n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    first: Int
+
+    """
+    Retrieve the last n elements from the list. Note that the system only allows fetching a maximum of 100 objects in a single query.
+    """
+    last: Int
+  ): TransactionCountableConnection @doc(category: "Payments")
 
   """Look up a page by ID or slug."""
   page(
@@ -1662,7 +1690,7 @@ type Query {
     """External ID of the user."""
     externalReference: String
   ): User @doc(category: "Users")
-  _entities(representations: [_Any]): [_Entity]
+  _entities(representations: [_Any!]!): [_Entity]
   _service: _Service
 }
 
@@ -3025,122 +3053,35 @@ type AppExtension implements Node @doc(category: "Apps") {
   """URL of a view where extension's iframe is placed."""
   url: String!
 
-  """Place where given extension will be mounted."""
-  mount: AppExtensionMountEnum!
+  """
+  Name of the extension mount point in the dashboard. Value returned in UPPERCASE.
+  
+  Added in Saleor 3.22.
+  """
+  mountName: String!
 
-  """Type of way how app extension will be opened."""
-  target: AppExtensionTargetEnum!
+  """
+  Name of the extension target in the dashboard. Value returned in UPPERCASE.
+  
+  Added in Saleor 3.22.
+  """
+  targetName: String!
+
+  """
+  App extension settings.
+  
+  Added in Saleor 3.22.
+  """
+  settings: JSON!
 
   """The app assigned to app extension."""
   app: App!
 
   """JWT token used to authenticate by third-party app extension."""
   accessToken: String
-
-  """
-  App extension options.
-  
-  Added in Saleor 3.22.
-  """
-  options: AppExtensionPossibleOptions
 }
 
-"""All places where app extension can be mounted."""
-enum AppExtensionMountEnum @doc(category: "Apps") {
-  CATEGORY_OVERVIEW_CREATE
-  CATEGORY_OVERVIEW_MORE_ACTIONS
-  CATEGORY_DETAILS_MORE_ACTIONS
-  COLLECTION_OVERVIEW_CREATE
-  COLLECTION_OVERVIEW_MORE_ACTIONS
-  COLLECTION_DETAILS_MORE_ACTIONS
-  COLLECTION_DETAILS_WIDGETS
-  GIFT_CARD_OVERVIEW_CREATE
-  GIFT_CARD_OVERVIEW_MORE_ACTIONS
-  GIFT_CARD_DETAILS_MORE_ACTIONS
-  GIFT_CARD_DETAILS_WIDGETS
-  CUSTOMER_OVERVIEW_CREATE
-  CUSTOMER_OVERVIEW_MORE_ACTIONS
-  CUSTOMER_DETAILS_MORE_ACTIONS
-  CUSTOMER_DETAILS_WIDGETS
-  PRODUCT_OVERVIEW_CREATE
-  PRODUCT_OVERVIEW_MORE_ACTIONS
-  PRODUCT_DETAILS_MORE_ACTIONS
-  PRODUCT_DETAILS_WIDGETS
-  NAVIGATION_CATALOG
-  NAVIGATION_ORDERS
-  NAVIGATION_CUSTOMERS
-  NAVIGATION_DISCOUNTS
-  NAVIGATION_TRANSLATIONS
-  NAVIGATION_PAGES
-  ORDER_DETAILS_MORE_ACTIONS
-  ORDER_OVERVIEW_CREATE
-  ORDER_OVERVIEW_MORE_ACTIONS
-  ORDER_DETAILS_WIDGETS
-  DRAFT_ORDER_DETAILS_MORE_ACTIONS
-  DRAFT_ORDER_OVERVIEW_CREATE
-  DRAFT_ORDER_OVERVIEW_MORE_ACTIONS
-  DRAFT_ORDER_DETAILS_WIDGETS
-  DISCOUNT_DETAILS_MORE_ACTIONS
-  DISCOUNT_OVERVIEW_CREATE
-  DISCOUNT_OVERVIEW_MORE_ACTIONS
-  VOUCHER_DETAILS_MORE_ACTIONS
-  VOUCHER_OVERVIEW_CREATE
-  VOUCHER_OVERVIEW_MORE_ACTIONS
-  VOUCHER_DETAILS_WIDGETS
-  PAGE_DETAILS_MORE_ACTIONS
-  PAGE_OVERVIEW_CREATE
-  PAGE_OVERVIEW_MORE_ACTIONS
-  PAGE_TYPE_OVERVIEW_CREATE
-  PAGE_TYPE_OVERVIEW_MORE_ACTIONS
-  PAGE_TYPE_DETAILS_MORE_ACTIONS
-  MENU_OVERVIEW_CREATE
-  MENU_OVERVIEW_MORE_ACTIONS
-  MENU_DETAILS_MORE_ACTIONS
-}
-
-"""
-All available ways of opening an app extension.
-
-    POPUP - app's extension will be mounted as a popup window
-    APP_PAGE - redirect to app's page
-"""
-enum AppExtensionTargetEnum @doc(category: "Apps") {
-  POPUP
-  APP_PAGE
-  NEW_TAB
-  WIDGET
-}
-
-union AppExtensionPossibleOptions = AppExtensionOptionsWidget | AppExtensionOptionsNewTab
-
-"""Represents the options for an app extension."""
-type AppExtensionOptionsWidget @doc(category: "Apps") {
-  """Options for displaying a Widget"""
-  widgetTarget: WidgetTargetOptions
-}
-
-"""Represents the WIDGET target options for an app extension."""
-type WidgetTargetOptions @doc(category: "Apps") {
-  """HTTP method for Widget target (GET or POST)"""
-  method: HttpMethod!
-}
-
-enum HttpMethod {
-  POST
-  GET
-}
-
-"""Represents the options for an app extension."""
-type AppExtensionOptionsNewTab @doc(category: "Apps") {
-  """Options controlling behavior of the NEW_TAB extension target"""
-  newTabTarget: NewTabTargetOptions
-}
-
-"""Represents the NEW_TAB target options for an app extension."""
-type NewTabTargetOptions @doc(category: "Apps") {
-  """HTTP method for New Tab target (GET or POST)"""
-  method: HttpMethod!
-}
+scalar JSON
 
 """Represents the app's brand data."""
 type AppBrand @doc(category: "Apps") {
@@ -5273,10 +5214,10 @@ type ShippingMethod implements Node & ObjectWithMetadata @doc(category: "Shippin
   price: Money!
 
   """Maximum order price for this shipping method."""
-  maximumOrderPrice: Money
+  maximumOrderPrice: Money @deprecated
 
   """Minimal order price for this shipping method."""
-  minimumOrderPrice: Money
+  minimumOrderPrice: Money @deprecated
 
   """Describes if this shipping method is active and can be selected."""
   active: Boolean!
@@ -5422,6 +5363,27 @@ type CheckoutSettings {
   Added in Saleor 3.20.
   """
   automaticallyCompleteFullyPaidCheckouts: Boolean!
+
+  """
+  The time in minutes to wait after a checkout is fully paid before automatically completing it.
+  
+  Added in Saleor 3.22.
+  """
+  automaticCompletionDelay: Minute
+
+  """
+  The date time defines the earliest checkout creation date on which fully paid checkouts can begin to be automatically completed. 
+  
+  Added in Saleor 3.22.
+  """
+  automaticCompletionCutOffDate: DateTime
+
+  """
+  Default to `true`. Determines whether gift cards can be attached to a Checkout via `addPromoCode` mutation. Usage of this mutation with gift cards is deprecated.
+  
+  Added in Saleor 3.23.
+  """
+  allowLegacyGiftCardUse: Boolean!
 }
 
 """Represents the channel-specific payment settings."""
@@ -5770,13 +5732,13 @@ type Product implements Node & ObjectWithMetadata & ObjectWithAttributes @doc(ca
   """Get a single product media by ID."""
   mediaById(
     """ID of a product media."""
-    id: ID
+    id: ID!
   ): ProductMedia
 
   """Get a single product image by ID."""
   imageById(
     """ID of a product image."""
-    id: ID
+    id: ID!
   ): ProductImage @deprecated(reason: "Use the `mediaById` field instead.")
 
   """Get a single variant by SKU or ID."""
@@ -5960,13 +5922,13 @@ type Attribute implements Node & ObjectWithMetadata @doc(category: "Attributes")
   ): [ReferenceType!]
 
   """Name of an attribute displayed in the interface."""
-  name: String
+  name: String!
 
   """Internal representation of an attribute name."""
-  slug: String
+  slug: String!
 
   """The attribute type."""
-  type: AttributeTypeEnum
+  type: AttributeTypeEnum!
 
   """The unit of attribute values."""
   unit: MeasurementUnitsEnum
@@ -6171,7 +6133,7 @@ type ProductType implements Node & ObjectWithMetadata @doc(category: "Products")
   slug: String!
 
   """Whether the product type has variants."""
-  hasVariants: Boolean!
+  hasVariants: Boolean! @deprecated(reason: "This is a leftover from the past Simple/Configurable product distinction. Products can have multiple variants regardless of this setting. ")
 
   """Whether shipping is required for this product type."""
   isShippingRequired: Boolean!
@@ -7716,7 +7678,9 @@ type ProductVariantChannelListing implements Node @doc(category: "Products") {
   costPrice: Money
 
   """
-  Prior price of the variant used for discount calculations.
+  Previous price of the variant in channel. Useful for providing promotion information required by customer protection laws such as EU Omnibus directive.
+  
+   Warning: This field is not updated automatically. Use Channel Listings mutation to update it manually.
   
   Added in Saleor 3.21.
   """
@@ -10124,6 +10088,13 @@ type Shop implements ObjectWithMetadata {
 
   """Charge taxes on shipping."""
   chargeTaxesOnShipping: Boolean! @deprecated(reason: "Use `ShippingMethodType.taxClass` to determine whether taxes are calculated for shipping methods; if a tax class is set, the taxes will be calculated, otherwise no tax rate will be applied.")
+
+  """
+  Use legacy update webhook emission. When enabled, update webhooks (e.g. `customerUpdated`,`productVariantUpdated`) are sent even when only metadata changes. When disabled, update webhooks are not sent for metadata-only changes; only metadata-specific webhooks (e.g., `customerMetadataUpdated`, `productVariantMetadataUpdated`) are sent.
+  
+  Added in Saleor 3.22.
+  """
+  useLegacyUpdateWebhookEmission: Boolean @deprecated
 }
 
 """
@@ -10582,13 +10553,20 @@ type Checkout implements Node & ObjectWithMetadata @doc(category: "Checkout") {
   shippingPrice: TaxedMoney! @webhookEventsInfo(asyncEvents: [], syncEvents: [CHECKOUT_CALCULATE_TAXES])
 
   """
+  The delivery method selected for this checkout.
+  
+  Added in Saleor 3.23.
+  """
+  delivery: Delivery
+
+  """
   The shipping method related with checkout.
   
   Triggers the following webhook events:
   - SHIPPING_LIST_METHODS_FOR_CHECKOUT (sync): Optionally triggered when cached external shipping methods are invalid.
   - CHECKOUT_FILTER_SHIPPING_METHODS (sync): Optionally triggered when cached filtered shipping methods are invalid.
   """
-  shippingMethod: ShippingMethod @webhookEventsInfo(asyncEvents: [], syncEvents: [SHIPPING_LIST_METHODS_FOR_CHECKOUT, CHECKOUT_FILTER_SHIPPING_METHODS]) @deprecated(reason: "Use `deliveryMethod` instead.")
+  shippingMethod: ShippingMethod @webhookEventsInfo(asyncEvents: [], syncEvents: [SHIPPING_LIST_METHODS_FOR_CHECKOUT, CHECKOUT_FILTER_SHIPPING_METHODS]) @deprecated(reason: "Use `delivery` instead.")
 
   """
   The delivery method selected for this checkout.
@@ -10597,7 +10575,7 @@ type Checkout implements Node & ObjectWithMetadata @doc(category: "Checkout") {
   - SHIPPING_LIST_METHODS_FOR_CHECKOUT (sync): Optionally triggered when cached external shipping methods are invalid.
   - CHECKOUT_FILTER_SHIPPING_METHODS (sync): Optionally triggered when cached filtered shipping methods are invalid.
   """
-  deliveryMethod: DeliveryMethod @webhookEventsInfo(asyncEvents: [], syncEvents: [SHIPPING_LIST_METHODS_FOR_CHECKOUT, CHECKOUT_FILTER_SHIPPING_METHODS])
+  deliveryMethod: DeliveryMethod @webhookEventsInfo(asyncEvents: [], syncEvents: [SHIPPING_LIST_METHODS_FOR_CHECKOUT, CHECKOUT_FILTER_SHIPPING_METHODS]) @deprecated(reason: "Use `delivery` instead.")
 
   """
   The price of the checkout before shipping, with taxes included.
@@ -10994,6 +10972,19 @@ The variant assigned to the checkout line is not available.Placing the order wil
 type CheckoutLineProblemVariantNotAvailable @doc(category: "Checkout") {
   """The line that has variant that is not available."""
   line: CheckoutLine!
+}
+
+"""
+Represents a delivery option for the checkout.
+
+Added in Saleor 3.23.
+"""
+type Delivery {
+  """The ID of the delivery."""
+  id: ID!
+
+  """Shipping method represented by the delivery."""
+  shippingMethod: ShippingMethod
 }
 
 """
@@ -12701,10 +12692,26 @@ enum TokenizedPaymentFlowEnum @doc(category: "Payments") {
   INTERACTIVE
 }
 
-scalar JSON
-
 """Represents an problem in the checkout."""
-union CheckoutProblem = CheckoutLineProblemInsufficientStock | CheckoutLineProblemVariantNotAvailable
+union CheckoutProblem = CheckoutProblemDeliveryMethodStale | CheckoutProblemDeliveryMethodInvalid | CheckoutLineProblemInsufficientStock | CheckoutLineProblemVariantNotAvailable
+
+"""
+Indicates that the delivery methods are stale.
+
+Added in Saleor 3.23.
+"""
+type CheckoutProblemDeliveryMethodStale @doc(category: "Checkout") {
+  delivery: Delivery!
+}
+
+"""
+Indicates that the selected delivery method is invalid.
+
+Added in Saleor 3.23.
+"""
+type CheckoutProblemDeliveryMethodInvalid @doc(category: "Checkout") {
+  delivery: Delivery!
+}
 
 type CheckoutCountableConnection @doc(category: "Checkout") {
   """Pagination data for this connection."""
@@ -13071,7 +13078,9 @@ enum CollectionSortField @doc(category: "Products") {
 
 input ProductTypeFilterInput @doc(category: "Products") {
   search: String
-  configurable: ProductTypeConfigurable
+
+  """"""
+  configurable: ProductTypeConfigurable @deprecated(reason: "The field has no effect on the API behavior. This is a leftover from the past Simple/Configurable product distinction. Products can have multiple variants regardless of this setting.")
   productType: ProductTypeEnum
   metadata: [MetadataFilter!]
   kind: ProductTypeKindEnum
@@ -13129,6 +13138,39 @@ input PaymentFilterInput @doc(category: "Payments") {
   """Filter by ids."""
   ids: [ID!]
   checkouts: [ID!]
+}
+
+type TransactionCountableConnection @doc(category: "Payments") {
+  """Pagination data for this connection."""
+  pageInfo: PageInfo!
+  edges: [TransactionCountableEdge!]!
+
+  """A total count of items in the collection."""
+  totalCount: Int
+}
+
+type TransactionCountableEdge @doc(category: "Payments") {
+  """The item at the end of the edge."""
+  node: TransactionItem!
+
+  """A cursor for use in pagination."""
+  cursor: String!
+}
+
+input TransactionWhereInput @doc(category: "Payments") {
+  ids: [ID!]
+
+  """Filter by PSP reference."""
+  pspReference: StringFilterInput
+
+  """Filter by app identifier."""
+  appIdentifier: StringFilterInput
+
+  """List of conditions that must be met."""
+  AND: [TransactionWhereInput!]
+
+  """A list of conditions of which at least one must be met."""
+  OR: [TransactionWhereInput!]
 }
 
 type PageCountableConnection @doc(category: "Pages") {
@@ -13572,6 +13614,13 @@ input LinesFilterInput @doc(category: "Orders") {
 input TransactionFilterInput @doc(category: "Orders") {
   """Filter by payment method details used to pay for the order."""
   paymentMethodDetails: PaymentMethodDetailsFilterInput
+
+  """
+  Filter by PSP reference of transactions.
+  
+  Added in Saleor 3.22.
+  """
+  pspReference: StringFilterInput
 
   """Filter by metadata fields of transactions."""
   metadata: MetadataFilterInput
@@ -14821,8 +14870,19 @@ type AppExtensionCountableEdge @doc(category: "Apps") {
 }
 
 input AppExtensionFilterInput @doc(category: "Apps") {
-  mount: [AppExtensionMountEnum!]
-  target: AppExtensionTargetEnum
+  """
+  Plain-text mount name (case insensitive)
+  
+  Added in Saleor 3.22.
+  """
+  mountName: [String!]
+
+  """
+  Plain-text target name (case insensitive)
+  
+  Added in Saleor 3.22.
+  """
+  targetName: String
 }
 
 """Represents address validation rules for a country."""
@@ -16047,7 +16107,7 @@ type Mutation {
 
     """ID of a product variant to upload digital content."""
     variantId: ID!
-  ): DigitalContentCreate @doc(category: "Products")
+  ): DigitalContentCreate @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """
   Remove digital content assigned to given variant. 
@@ -16057,7 +16117,7 @@ type Mutation {
   digitalContentDelete(
     """ID of a product variant with digital content to remove."""
     variantId: ID!
-  ): DigitalContentDelete @doc(category: "Products")
+  ): DigitalContentDelete @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """
   Updates digital content. 
@@ -16070,7 +16130,7 @@ type Mutation {
 
     """ID of a product variant with digital content to update."""
     variantId: ID!
-  ): DigitalContentUpdate @doc(category: "Products")
+  ): DigitalContentUpdate @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """
   Generate new URL to digital content. 
@@ -16080,7 +16140,7 @@ type Mutation {
   digitalContentUrlCreate(
     """Fields required to create a new url."""
     input: DigitalContentUrlCreateInput!
-  ): DigitalContentUrlCreate @doc(category: "Products")
+  ): DigitalContentUrlCreate @doc(category: "Products") @deprecated(reason: "Support for Digital Content is deprecated and will be removed in Saleor v3.23.0. This functionality is legacy and undocumented, and is not part of the supported API. Users should not rely on this behavior.")
 
   """
   Creates a new variant for a product. 
@@ -18183,7 +18243,7 @@ type Mutation {
   exportProducts(
     """Fields required to export product data."""
     input: ExportProductsInput!
-  ): ExportProducts @doc(category: "Products") @webhookEventsInfo(asyncEvents: [NOTIFY_USER, PRODUCT_EXPORT_COMPLETED], syncEvents: [])
+  ): ExportProducts @doc(category: "Products") @webhookEventsInfo(asyncEvents: [NOTIFY_USER, PRODUCT_EXPORT_COMPLETED], syncEvents: []) @deprecated(reason: "Export functionality is deprecated and will be removed. All data can be fetched via the GraphQL API and parsed into the desired format by apps or external tools.")
 
   """
   Export gift cards to csv file. 
@@ -18197,14 +18257,12 @@ type Mutation {
   exportGiftCards(
     """Fields required to export gift cards data."""
     input: ExportGiftCardsInput!
-  ): ExportGiftCards @doc(category: "Gift cards") @webhookEventsInfo(asyncEvents: [NOTIFY_USER, GIFT_CARD_EXPORT_COMPLETED], syncEvents: [])
+  ): ExportGiftCards @doc(category: "Gift cards") @webhookEventsInfo(asyncEvents: [NOTIFY_USER, GIFT_CARD_EXPORT_COMPLETED], syncEvents: []) @deprecated(reason: "Export functionality is deprecated and will be removed. All data can be fetched via the GraphQL API and parsed into the desired format by apps or external tools.")
 
   """
   Export voucher codes to csv/xlsx file.
   
-  Added in Saleor 3.18.
-  
-  Note: this API is currently in Feature Preview and can be subject to changes at later point. 
+  Added in Saleor 3.18. 
   
   Requires one of the following permissions: MANAGE_DISCOUNTS.
   
@@ -18214,7 +18272,7 @@ type Mutation {
   exportVoucherCodes(
     """Fields required to export voucher codes."""
     input: ExportVoucherCodesInput!
-  ): ExportVoucherCodes @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CODE_EXPORT_COMPLETED], syncEvents: [])
+  ): ExportVoucherCodes @doc(category: "Discounts") @webhookEventsInfo(asyncEvents: [VOUCHER_CODE_EXPORT_COMPLETED], syncEvents: []) @deprecated(reason: "Export functionality is deprecated and will be removed. All data can be fetched via the GraphQL API and parsed into the desired format by apps or external tools.")
 
   """
   Upload a file. This mutation must be sent as a `multipart` request. More detailed specs of the upload format can be found here: https://github.com/jaydenseric/graphql-multipart-request-spec 
@@ -20698,6 +20756,13 @@ input ShopSettingsInput {
 
   """Charge taxes on shipping."""
   chargeTaxesOnShipping: Boolean @deprecated(reason: "To enable taxes for a shipping method, assign a tax class to the shipping method with `shippingPriceCreate` or `shippingPriceUpdate` mutations.")
+
+  """
+  Use legacy update webhook emission. When enabled, update webhooks (e.g. `customerUpdated`,`productVariantUpdated`) are sent even when only metadata changes. When disabled, update webhooks are not sent for metadata-only changes; only metadata-specific webhooks (e.g., `customerMetadataUpdated`, `productVariantMetadataUpdated`) are sent.
+  
+  Added in Saleor 3.22.
+  """
+  useLegacyUpdateWebhookEmission: Boolean @deprecated
 }
 
 """
@@ -21283,6 +21348,8 @@ enum ProductErrorCode @doc(category: "Products") {
   PRODUCT_NOT_ASSIGNED_TO_CHANNEL
   UNSUPPORTED_MEDIA_PROVIDER
   PREORDER_VARIANT_CANNOT_BE_DEACTIVATED
+  INVALID_FILE_TYPE
+  UNSUPPORTED_MIME_TYPE
 }
 
 input ProductAttributeAssignInput @doc(category: "Products") {
@@ -22579,7 +22646,7 @@ input ProductTypeInput @doc(category: "Products") {
   """
   Determines if product of this type has multiple variants. This option mainly simplifies product management in the dashboard. There is always at least one variant created under the hood.
   """
-  hasVariants: Boolean
+  hasVariants: Boolean @deprecated(reason: "The field has no effect on the API behavior. This is a leftover from the past Simple/Configurable product distinction. Products can have multiple variants regardless of this setting.")
 
   """List of attributes shared among all product variants."""
   productAttributes: [ID!]
@@ -27960,9 +28027,7 @@ input ExportGiftCardsInput @doc(category: "Gift cards") {
 """
 Export voucher codes to csv/xlsx file.
 
-Added in Saleor 3.18.
-
-Note: this API is currently in Feature Preview and can be subject to changes at later point. 
+Added in Saleor 3.18. 
 
 Requires one of the following permissions: MANAGE_DISCOUNTS.
 
@@ -28016,6 +28081,8 @@ type UploadError {
 
 enum UploadErrorCode {
   GRAPHQL_ERROR
+  INVALID_FILE_TYPE
+  UNSUPPORTED_MIME_TYPE
 }
 
 """
@@ -28810,11 +28877,42 @@ input CheckoutSettingsInput @doc(category: "Checkout") {
   useLegacyErrorFlow: Boolean @deprecated
 
   """
-  Default `false`. Determines if the paid checkouts should be automatically completed. This setting applies only to checkouts where payment was processed through transactions.When enabled, the checkout will be automatically completed once the checkout `charge_status` reaches `FULL`. This occurs when the total sum of charged and authorized transaction amounts equals or exceeds the checkout's total amount.
+  Default `false`. Determines if the paid checkouts should be automatically completed. This setting applies only to checkouts where payment was processed through transactions.When enabled, the checkout will be automatically completed once the checkout `authorize_status` reaches `FULL`. This occurs when the total sum of charged and authorized transaction amounts equals or exceeds the checkout's total amount.
   
   Added in Saleor 3.20.
   """
-  automaticallyCompleteFullyPaidCheckouts: Boolean
+  automaticallyCompleteFullyPaidCheckouts: Boolean @deprecated(reason: "Use `automatic_completion` instead.")
+
+  """
+  Settings for automatic completion of fully paid checkouts.
+  
+  Added in Saleor 3.22.
+  """
+  automaticCompletion: CheckoutAutoCompleteInput
+
+  """
+  Default to `true`. Determines whether gift cards can be attached to a Checkout via `addPromoCode` mutation. Usage of this mutation with gift cards is deprecated.
+  
+  Added in Saleor 3.23.
+  """
+  allowLegacyGiftCardUse: Boolean
+}
+
+input CheckoutAutoCompleteInput @doc(category: "Checkout") {
+  """
+  Default `false`. Determines if the paid checkouts should be automatically completed. This setting applies only to checkouts where payment was processed through transactions.When enabled, the checkout will be automatically completed once the checkout `charge_status` reaches `FULL`. This occurs when the total sum of charged and authorized transaction amounts equals or exceeds the checkout's total amount.
+  """
+  enabled: Boolean!
+
+  """
+  The time in minutes after which the fully paid checkout will be automatically completed. Default is 30. Set to 0 for immediate completion. Should be less than the threshold for the oldest modified checkout eligible for automatic completion.
+  """
+  delay: Minute
+
+  """
+  Specifies the earliest date on which fully paid checkouts can begin to be automatically completed. Fully paid checkouts dated before this cut-off will not be automatically completed. Must be less than the threshold of the oldest modified checkout eligible for automatic completion. Default is current date time.
+  """
+  cutOffDate: DateTime
 }
 
 input PaymentSettingsInput @doc(category: "Payments") {
@@ -29311,7 +29409,7 @@ type AttributeBulkUpdateError @doc(category: "Attributes") {
   code: AttributeBulkUpdateErrorCode!
 }
 
-enum AttributeBulkUpdateErrorCode {
+enum AttributeBulkUpdateErrorCode @doc(category: "Attributes") {
   ALREADY_EXISTS
   BLANK
   GRAPHQL_ERROR
@@ -29842,11 +29940,26 @@ type AppManifestExtension @doc(category: "Apps") {
   """URL of a view where extension's iframe is placed."""
   url: String!
 
-  """Place where given extension will be mounted."""
-  mount: AppExtensionMountEnum!
+  """
+  Name of the extension mount point in the dashboard. Value returned in UPPERCASE.
+  
+  Added in Saleor 3.22.
+  """
+  mountName: String!
 
-  """Type of way how app extension will be opened."""
-  target: AppExtensionTargetEnum!
+  """
+  Name of the extension target in the dashboard. Value returned in UPPERCASE.
+  
+  Added in Saleor 3.22.
+  """
+  targetName: String!
+
+  """
+  App extension settings.
+  
+  Added in Saleor 3.22.
+  """
+  settings: JSON!
 }
 
 type AppManifestWebhook @doc(category: "Apps") {

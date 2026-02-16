@@ -1,9 +1,7 @@
 import pytest
 
 from .....app.models import AppExtension
-from .....app.types import AppExtensionMount
 from ....tests.utils import get_graphql_content
-from ...enums import AppExtensionMountEnum, AppExtensionTargetEnum
 
 
 @pytest.mark.count_queries(autouse=False)
@@ -21,8 +19,8 @@ def test_app_extensions(
           node{
             label
             url
-            mount
-            target
+            mountName
+            targetName
             id
             accessToken
             permissions{
@@ -40,19 +38,19 @@ def test_app_extensions(
                 app=app,
                 label="Create product with App1",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+                mount="product_overview_more_actions",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App2",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_DETAILS_MORE_ACTIONS,
+                mount="product_details_more_actions",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App3",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_CREATE,
+                mount="product_overview_create",
             ),
         ]
     )
@@ -76,11 +74,11 @@ def test_app_extensions(
     "filter",
     [
         {},
-        {"mount": AppExtensionMountEnum.PRODUCT_OVERVIEW_CREATE.name},
-        {"target": AppExtensionTargetEnum.POPUP.name},
+        {"mountName": ["PRODUCT_OVERVIEW_CREATE"]},
+        {"targetName": "POPUP"},
         {
-            "mount": AppExtensionMountEnum.PRODUCT_OVERVIEW_CREATE.name,
-            "target": AppExtensionTargetEnum.POPUP.name,
+            "mountName": ["PRODUCT_OVERVIEW_CREATE"],
+            "targetName": "POPUP",
         },
     ],
 )
@@ -100,9 +98,9 @@ def test_app_extensions_with_filter(
           node{
             label
             url
-            target
+            targetName
             id
-            mount
+            mountName
             accessToken
             permissions{
               code
@@ -118,19 +116,19 @@ def test_app_extensions_with_filter(
                 app=app,
                 label="Create product with App1",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_MORE_ACTIONS,
+                mount="product_overview_more_actions",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App2",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_DETAILS_MORE_ACTIONS,
+                mount="product_details_more_actions",
             ),
             AppExtension(
                 app=app,
                 label="Create product with App3",
                 url="https://www.example.com/app-product",
-                mount=AppExtensionMount.PRODUCT_OVERVIEW_CREATE,
+                mount="product_overview_create",
             ),
         ]
     )

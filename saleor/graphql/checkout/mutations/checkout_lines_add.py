@@ -6,7 +6,6 @@ from ....checkout.error_codes import CheckoutErrorCode
 from ....checkout.fetch import (
     fetch_checkout_info,
     fetch_checkout_lines,
-    update_delivery_method_lists_for_checkout_info,
 )
 from ....checkout.utils import add_variants_to_checkout, invalidate_checkout
 from ....core.exceptions import NonExistingCheckout
@@ -35,8 +34,7 @@ from .utils import (
     get_checkout,
     get_variants_and_total_quantities,
     group_lines_input_on_add,
-    update_checkout_external_shipping_method_if_invalid,
-    update_checkout_shipping_method_if_invalid,
+    mark_checkout_deliveries_as_stale_if_needed,
     validate_variants_are_published,
     validate_variants_available_for_purchase,
 )
@@ -148,15 +146,7 @@ class CheckoutLinesAdd(BaseMutation):
                 ) from e
 
         lines, _ = fetch_checkout_lines(checkout)
-        shipping_channel_listings = checkout.channel.shipping_method_listings.all()
-        update_delivery_method_lists_for_checkout_info(
-            checkout_info=checkout_info,
-            shipping_method=checkout_info.checkout.shipping_method,
-            collection_point=checkout_info.checkout.collection_point,
-            shipping_address=checkout_info.shipping_address,
-            lines=lines,
-            shipping_channel_listings=shipping_channel_listings,
-        )
+        checkout_info.lines = lines
         return lines
 
     @classmethod
@@ -238,10 +228,7 @@ class CheckoutLinesAdd(BaseMutation):
         checkout = get_checkout(cls, info, checkout_id=checkout_id, token=token, id=id)
         manager = get_plugin_manager_promise(info.context).get()
         variants = cls._get_variants_from_lines_input(lines)
-        shipping_channel_listings = checkout.channel.shipping_method_listings.all()
-        checkout_info = fetch_checkout_info(
-            checkout, [], manager, shipping_channel_listings
-        )
+        checkout_info = fetch_checkout_info(checkout, [], manager)
         existing_lines_info, _ = fetch_checkout_lines(
             checkout, skip_lines_with_unavailable_variants=False
         )
@@ -262,14 +249,15 @@ class CheckoutLinesAdd(BaseMutation):
             checkout_info,
         )
 
-        update_checkout_external_shipping_method_if_invalid(checkout_info, lines)
-        shipping_update_fields = update_checkout_shipping_method_if_invalid(
-            checkout_info, lines
+        shipping_update_fields = mark_checkout_deliveries_as_stale_if_needed(
+            checkout_info.checkout, lines
         )
         invalidate_update_fields = invalidate_checkout(
             checkout_info, lines, manager, save=False
         )
-        checkout.save(update_fields=shipping_update_fields + invalidate_update_fields)
+        update_fields = shipping_update_fields + invalidate_update_fields
+        cls.mark_search_vectors_as_dirty(checkout, update_fields)
+        checkout.save(update_fields=update_fields)
         call_checkout_info_event(
             manager,
             event_name=WebhookEventAsyncType.CHECKOUT_UPDATED,
@@ -278,6 +266,11 @@ class CheckoutLinesAdd(BaseMutation):
         )
 
         return CheckoutLinesAdd(checkout=SyncWebhookControlContext(node=checkout))
+
+    @classmethod
+    def mark_search_vectors_as_dirty(cls, checkout, update_fields):
+        checkout.search_index_dirty = True
+        update_fields.append("search_index_dirty")
 
     @classmethod
     def _get_variants_from_lines_input(cls, lines: list[dict]) -> list[ProductVariant]:

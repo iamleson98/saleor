@@ -126,7 +126,6 @@ class ProductType(ModelWithMetadata):
     name = models.CharField(max_length=250)
     slug = models.SlugField(max_length=255, unique=True, allow_unicode=True)
     kind = models.CharField(max_length=32, choices=ProductTypeKind.CHOICES)
-    has_variants = models.BooleanField(default=True)
     is_shipping_required = models.BooleanField(default=True)
     is_digital = models.BooleanField(default=False)
     weight = MeasurementField(
@@ -141,6 +140,9 @@ class ProductType(ModelWithMetadata):
         blank=True,
         null=True,
     )
+
+    # DEPRECATED, does not affect the variant creation anymore
+    has_variants = models.BooleanField(default=True)
 
     class Meta(ModelWithMetadata.Meta):
         ordering = ("slug",)
@@ -165,8 +167,7 @@ class ProductType(ModelWithMetadata):
         return self.name
 
     def __repr__(self) -> str:
-        class_ = type(self)
-        return f"<{class_.__module__}.{class_.__name__}(pk={self.pk!r}, name={self.name!r})>"
+        return f"<ProductType: pk={self.pk!r}, name={self.name!r}>"
 
 
 class Product(SeoModel, ModelWithMetadata, ModelWithExternalReference):
@@ -247,8 +248,7 @@ class Product(SeoModel, ModelWithMetadata, ModelWithExternalReference):
         return iter(getattr(self, "__variants"))
 
     def __repr__(self) -> str:
-        class_ = type(self)
-        return f"<{class_.__module__}.{class_.__name__}(pk={self.pk!r}, name={self.name!r})>"
+        return f"<Product: pk={self.pk!r}, name={self.name!r}>"
 
     def __str__(self) -> str:
         return self.name

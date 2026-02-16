@@ -1,5 +1,6 @@
 import datetime
 import importlib.metadata
+import json
 import logging
 import os
 import os.path
@@ -28,11 +29,23 @@ from sentry_sdk.scrubber import DEFAULT_DENYLIST, DEFAULT_PII_DENYLIST, EventScr
 
 from . import PatchedSubscriberExecutionContext, __version__
 from .account.i18n_rules_override import i18n_rules_override
+from .core.cleaners.html import HtmlCleanerSettings
 from .core.db.patch import patch_db
 from .core.languages import LANGUAGES as CORE_LANGUAGES
 from .core.rlimit import validate_and_set_rlimit
-from .core.schedules import initiated_promotion_webhook_schedule
-from .graphql.executor import patch_executor
+from .core.schedules import (
+    initiated_checkout_automatic_completion_schedule,
+    initiated_checkout_search_update_schedule,
+    initiated_gift_card_search_update_schedule,
+    initiated_page_search_update_schedule,
+    initiated_product_search_update_schedule,
+    initiated_promotion_webhook_schedule,
+)
+from .graphql.graphql_core import (
+    patch_execution_context,
+    patch_execution_result,
+    patch_executor,
+)
 from .graphql.promise import patch_promise
 from .patch_local import patch_local
 
@@ -480,13 +493,7 @@ DEFAULT_MAX_EMAIL_DISPLAY_NAME_LENGTH = 78
 
 COUNTRIES_OVERRIDE = {
     "EU": "European Union",
-    "XK": {
-        "name": "Kosovo",
-        "alpha3": "XXK",
-        "ioc_code": "KOS",
-        "numeric": "383",
-        "numeric_padded": "0383",
-    },
+    "XK": "Kosovo",
 }
 
 MAX_USER_ADDRESSES = int(os.environ.get("MAX_USER_ADDRESSES", 100))
@@ -615,6 +622,12 @@ CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_BROKER_URL = (
     os.environ.get("CELERY_BROKER_URL", os.environ.get("CLOUDAMQP_URL")) or ""
 )
+
+# Mitigation of https://github.com/celery/kombu/issues/2400
+# Allows passing MessageGroupId for non-FIFO queues
+if CELERY_BROKER_URL.startswith("sqs://"):
+    CELERY_BROKER_TRANSPORT = "saleor.core.sqs.Transport"
+
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", None)
 CELERY_RESULT_SERIALIZER = "json"
 CELERY_TASK_ALWAYS_EAGER = not CELERY_BROKER_URL
@@ -690,18 +703,27 @@ CELERY_BEAT_SCHEDULE = {
     },
     "update-products-search-vectors": {
         "task": "saleor.product.tasks.update_products_search_vector_task",
-        "schedule": datetime.timedelta(seconds=BEAT_UPDATE_SEARCH_SEC),
-        "options": {"expires": BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC},
+        # Scheduled task that runs every 60 seconds to check for products
+        # requiring a search index rebuild.
+        "schedule": initiated_product_search_update_schedule,
     },
     "update-gift-cards-search-vectors": {
         "task": "saleor.giftcard.tasks.update_gift_cards_search_vector_task",
-        "schedule": datetime.timedelta(seconds=BEAT_UPDATE_SEARCH_SEC),
-        "options": {"expires": BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC},
+        # Scheduled task that runs every 60 seconds to check for gift cards
+        # requiring a search index rebuild.
+        "schedule": initiated_gift_card_search_update_schedule,
     },
     "update-pages-search-vectors": {
         "task": "saleor.page.tasks.update_pages_search_vector_task",
-        "schedule": datetime.timedelta(seconds=BEAT_UPDATE_SEARCH_SEC),
-        "options": {"expires": BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC},
+        # Scheduled task that runs every 60 seconds to check for pages
+        # requiring a search index rebuild.
+        "schedule": initiated_page_search_update_schedule,
+    },
+    "update-checkouts-search-vectors": {
+        "task": "saleor.checkout.tasks.update_checkouts_search_vector_task",
+        # Scheduled task that runs every 60 seconds to check for checkouts
+        # requiring a search index rebuild.
+        "schedule": initiated_checkout_search_update_schedule,
     },
     "expire-orders": {
         "task": "saleor.order.tasks.expire_orders_task",
@@ -727,6 +749,12 @@ CELERY_BEAT_SCHEDULE = {
         "task": "saleor.product.tasks.recalculate_discounted_price_for_products_task",
         "schedule": datetime.timedelta(seconds=BEAT_PRICE_RECALCULATION_SCHEDULE),
         "options": {"expires": BEAT_PRICE_RECALCULATION_SCHEDULE_EXPIRE_AFTER_SEC},
+    },
+    "checkout-automatic-completion": {
+        # Scheduled task that runs every 60 seconds to check for checkout
+        # readiness for automatic completion.
+        "task": "saleor.checkout.tasks.trigger_automatic_checkout_completion_task",
+        "schedule": initiated_checkout_automatic_completion_schedule,
     },
 }
 
@@ -930,6 +958,9 @@ JWT_TTL_REQUEST_EMAIL_CHANGE = datetime.timedelta(
 CHECKOUT_PRICES_TTL = datetime.timedelta(
     seconds=parse(os.environ.get("CHECKOUT_PRICES_TTL", "1 hour"))
 )
+CHECKOUT_DELIVERY_OPTIONS_TTL = datetime.timedelta(
+    seconds=parse(os.environ.get("CHECKOUT_DELIVERY_OPTIONS_TTL", "24 hours"))
+)
 
 CHECKOUT_TTL_BEFORE_RELEASING_FUNDS = datetime.timedelta(
     seconds=parse(os.environ.get("CHECKOUT_TTL_BEFORE_RELEASING_FUNDS", "6 hours"))
@@ -937,7 +968,13 @@ CHECKOUT_TTL_BEFORE_RELEASING_FUNDS = datetime.timedelta(
 TRANSACTION_BATCH_FOR_RELEASING_FUNDS = os.environ.get(
     "TRANSACTION_BATCH_FOR_RELEASING_FUNDS", 60
 )
-
+# Oldest checkout modification for automatic completion. Older checkouts will not be
+# processed.
+AUTOMATIC_CHECKOUT_COMPLETION_OLDEST_MODIFIED = datetime.timedelta(
+    seconds=parse(
+        os.environ.get("AUTOMATIC_CHECKOUT_COMPLETION_OLDEST_MODIFIED", "30 days")
+    )
+)
 
 # The maximum SearchVector expression count allowed per index SQL statement
 # If the count is exceeded, the expression list will be truncated
@@ -959,6 +996,20 @@ PRODUCT_MAX_INDEXED_VARIANTS = 1000
 # Maximum related objects that can be indexed in a page
 PAGE_MAX_INDEXED_ATTRIBUTES = 1000
 PAGE_MAX_INDEXED_ATTRIBUTE_VALUES = 100
+
+# Maximum related objects that can be indexed in a gift card
+GIFT_CARD_MAX_INDEXED_TAGS = 100
+
+# Maximum related objects that can be indexed in a checkout
+CHECKOUT_MAX_INDEXED_LINES = 100
+CHECKOUT_MAX_INDEXED_TRANSACTIONS = 20
+CHECKOUT_MAX_INDEXED_PAYMENTS = 20
+
+# Number of parallel tasks to spawn for updating checkout search vectors.
+# Each task processes a batch of checkouts concurrently to improve throughput.
+CHECKOUT_SEARCH_UPDATE_PARALLEL_TASKS = int(
+    os.environ.get("CHECKOUT_SEARCH_UPDATE_PARALLEL_TASKS", 5)
+)
 
 # Patch SubscriberExecutionContext class from `graphql-core-legacy` package
 # to fix bug causing not returning errors for subscription queries.
@@ -999,6 +1050,11 @@ COLLECTION_PRODUCT_UPDATED_QUEUE_NAME = os.environ.get(
 # Queue name for execution of automatic checkout completion
 AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME = os.environ.get(
     "AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME", None
+)
+
+# Queue name for Celery data migration tasks
+DATA_MIGRATIONS_TASKS_QUEUE_NAME = os.environ.get(
+    "DATA_MIGRATIONS_TASKS_QUEUE_NAME", None
 )
 
 # Lock time for request password reset mutation per user (seconds)
@@ -1044,6 +1100,11 @@ ORDER_RULES_LIMIT = os.environ.get("ORDER_RULES_LIMIT", 100)
 
 # The max number of gits assigned to promotion rule
 GIFTS_LIMIT_PER_RULE = os.environ.get("GIFTS_LIMIT_PER_RULE", 500)
+
+# Default automatic completion delay for checkout in minutes.
+DEFAULT_AUTOMATIC_CHECKOUT_COMPLETION_DELAY = int(
+    os.environ.get("AUTOMATIC_CHECKOUT_COMPLETION_DELAY", 30)
+)
 
 # Whether to enable the comparison of pre-save and post-save webhook payloads in
 # mutations, in order to limit sending webhooks where the payload has not changed as
@@ -1100,6 +1161,63 @@ TELEMETRY_SLOW_GRAPHQL_OPERATION_THRESHOLD = float(
 # For development envs, where schema may change often, it may be convenient to set it to e.g. commit hash value.
 GRAPHQL_CACHE_SUFFIX = os.environ.get("GRAPHQL_CACHE_SUFFIX", "")
 
+# Maximum depth for EditorJS nested lists. This value shouldn't be set too high to
+# prevent abuses. It's not recommended to increase it further than 10, if strictly
+# necessary (not recommended), it could be increase up to 100.
+#
+# HINT: in the frontend configuration, set `maxLevel` to the same value to improve
+#       user-experience on the client-side (https://github.com/editor-js/list/blob/f8cde313224499ed5bcf3e93864fc11c45fe7efb/README.md#config-params)
+EDITOR_JS_LISTS_MAX_DEPTH = int(os.environ.get("EDITOR_JS_LISTS_MAX_DEPTH", 10))
+
+HTML_CLEANER_PREFS = HtmlCleanerSettings.parse()
+
+# File upload settings
+# Allowed mime types for file uploads (safe, non-executable formats)
+# Dict structure: {<mime-type>: [<extensions>]}
+ALLOWED_MIME_TYPES = {
+    "image/avif": [".avif"],
+    "image/bmp": [".bmp"],
+    "image/gif": [".gif"],
+    "image/jpeg": [".jpg", ".jpeg", ".jpe", ".jfif"],
+    "image/png": [".png"],
+    "image/tiff": [".tiff", ".tif"],
+    "image/webp": [".webp"],
+    # Documents
+    "application/msword": [".doc"],
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": [
+        ".docx"
+    ],
+    "application/vnd.ms-excel": [".xls"],
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": [".xlsx"],
+    "application/vnd.ms-powerpoint": [".ppt"],
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": [
+        ".pptx"
+    ],
+    # Videos
+    "video/mp4": [".mp4"],
+    "video/webm": [".webm"],
+    "video/ogg": [".ogv", ".ogg"],
+    "video/quicktime": [".mov"],
+    # Audio
+    "audio/mpeg": [".mp3", ".mpeg"],
+    "audio/mp4": [".m4a"],
+    "audio/webm": [".weba"],
+    "audio/ogg": [".oga", ".ogg"],
+    "audio/wav": [".wav"],
+    # Text (plain only)
+    "text/plain": [".txt"],
+    "text/csv": [".csv"],
+}
+ALLOWED_MIME_TYPES.update(
+    json.loads(os.environ.get("UPLOAD_ADDITIONAL_ALLOWED_MIME_TYPES", "{}"))
+)
+
+# Usage telemetry
+SEND_USAGE_TELEMETRY = get_bool_from_env("SEND_USAGE_TELEMETRY", True)
+SEND_USAGE_TELEMETRY_AFTER_TIMEDELTA = datetime.timedelta(
+    seconds=parse(os.environ.get("SEND_USAGE_TELEMETRY_AFTER_TIMEDELTA", "1 day"))
+)
+
 # Library `google-i18n-address` use `AddressValidationMetadata` form Google to provide address validation rules.
 # Patch `i18n` module to allows to override the default address rules.
 i18n_rules_override()
@@ -1116,3 +1234,11 @@ patch_db()
 # Patch `Local` to remove all references that could result in reference cycles,
 # allowing memory to be freed immediately, without the need of a deep garbage collection cycle.
 patch_local()
+
+# Patch `ExecutionContext` to remove all references that could result in reference cycles,
+# allowing memory to be freed immediately, without the need of a deep garbage collection cycle.
+patch_execution_context()
+
+# Patch `ExecutionResult` to remove all references that could result in reference cycles,
+# allowing memory to be freed immediately, without the need of a deep garbage collection cycle.
+patch_execution_result()

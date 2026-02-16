@@ -4,7 +4,10 @@ import datetime
 import graphene
 
 from ...app import models
-from ...app.types import AppExtensionHttpMethod, AppExtensionTarget
+from ...app.types import (
+    DEFAULT_APP_TARGET,
+    DeprecatedAppExtensionHttpMethod,
+)
 from ...core.exceptions import PermissionDenied
 from ...core.jwt import JWT_THIRDPARTY_ACCESS_TYPE
 from ...core.utils import build_absolute_uri
@@ -30,7 +33,7 @@ from ..core.dataloaders import DataLoader
 from ..core.descriptions import ADDED_IN_319, ADDED_IN_321, ADDED_IN_322
 from ..core.doc_category import DOC_CATEGORY_APPS
 from ..core.federation import federated_entity, resolve_federation_references
-from ..core.scalars import DateTime
+from ..core.scalars import JSON, DateTime
 from ..core.types import (
     BaseEnum,
     BaseObjectType,
@@ -55,8 +58,6 @@ from .dataloaders import (
     app_promise_callback,
 )
 from .enums import (
-    AppExtensionMountEnum,
-    AppExtensionTargetEnum,
     AppTypeEnum,
     CircuitBreakerState,
     CircuitBreakerStateEnum,
@@ -117,83 +118,49 @@ class AppManifestExtension(BaseObjectType):
     url = graphene.String(
         description="URL of a view where extension's iframe is placed.", required=True
     )
-    mount = AppExtensionMountEnum(
-        description="Place where given extension will be mounted.",
+
+    mount_name = graphene.String(
+        description="Name of the extension mount point in the dashboard. Value returned in UPPERCASE."
+        + ADDED_IN_322,
         required=True,
     )
-    target = AppExtensionTargetEnum(
-        description="Type of way how app extension will be opened.", required=True
+
+    target_name = graphene.String(
+        description="Name of the extension target in the dashboard. Value returned in UPPERCASE."
+        + ADDED_IN_322,
+        required=True,
+    )
+
+    settings = graphene.Field(
+        JSON,
+        description="App extension settings." + ADDED_IN_322,
+        required=True,
     )
 
     class Meta:
         doc_category = DOC_CATEGORY_APPS
-
-    @staticmethod
-    def resolve_target(root, _info: ResolveInfo):
-        return root.get("target") or AppExtensionTarget.POPUP
 
     @staticmethod
     def resolve_url(root, _info: ResolveInfo):
         """Return an extension URL."""
         return resolve_app_extension_url(root)
 
+    @staticmethod
+    def resolve_target_name(root, _info: ResolveInfo):
+        return (root.get("target") or DEFAULT_APP_TARGET).upper()
+
+    @staticmethod
+    def resolve_mount_name(root, _info: ResolveInfo):
+        return root["mount"].upper()
+
+    @staticmethod
+    def resolve_settings(root, _info: ResolveInfo):
+        return root.get("options") or {}
+
 
 class HttpMethod(BaseEnum):
-    POST = AppExtensionHttpMethod.POST
-    GET = AppExtensionHttpMethod.GET
-
-
-class NewTabTargetOptions(BaseObjectType):
-    method = graphene.Field(
-        HttpMethod,
-        required=True,
-        description="HTTP method for New Tab target (GET or POST)",
-    )
-
-    class Meta:
-        description = "Represents the NEW_TAB target options for an app extension."
-        doc_category = DOC_CATEGORY_APPS
-
-
-class WidgetTargetOptions(BaseObjectType):
-    method = graphene.Field(
-        HttpMethod,
-        required=True,
-        description="HTTP method for Widget target (GET or POST)",
-    )
-
-    class Meta:
-        description = "Represents the WIDGET target options for an app extension."
-        doc_category = DOC_CATEGORY_APPS
-
-
-class AppExtensionOptionsWidget(BaseObjectType):
-    widget_target = graphene.Field(
-        WidgetTargetOptions,
-        description="Options for displaying a Widget",
-        required=False,
-    )
-
-    class Meta:
-        description = "Represents the options for an app extension."
-        doc_category = DOC_CATEGORY_APPS
-
-
-class AppExtensionOptionsNewTab(BaseObjectType):
-    new_tab_target = graphene.Field(
-        NewTabTargetOptions,
-        description="Options controlling behavior of the NEW_TAB extension target",
-        required=False,
-    )
-
-    class Meta:
-        description = "Represents the options for an app extension."
-        doc_category = DOC_CATEGORY_APPS
-
-
-class AppExtensionPossibleOptions(graphene.Union):
-    class Meta:
-        types = (AppExtensionOptionsWidget, AppExtensionOptionsNewTab)
+    POST = DeprecatedAppExtensionHttpMethod.POST
+    GET = DeprecatedAppExtensionHttpMethod.GET
 
 
 class AppExtension(AppManifestExtension, ModelObjectType[models.AppExtension]):
@@ -205,10 +172,6 @@ class AppExtension(AppManifestExtension, ModelObjectType[models.AppExtension]):
     )
     access_token = graphene.String(
         description="JWT token used to authenticate by third-party app extension."
-    )
-    options = graphene.Field(
-        AppExtensionPossibleOptions,
-        description="App extension options." + ADDED_IN_322,
     )
 
     class Meta:
@@ -230,8 +193,12 @@ class AppExtension(AppManifestExtension, ModelObjectType[models.AppExtension]):
         )
 
     @staticmethod
-    def resolve_target(root, _info: ResolveInfo):
-        return root.target
+    def resolve_mount_name(root: models.AppExtension, _info: ResolveInfo):
+        return root.mount.upper()
+
+    @staticmethod
+    def resolve_target_name(root: models.AppExtension, _info: ResolveInfo):
+        return root.target.upper()
 
     @staticmethod
     @app_promise_callback
@@ -272,20 +239,32 @@ class AppExtension(AppManifestExtension, ModelObjectType[models.AppExtension]):
         return AppByIdLoader(info.context).load(root.app_id).then(_resolve_access_token)
 
     @staticmethod
-    def resolve_options(root: models.AppExtension, _info: ResolveInfo):
+    def resolve_settings(root: models.AppExtension, _info: ResolveInfo):
+        """Return app extension settings as plain JSON with same structure as options."""
         http_method = root.http_target_method
 
-        if root.target == AppExtensionTarget.WIDGET:
-            return AppExtensionOptionsWidget(
-                widget_target=WidgetTargetOptions(method=http_method),
-            )
+        # New data model contains settings, migration will fill the old ones
+        if root.settings:
+            return root.settings
 
-        if root.target == AppExtensionTarget.NEW_TAB:
-            return AppExtensionOptionsNewTab(
-                new_tab_target=NewTabTargetOptions(method=http_method),
-            )
+        # Fallback if settings not propagated in DB yet
+        # Make it case-insensitive due to migration logic - enum will become uppercased in DB
+        # TODO Remove after 3.23 when migrations are complete
+        if root.target.upper() == "WIDGET":
+            return {
+                "widgetTarget": {
+                    "method": http_method,
+                }
+            }
 
-        return None
+        if root.target.upper() == "NEW_TAB":
+            return {
+                "newTabTarget": {
+                    "method": http_method,
+                }
+            }
+
+        return {}
 
 
 class AppExtensionCountableConnection(CountableConnection):

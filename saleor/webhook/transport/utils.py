@@ -19,6 +19,7 @@ from celery.utils.log import get_task_logger
 from django.conf import settings
 from django.db.models import Count
 from django.urls import reverse
+from django.utils.text import slugify
 from google.cloud import pubsub_v1
 from requests import RequestException
 from requests_hardened.ip_filter import InvalidIPAddress
@@ -429,9 +430,12 @@ def get_deliveries_for_app(
 
 def get_multiple_deliveries_for_webhooks(
     event_delivery_ids,
+    database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ) -> tuple[dict[int, "EventDelivery"], set[int]]:
-    deliveries = EventDelivery.objects.select_related("payload", "webhook__app").filter(
-        id__in=event_delivery_ids
+    deliveries = (
+        EventDelivery.objects.using(database_connection_name)
+        .select_related("payload", "webhook__app")
+        .filter(id__in=event_delivery_ids)
     )
 
     active_deliveries = {}
@@ -658,3 +662,12 @@ def get_meta_description_key(app: App) -> str:
 def to_payment_app_id(app: "App", external_id: str) -> "str":
     app_identifier = app.identifier or app.id
     return f"{APP_ID_PREFIX}:{app_identifier}:{external_id}"
+
+
+def get_sqs_message_group_id(domain: str, app: App | None = None) -> str:
+    if app is None:
+        group_id = domain
+    else:
+        identifier = slugify(app.identifier) if app.identifier else app.id
+        group_id = f"{domain}:{identifier}"
+    return group_id[:128]  # SQS MessageGroupId max length is 128 chars

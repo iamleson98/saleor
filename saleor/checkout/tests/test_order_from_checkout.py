@@ -3,6 +3,7 @@ from unittest import mock
 from unittest.mock import patch
 
 import pytest
+from django.core.exceptions import ValidationError
 from django.test import override_settings
 from prices import Money, TaxedMoney
 
@@ -24,7 +25,7 @@ from ...order.models import Order
 from ...plugins.manager import get_plugins_manager
 from ...product.models import ProductTranslation, ProductVariantTranslation
 from ...tests import race_condition
-from .. import calculations
+from .. import CheckoutAuthorizeStatus, calculations
 from ..complete_checkout import create_order_from_checkout
 from ..fetch import fetch_checkout_info, fetch_checkout_lines
 from ..utils import add_variant_to_checkout, add_voucher_to_checkout
@@ -58,14 +59,13 @@ def test_create_order_insufficient_stock(
 
 @pytest.mark.parametrize("is_anonymous_user", [True, False])
 def test_create_order_with_gift_card(
-    checkout_with_gift_card, customer_user, shipping_method, is_anonymous_user, app
+    checkout_with_gift_card, customer_user, is_anonymous_user, app
 ):
     checkout_user = None if is_anonymous_user else customer_user
     checkout = checkout_with_gift_card
     checkout.user = checkout_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -108,13 +108,12 @@ def test_create_order_with_gift_card(
 
 
 def test_create_order_with_gift_card_partial_use(
-    checkout_with_item, gift_card_used, customer_user, shipping_method, app
+    checkout_with_item, gift_card_used, customer_user, app
 ):
     checkout = checkout_with_item
     checkout.user = customer_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -163,7 +162,6 @@ def test_create_order_with_many_gift_cards_worth_more_than_total(
     gift_card_created_by_staff,
     gift_card,
     customer_user,
-    shipping_method,
     app,
 ):
     # given
@@ -231,14 +229,12 @@ def test_create_order_with_many_gift_cards(
     gift_card_created_by_staff,
     gift_card,
     customer_user,
-    shipping_method,
     app,
 ):
     checkout = checkout_with_item
     checkout.user = customer_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -295,7 +291,6 @@ def test_create_order_gift_card_bought(
     send_notification_mock,
     checkout_with_gift_card_items,
     customer_user,
-    shipping_method,
     is_anonymous_user,
     non_shippable_gift_card_product,
     app,
@@ -308,7 +303,6 @@ def test_create_order_gift_card_bought(
     checkout.user = checkout_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -375,7 +369,6 @@ def test_create_order_gift_card_bought_only_shippable_gift_card(
     checkout,
     shippable_gift_card_product,
     customer_user,
-    shipping_method,
     is_anonymous_user,
     app,
 ):
@@ -389,7 +382,6 @@ def test_create_order_gift_card_bought_only_shippable_gift_card(
     checkout.user = checkout_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -429,7 +421,6 @@ def test_create_order_gift_card_bought_do_not_fulfill_gift_cards_automatically(
     site_settings,
     checkout_with_gift_card_items,
     customer_user,
-    shipping_method,
     is_anonymous_user,
     non_shippable_gift_card_product,
     app,
@@ -443,7 +434,6 @@ def test_create_order_gift_card_bought_do_not_fulfill_gift_cards_automatically(
     checkout.user = checkout_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -477,12 +467,9 @@ def test_create_order_gift_card_bought_do_not_fulfill_gift_cards_automatically(
     assert not GiftCard.objects.all()
 
 
-def test_note_in_created_order(
-    checkout_with_item, address, customer_user, shipping_method, app
-):
+def test_note_in_created_order(checkout_with_item, address, customer_user, app):
     checkout_with_item.shipping_address = address
     checkout_with_item.billing_address = address
-    checkout_with_item.shipping_method = shipping_method
     checkout_with_item.note = "test_note"
     checkout_with_item.tracking_code = "tracking_code"
     checkout_with_item.redirect_url = "https://www.example.com"
@@ -502,9 +489,7 @@ def test_note_in_created_order(
 
 
 @override_settings(LANGUAGE_CODE="fr")
-def test_create_order_use_translations(
-    checkout_with_item, customer_user, shipping_method, app
-):
+def test_create_order_use_translations(checkout_with_item, customer_user, app):
     translated_product_name = "French name"
     translated_variant_name = "French variant name"
 
@@ -512,7 +497,6 @@ def test_create_order_use_translations(
     checkout.user = customer_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = ""
     checkout.redirect_url = "https://www.example.com"
     checkout.language_code = "fr"
@@ -548,12 +532,11 @@ def test_create_order_use_translations(
 
 
 def test_create_order_from_checkout_updates_total_authorized_amount(
-    checkout_with_item, address, customer_user, shipping_method, app
+    checkout_with_item, address, customer_user, app
 ):
     # given
     checkout_with_item.shipping_address = address
     checkout_with_item.billing_address = address
-    checkout_with_item.shipping_method = shipping_method
     checkout_with_item.redirect_url = "https://www.example.com"
     checkout_with_item.save()
 
@@ -580,12 +563,11 @@ def test_create_order_from_checkout_updates_total_authorized_amount(
 
 
 def test_create_order_from_checkout_updates_total_charged_amount(
-    checkout_with_item, address, customer_user, shipping_method, app
+    checkout_with_item, address, customer_user, app
 ):
     # given
     checkout_with_item.shipping_address = address
     checkout_with_item.billing_address = address
-    checkout_with_item.shipping_method = shipping_method
     checkout_with_item.redirect_url = "https://www.example.com"
     checkout_with_item.save()
 
@@ -695,7 +677,7 @@ def test_create_order_from_checkout_store_shipping_prices(
 
 
 def test_create_order_from_checkout_valid_undiscounted_prices(
-    checkout_with_items_and_shipping, shipping_method, customer_user, app
+    checkout_with_items_and_shipping, customer_user, app
 ):
     # given
     checkout = checkout_with_items_and_shipping
@@ -750,7 +732,6 @@ def test_create_order_from_checkout_valid_undiscounted_prices(
 
 def test_create_order_from_store_shipping_prices_with_free_shipping_voucher(
     checkout_with_voucher_free_shipping,
-    shipping_method,
     customer_user,
     voucher_free_shipping,
     app,
@@ -758,9 +739,7 @@ def test_create_order_from_store_shipping_prices_with_free_shipping_voucher(
     # given
     checkout = checkout_with_voucher_free_shipping
 
-    expected_undiscounted_shipping_price = shipping_method.channel_listings.get(
-        channel=checkout.channel
-    ).price
+    expected_undiscounted_shipping_price = checkout.assigned_delivery.price
     expected_base_shipping_price = zero_money(checkout.currency)
     expected_shipping_price = zero_taxed_money(checkout.currency)
     expected_shipping_tax_rate = Decimal("0.0")
@@ -804,23 +783,23 @@ def test_create_order_from_store_shipping_prices_with_free_shipping_voucher(
 
 
 def test_note_in_created_order_checkout_line_deleted_in_the_meantime(
-    checkout_with_item, address, shipping_method, app, voucher_percentage
+    checkout_with_items, address, shipping_method, app, voucher_percentage
 ):
     # given
-    checkout_with_item.voucher_code = voucher_percentage.code
-    checkout_with_item.shipping_address = address
-    checkout_with_item.billing_address = address
-    checkout_with_item.shipping_method = shipping_method
-    checkout_with_item.tracking_code = "tracking_code"
-    checkout_with_item.redirect_url = "https://www.example.com"
-    checkout_with_item.save()
+    checkout_with_items.voucher_code = voucher_percentage.code
+    checkout_with_items.shipping_address = address
+    checkout_with_items.billing_address = address
+    checkout_with_items.shipping_method = shipping_method
+    checkout_with_items.tracking_code = "tracking_code"
+    checkout_with_items.redirect_url = "https://www.example.com"
+    checkout_with_items.save()
     manager = get_plugins_manager(allow_replica=False)
 
-    checkout_lines, _ = fetch_checkout_lines(checkout_with_item)
-    checkout_info = fetch_checkout_info(checkout_with_item, checkout_lines, manager)
+    checkout_lines, _ = fetch_checkout_lines(checkout_with_items)
+    checkout_info = fetch_checkout_info(checkout_with_items, checkout_lines, manager)
 
     def delete_checkout_line(*args, **kwargs):
-        CheckoutLine.objects.get(id=checkout_with_item.lines.first().id).delete()
+        CheckoutLine.objects.get(id=checkout_with_items.lines.first().id).delete()
 
     # when
     with race_condition.RunAfter(
@@ -839,13 +818,12 @@ def test_note_in_created_order_checkout_line_deleted_in_the_meantime(
 
 
 def test_note_in_created_order_checkout_deleted_in_the_meantime(
-    checkout_with_item, address, shipping_method, app, voucher_percentage
+    checkout_with_item, address, app, voucher_percentage
 ):
     # given
     checkout_with_item.voucher_code = voucher_percentage.code
     checkout_with_item.shipping_address = address
     checkout_with_item.billing_address = address
-    checkout_with_item.shipping_method = shipping_method
     checkout_with_item.tracking_code = "tracking_code"
     checkout_with_item.redirect_url = "https://www.example.com"
     checkout_with_item.save()
@@ -879,7 +857,6 @@ def test_create_order_from_checkout_update_undiscounted_prices_match(
     mock_unit,
     mock_total,
     checkout_with_items_and_shipping,
-    shipping_method,
     customer_user,
     app,
 ):
@@ -930,7 +907,6 @@ def test_create_order_from_checkout_update_undiscounted_prices_match(
 def test_create_order_product_on_promotion(
     checkout_with_item_on_promotion,
     customer_user,
-    shipping_method,
     app,
     catalogue_promotion_without_rules,
 ):
@@ -939,7 +915,6 @@ def test_create_order_product_on_promotion(
     checkout.user = customer_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -974,7 +949,6 @@ def test_create_order_product_on_promotion(
 def test_create_order_with_voucher_0_total(
     checkout_with_item,
     customer_user,
-    shipping_method,
     app,
     voucher_percentage,
     django_capture_on_commit_callbacks,
@@ -985,7 +959,6 @@ def test_create_order_with_voucher_0_total(
     checkout.user = customer_user
     checkout.billing_address = customer_user.default_billing_address
     checkout.shipping_address = customer_user.default_billing_address
-    checkout.shipping_method = shipping_method
     checkout.tracking_code = "tracking_code"
     checkout.redirect_url = "https://www.example.com"
     checkout.save()
@@ -993,10 +966,6 @@ def test_create_order_with_voucher_0_total(
     voucher_listing = voucher_percentage.channel_listings.get(channel=checkout.channel)
     voucher_listing.discount_value = 100
     voucher_listing.save(update_fields=["discount_value"])
-
-    shipping_listing = shipping_method.channel_listings.get(channel=checkout.channel)
-    shipping_listing.price_amount = 0
-    shipping_listing.save(update_fields=["price_amount"])
 
     manager = get_plugins_manager(allow_replica=False)
     lines, _ = fetch_checkout_lines(checkout)
@@ -1074,3 +1043,37 @@ def test_create_order_from_checkout_update_tax_error(
     assert not Order.objects.exists()
     assert "Tax app error for checkout" in caplog.text
     assert caplog.records[0].checkout_id == to_global_id_or_none(checkout)
+
+
+def test_created_order_from_checkout_missing_lines(
+    checkout_with_item, address, shipping_method, app, voucher_percentage
+):
+    # given
+    checkout_with_item.voucher_code = voucher_percentage.code
+    checkout_with_item.authorize_status = CheckoutAuthorizeStatus.FULL
+    checkout_with_item.shipping_address = address
+    checkout_with_item.billing_address = address
+    checkout_with_item.shipping_method = shipping_method
+    checkout_with_item.tracking_code = "tracking_code"
+    checkout_with_item.redirect_url = "https://www.example.com"
+    checkout_with_item.save()
+    manager = get_plugins_manager(allow_replica=False)
+
+    checkout_lines, _ = fetch_checkout_lines(checkout_with_item)
+    checkout_info = fetch_checkout_info(checkout_with_item, checkout_lines, manager)
+
+    def delete_lines(*args, **kwargs):
+        CheckoutLine.objects.filter(checkout_id=checkout_with_item.pk).delete()
+
+    # when
+    with race_condition.RunAfter(
+        "saleor.checkout.complete_checkout._increase_voucher_code_usage_value",
+        delete_lines,
+    ):
+        with pytest.raises(ValidationError):
+            create_order_from_checkout(
+                checkout_info=checkout_info,
+                manager=manager,
+                user=None,
+                app=app,
+            )

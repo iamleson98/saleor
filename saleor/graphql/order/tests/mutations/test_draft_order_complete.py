@@ -3,11 +3,13 @@ from decimal import Decimal
 from unittest.mock import ANY, call, patch
 
 import graphene
+import pytest
 from django.db.models import Sum
 from django.test import override_settings
 from django.utils import timezone
 from freezegun import freeze_time
 from prices import Money, TaxedMoney
+from promise import Promise
 
 from .....core import EventDeliveryStatus
 from .....core.models import EventDelivery
@@ -30,6 +32,7 @@ from .....plugins import PLUGIN_IDENTIFIER_PREFIX
 from .....plugins.base_plugin import ExcludedShippingMethod
 from .....plugins.tests.sample_plugins import PluginSample
 from .....product.models import ProductVariant
+from .....tests import race_condition
 from .....warehouse.models import Allocation, PreorderAllocation, Stock
 from .....warehouse.tests.utils import get_available_quantity_for_stock
 from .....webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
@@ -52,6 +55,24 @@ DRAFT_ORDER_COMPLETE_MUTATION = """
                 paymentStatus
                 voucher {
                     code
+                }
+                shippingMethod {
+                    id
+                    name
+                    metadata {
+                        key
+                        value
+                    }
+                }
+                deliveryMethod {
+                    ... on ShippingMethod {
+                        id
+                        name
+                        metadata {
+                            key
+                            value
+                        }
+                    }
                 }
                 voucherCode
                 total {
@@ -766,7 +787,7 @@ def test_draft_order_complete_not_available_shipping_method(
     assert {error["field"] for error in data["errors"]} == {"shipping", "lines"}
 
 
-@patch("saleor.plugins.manager.PluginsManager.excluded_shipping_methods_for_order")
+@patch("saleor.order.webhooks.exclude_shipping.excluded_shipping_methods_for_order")
 def test_draft_order_complete_with_excluded_shipping_method(
     mocked_webhook,
     draft_order,
@@ -778,9 +799,9 @@ def test_draft_order_complete_with_excluded_shipping_method(
     permission_group_manage_orders.user_set.add(staff_api_client.user)
     settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
     webhook_reason = "archives-are-incomplete"
-    mocked_webhook.return_value = [
-        ExcludedShippingMethod(str(shipping_method.id), webhook_reason)
-    ]
+    mocked_webhook.return_value = Promise.resolve(
+        [ExcludedShippingMethod(str(shipping_method.id), webhook_reason)]
+    )
     order = draft_order
     order.status = OrderStatus.DRAFT
     order.shipping_method = shipping_method
@@ -797,7 +818,7 @@ def test_draft_order_complete_with_excluded_shipping_method(
     assert data["errors"][0]["field"] == "shipping"
 
 
-@patch("saleor.plugins.manager.PluginsManager.excluded_shipping_methods_for_order")
+@patch("saleor.order.webhooks.exclude_shipping.excluded_shipping_methods_for_order")
 def test_draft_order_complete_with_not_excluded_shipping_method(
     mocked_webhook,
     draft_order,
@@ -811,9 +832,9 @@ def test_draft_order_complete_with_not_excluded_shipping_method(
     webhook_reason = "archives-are-incomplete"
     other_shipping_method_id = "1337"
     assert other_shipping_method_id != shipping_method.id
-    mocked_webhook.return_value = [
-        ExcludedShippingMethod(other_shipping_method_id, webhook_reason)
-    ]
+    mocked_webhook.return_value = Promise.resolve(
+        [ExcludedShippingMethod(other_shipping_method_id, webhook_reason)]
+    )
     order = draft_order
     order.status = OrderStatus.DRAFT
     order.shipping_method = shipping_method
@@ -825,6 +846,69 @@ def test_draft_order_complete_with_not_excluded_shipping_method(
     content = get_graphql_content(response)
     data = content["data"]["draftOrderComplete"]
     assert len(data["errors"]) == 0
+
+
+def test_draft_order_complete_builtin_shipping_method_metadata_denormalization(
+    draft_order,
+    shipping_method,
+    staff_api_client,
+    permission_group_manage_orders,
+):
+    # given
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order = draft_order
+    order.shipping_method = shipping_method
+    order.shipping_method_name = shipping_method.name
+    order.save()
+
+    expected_metadata_key = "AnyKey"
+    expected_metadata_value = "AnyValue"
+    expected_shipping_metadata = {
+        expected_metadata_key: expected_metadata_value,
+    }
+    shipping_method.metadata = expected_shipping_metadata
+    shipping_method.save()
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+
+    # when
+    def clear_shipping_metadata(*args, **kwargs):
+        # Clear shipping method metadata to ensure data is denormalized properly
+        shipping_method.metadata = {}
+        shipping_method.save()
+
+    with race_condition.RunBefore(
+        "saleor.graphql.order.mutations.draft_order_complete.OrderInfo",
+        clear_shipping_metadata,
+    ):
+        response = staff_api_client.post_graphql(
+            DRAFT_ORDER_COMPLETE_MUTATION, variables
+        )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["draftOrderComplete"]
+    assert len(data["errors"]) == 0
+    order_data = data["order"]
+    assert order_data["shippingMethod"]["name"] == shipping_method.name
+    assert order_data["shippingMethod"]["metadata"][0]["key"] == expected_metadata_key
+    assert (
+        order_data["shippingMethod"]["metadata"][0]["value"] == expected_metadata_value
+    )
+    assert order_data["deliveryMethod"]["name"] == shipping_method.name
+    assert order_data["deliveryMethod"]["metadata"][0]["key"] == expected_metadata_key
+    assert (
+        order_data["deliveryMethod"]["metadata"][0]["value"] == expected_metadata_value
+    )
+
+    # Ensure shipping metadata was denormalized properly
+    order.refresh_from_db()
+    assert order.shipping_method_metadata == expected_shipping_metadata
+
+    # Ensure shipping method metadata in DB was cleared after denormalization
+    shipping_method.refresh_from_db()
+    assert shipping_method.metadata == {}
 
 
 def test_draft_order_complete_out_of_stock_variant(
@@ -1361,7 +1445,9 @@ def test_draft_order_complete_with_catalogue_and_order_discount(
     currency = order.currency
     order_id = graphene.Node.to_global_id("Order", order.id)
     variables = {"id": order_id}
-    fetch_order_prices_if_expired(order, plugins_manager, force_update=True)
+    fetch_order_prices_if_expired(
+        order, plugins_manager, requestor=None, force_update=True
+    ).get()
 
     # when
     response = staff_api_client.post_graphql(
@@ -1458,7 +1544,9 @@ def test_draft_order_complete_with_catalogue_and_gift_discount(
     currency = order.currency
     order_id = graphene.Node.to_global_id("Order", order.id)
     variables = {"id": order_id}
-    fetch_order_prices_if_expired(order, plugins_manager, force_update=True)
+    fetch_order_prices_if_expired(
+        order, plugins_manager, requestor=None, force_update=True
+    ).get()
 
     # when
     response = staff_api_client.post_graphql(
@@ -1709,7 +1797,7 @@ def test_draft_order_complete_triggers_webhooks(
             call(
                 kwargs={"event_delivery_id": delivery.id, "telemetry_context": ANY},
                 queue=settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
-                MessageGroupId="example.com:saleor.app.additional",
+                MessageGroupId="example.com:saleorappadditional",
             )
             for delivery in order_deliveries
         ],
@@ -1882,3 +1970,55 @@ def test_draft_order_complete_clear_line_draft_base_price_expire_at_field(
 
     for line in order.lines.all():
         assert line.draft_base_price_expire_at is None
+
+
+@pytest.mark.parametrize("include_draft_order_in_voucher_usage", [True, False])
+@pytest.mark.parametrize("code_is_active", [True, False])
+def test_draft_order_complete_with_single_use_voucher(
+    staff_api_client,
+    permission_group_manage_orders,
+    draft_order,
+    voucher,
+    channel_USD,
+    include_draft_order_in_voucher_usage,
+    code_is_active,
+):
+    # given
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order = draft_order
+
+    channel_USD.include_draft_order_in_voucher_usage = (
+        include_draft_order_in_voucher_usage
+    )
+    channel_USD.save(update_fields=["include_draft_order_in_voucher_usage"])
+
+    voucher.single_use = True
+    voucher.save(update_fields=["single_use"])
+
+    code_instance = voucher.codes.first()
+    code_instance.is_active = code_is_active
+    code_instance.save(update_fields=["is_active"])
+
+    order.voucher = voucher
+    order.voucher_code = code_instance.code
+    order.should_refresh_prices = True
+    order.save(update_fields=["voucher", "voucher_code", "should_refresh_prices"])
+    create_or_update_voucher_discount_objects_for_order(order)
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+
+    # when
+    response = staff_api_client.post_graphql(DRAFT_ORDER_COMPLETE_MUTATION, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["draftOrderComplete"]["order"]
+    order.refresh_from_db()
+
+    assert data["status"] == order.status.upper()
+    assert data["voucherCode"] == code_instance.code
+    assert data["voucher"]["code"] == voucher.code
+
+    code_instance.refresh_from_db()
+    assert not code_instance.is_active

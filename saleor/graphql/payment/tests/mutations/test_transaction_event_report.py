@@ -12,11 +12,9 @@ from .....checkout import CheckoutAuthorizeStatus, CheckoutChargeStatus
 from .....checkout.calculations import fetch_checkout_data
 from .....checkout.complete_checkout import create_order_from_checkout
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
-from .....checkout.models import Checkout
 from .....order import (
     OrderAuthorizeStatus,
     OrderChargeStatus,
-    OrderEvents,
     OrderGrantedRefundStatus,
     OrderStatus,
 )
@@ -29,6 +27,9 @@ from .....payment.lock_objects import (
 from .....payment.models import TransactionEvent
 from .....payment.transaction_item_calculations import recalculate_transaction_amounts
 from .....tests import race_condition
+from .....webhook.event_types import WebhookEventSyncType
+from .....webhook.models import Webhook
+from .....webhook.transport.utils import generate_cache_key_for_webhook
 from ....core.enums import TransactionEventReportErrorCode
 from ....core.utils import to_global_id_or_none
 from ....tests.utils import assert_no_permission, get_graphql_content
@@ -1388,13 +1389,72 @@ def test_transaction_event_updates_checkout_last_transaction_modified_at(
     assert checkout.last_transaction_modified_at == transaction.modified_at
 
 
-@patch("saleor.checkout.tasks.automatic_checkout_completion_task.delay")
+@pytest.mark.parametrize(
+    "current_search_index_dirty",
+    [False, True],
+)
+@freeze_time("2018-05-31 12:00:01")
+def test_transaction_event_updates_checkout_search_index_dirty_flag(
+    current_search_index_dirty,
+    transaction_item_generator,
+    app_api_client,
+    permission_manage_payments,
+    checkout_with_items,
+):
+    # given
+    checkout = checkout_with_items
+    checkout.search_index_dirty = current_search_index_dirty
+    checkout.save(update_fields=["search_index_dirty"])
+
+    psp_reference = "111-abc"
+    amount = Decimal("11.00")
+    transaction = transaction_item_generator(
+        app=app_api_client.app, checkout_id=checkout.pk
+    )
+    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
+    variables = {
+        "id": transaction_id,
+        "type": TransactionEventTypeEnum.CHARGE_SUCCESS.name,
+        "amount": amount,
+        "pspReference": psp_reference,
+    }
+    query = (
+        MUTATION_DATA_FRAGMENT
+        + """
+    mutation TransactionEventReport(
+        $id: ID
+        $type: TransactionEventTypeEnum!
+        $amount: PositiveDecimal!
+        $pspReference: String!
+    ) {
+        transactionEventReport(
+            id: $id
+            type: $type
+            amount: $amount
+            pspReference: $pspReference
+        ) {
+            ...TransactionEventData
+        }
+    }
+    """
+    )
+    # when
+    response = app_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_payments]
+    )
+
+    # then
+    get_graphql_content(response)
+    checkout.refresh_from_db()
+
+    assert checkout.search_index_dirty is True
+
+
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
 def test_transaction_event_updates_checkout_full_paid_with_charged_amount(
     mocked_fully_authorized,
     mocked_fully_paid,
-    mocked_automatic_checkout_completion_task,
     transaction_item_generator,
     app_api_client,
     permission_manage_payments,
@@ -1407,8 +1467,6 @@ def test_transaction_event_updates_checkout_full_paid_with_charged_amount(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
     checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-
-    assert checkout.channel.automatically_complete_fully_paid_checkouts is False
 
     psp_reference = "111-abc"
     transaction = transaction_item_generator(
@@ -1458,16 +1516,13 @@ def test_transaction_event_updates_checkout_full_paid_with_charged_amount(
     assert checkout.authorize_status == CheckoutAuthorizeStatus.FULL
     mocked_fully_paid.assert_called_once_with(checkout, webhooks=set())
     mocked_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-    mocked_automatic_checkout_completion_task.assert_not_called()
 
 
-@patch("saleor.checkout.tasks.automatic_checkout_completion_task.delay")
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
 def test_transaction_event_updates_checkout_full_paid_with_pending_charge_amount(
     mocked_fully_paid,
     mocked_fully_authorized,
-    mocked_automatic_checkout_completion_task,
     transaction_item_generator,
     app_api_client,
     permission_manage_payments,
@@ -1528,172 +1583,13 @@ def test_transaction_event_updates_checkout_full_paid_with_pending_charge_amount
     assert checkout.authorize_status == CheckoutAuthorizeStatus.FULL
     mocked_fully_paid.assert_called_once_with(checkout, webhooks=set())
     mocked_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-    mocked_automatic_checkout_completion_task.assert_not_called()
 
 
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
-def test_transaction_event_updates_checkout_full_paid_automatic_completion(
-    mocked_fully_paid,
-    checkout_fully_authorized,
-    transaction_item_generator,
-    app_api_client,
-    permission_manage_payments,
-    checkout_with_prices,
-    plugins_manager,
-):
-    # given
-    checkout = checkout_with_prices
-
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
-    checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-    checkout_token = checkout.token
-
-    channel = checkout_info.channel
-    channel.automatically_complete_fully_paid_checkouts = True
-    channel.save(update_fields=["automatically_complete_fully_paid_checkouts"])
-
-    psp_reference = "111-abc"
-    transaction = transaction_item_generator(
-        app=app_api_client.app, checkout_id=checkout.pk
-    )
-    transaction_item_generator(
-        app=app_api_client.app,
-        checkout_id=checkout.pk,
-    )
-    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
-    variables = {
-        "id": transaction_id,
-        "type": TransactionEventTypeEnum.CHARGE_SUCCESS.name,
-        "amount": checkout_info.checkout.total.gross.amount,
-        "pspReference": psp_reference,
-    }
-    query = (
-        MUTATION_DATA_FRAGMENT
-        + """
-    mutation TransactionEventReport(
-        $id: ID
-        $type: TransactionEventTypeEnum!
-        $amount: PositiveDecimal!
-        $pspReference: String!
-    ) {
-        transactionEventReport(
-            id: $id
-            type: $type
-            amount: $amount
-            pspReference: $pspReference
-        ) {
-            ...TransactionEventData
-        }
-    }
-    """
-    )
-    # when
-    response = app_api_client.post_graphql(
-        query, variables, permissions=[permission_manage_payments]
-    )
-
-    # then
-    get_graphql_content(response)
-    mocked_fully_paid.assert_called_once_with(checkout, webhooks=set())
-    with pytest.raises(Checkout.DoesNotExist):
-        checkout.refresh_from_db()
-
-    order = Order.objects.get(checkout_token=checkout_token)
-    assert order.charge_status == CheckoutChargeStatus.FULL
-    assert order.authorize_status == CheckoutAuthorizeStatus.FULL
-    assert order.events.filter(
-        type=OrderEvents.PLACED_AUTOMATICALLY_FROM_PAID_CHECKOUT
-    ).exists()
-
-    checkout_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-    mocked_fully_paid.assert_called_once_with(checkout, webhooks=set())
-
-
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
-def test_transaction_event_updates_checkout_full_paid_pending_charge_automatic_complete(
-    mocked_fully_paid,
-    checkout_fully_authorized,
-    transaction_item_generator,
-    app_api_client,
-    permission_manage_payments,
-    checkout_with_prices,
-    plugins_manager,
-):
-    # given
-    checkout = checkout_with_prices
-
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
-    checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-    checkout_token = checkout.token
-
-    channel = checkout_info.channel
-    channel.automatically_complete_fully_paid_checkouts = True
-    channel.save(update_fields=["automatically_complete_fully_paid_checkouts"])
-
-    psp_reference = "111-abc"
-    transaction = transaction_item_generator(
-        app=app_api_client.app, checkout_id=checkout.pk
-    )
-    transaction_item_generator(
-        app=app_api_client.app,
-        checkout_id=checkout.pk,
-    )
-    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
-    variables = {
-        "id": transaction_id,
-        "type": TransactionEventTypeEnum.CHARGE_REQUEST.name,
-        "amount": checkout_info.checkout.total.gross.amount,
-        "pspReference": psp_reference,
-    }
-    query = (
-        MUTATION_DATA_FRAGMENT
-        + """
-    mutation TransactionEventReport(
-        $id: ID
-        $type: TransactionEventTypeEnum!
-        $amount: PositiveDecimal!
-        $pspReference: String!
-    ) {
-        transactionEventReport(
-            id: $id
-            type: $type
-            amount: $amount
-            pspReference: $pspReference
-        ) {
-            ...TransactionEventData
-        }
-    }
-    """
-    )
-    # when
-    response = app_api_client.post_graphql(
-        query, variables, permissions=[permission_manage_payments]
-    )
-
-    # then
-    get_graphql_content(response)
-    with pytest.raises(Checkout.DoesNotExist):
-        checkout.refresh_from_db()
-
-    order = Order.objects.get(checkout_token=checkout_token)
-    assert order.charge_status == CheckoutChargeStatus.NONE
-    assert order.authorize_status == CheckoutAuthorizeStatus.NONE
-
-    mocked_fully_paid.assert_called_once_with(checkout, webhooks=set())
-    checkout_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-
-
-@patch("saleor.checkout.tasks.automatic_checkout_completion_task.delay")
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
 @patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
 def test_transaction_event_updates_checkout_fully_authorized(
     mocked_fully_authorized,
     mocked_fully_paid,
-    mocked_automatic_checkout_completion_task,
     transaction_item_generator,
     app_api_client,
     permission_manage_payments,
@@ -1706,8 +1602,6 @@ def test_transaction_event_updates_checkout_fully_authorized(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
     checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-
-    assert checkout.channel.automatically_complete_fully_paid_checkouts is False
 
     psp_reference = "111-abc"
     transaction = transaction_item_generator(
@@ -1756,162 +1650,6 @@ def test_transaction_event_updates_checkout_fully_authorized(
     assert checkout.charge_status == CheckoutChargeStatus.NONE
     assert checkout.authorize_status == CheckoutAuthorizeStatus.FULL
 
-    mocked_fully_paid.assert_not_called()
-    mocked_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-    mocked_automatic_checkout_completion_task.assert_not_called()
-
-
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
-def test_transaction_event_updates_checkout_fully_authorized_automatic_complete(
-    mocked_fully_paid,
-    mocked_fully_authorized,
-    transaction_item_generator,
-    app_api_client,
-    permission_manage_payments,
-    checkout_with_prices,
-    plugins_manager,
-):
-    # given
-    checkout = checkout_with_prices
-
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
-    checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-
-    checkout_token = checkout.token
-
-    channel = checkout_info.channel
-    channel.automatically_complete_fully_paid_checkouts = True
-    channel.save(update_fields=["automatically_complete_fully_paid_checkouts"])
-
-    psp_reference = "111-abc"
-    transaction = transaction_item_generator(
-        app=app_api_client.app, checkout_id=checkout.pk
-    )
-    transaction_item_generator(
-        app=app_api_client.app,
-        checkout_id=checkout.pk,
-    )
-    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
-    variables = {
-        "id": transaction_id,
-        "type": TransactionEventTypeEnum.AUTHORIZATION_SUCCESS.name,
-        "amount": checkout_info.checkout.total.gross.amount,
-        "pspReference": psp_reference,
-    }
-    query = (
-        MUTATION_DATA_FRAGMENT
-        + """
-    mutation TransactionEventReport(
-        $id: ID
-        $type: TransactionEventTypeEnum!
-        $amount: PositiveDecimal!
-        $pspReference: String!
-    ) {
-        transactionEventReport(
-            id: $id
-            type: $type
-            amount: $amount
-            pspReference: $pspReference
-        ) {
-            ...TransactionEventData
-        }
-    }
-    """
-    )
-    # when
-    response = app_api_client.post_graphql(
-        query, variables, permissions=[permission_manage_payments]
-    )
-
-    # then
-    get_graphql_content(response)
-    with pytest.raises(Checkout.DoesNotExist):
-        checkout.refresh_from_db()
-
-    order = Order.objects.get(checkout_token=checkout_token)
-    assert order.charge_status == CheckoutChargeStatus.NONE
-    assert order.authorize_status == CheckoutAuthorizeStatus.FULL
-    assert order.events.filter(
-        type=OrderEvents.PLACED_AUTOMATICALLY_FROM_PAID_CHECKOUT
-    ).exists()
-    mocked_fully_paid.assert_not_called()
-    mocked_fully_authorized.assert_called_once_with(checkout, webhooks=set())
-
-
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_authorized")
-@patch("saleor.plugins.manager.PluginsManager.checkout_fully_paid")
-def test_transaction_event_updates_checkout_fully_authorized_pending_automatic_complete(
-    mocked_fully_paid,
-    mocked_fully_authorized,
-    transaction_item_generator,
-    app_api_client,
-    permission_manage_payments,
-    checkout_with_prices,
-    plugins_manager,
-):
-    # given
-    checkout = checkout_with_prices
-
-    lines, _ = fetch_checkout_lines(checkout)
-    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
-    checkout_info, _ = fetch_checkout_data(checkout_info, plugins_manager, lines)
-
-    checkout_token = checkout.token
-
-    channel = checkout_info.channel
-    channel.automatically_complete_fully_paid_checkouts = True
-    channel.save(update_fields=["automatically_complete_fully_paid_checkouts"])
-
-    psp_reference = "111-abc"
-    transaction = transaction_item_generator(
-        app=app_api_client.app, checkout_id=checkout.pk
-    )
-    transaction_item_generator(
-        app=app_api_client.app,
-        checkout_id=checkout.pk,
-    )
-    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
-    variables = {
-        "id": transaction_id,
-        "type": TransactionEventTypeEnum.AUTHORIZATION_REQUEST.name,
-        "amount": checkout_info.checkout.total.gross.amount,
-        "pspReference": psp_reference,
-    }
-    query = (
-        MUTATION_DATA_FRAGMENT
-        + """
-    mutation TransactionEventReport(
-        $id: ID
-        $type: TransactionEventTypeEnum!
-        $amount: PositiveDecimal!
-        $pspReference: String!
-    ) {
-        transactionEventReport(
-            id: $id
-            type: $type
-            amount: $amount
-            pspReference: $pspReference
-        ) {
-            ...TransactionEventData
-        }
-    }
-    """
-    )
-    # when
-    response = app_api_client.post_graphql(
-        query, variables, permissions=[permission_manage_payments]
-    )
-
-    # then
-    get_graphql_content(response)
-    with pytest.raises(Checkout.DoesNotExist):
-        checkout.refresh_from_db()
-
-    order = Order.objects.get(checkout_token=checkout_token)
-    assert order.charge_status == CheckoutChargeStatus.NONE
-    assert order.authorize_status == CheckoutAuthorizeStatus.NONE
     mocked_fully_paid.assert_not_called()
     mocked_fully_authorized.assert_called_once_with(checkout, webhooks=set())
 
@@ -2216,7 +1954,7 @@ def test_transaction_event_report_for_order_triggers_webhooks_when_fully_paid(
 @patch("saleor.plugins.manager.PluginsManager.order_paid")
 @patch("saleor.plugins.manager.PluginsManager.order_updated")
 @patch("saleor.plugins.manager.PluginsManager.order_fully_paid")
-def test_transaction_event_report_for_draft_order_triggers_webhooks_when_fully_paid(
+def test_transaction_event_report_for_draft_order_does_not_trigger_webhooks_when_fully_paid(
     mock_order_fully_paid,
     mock_order_updated,
     mock_order_paid,
@@ -2270,9 +2008,9 @@ def test_transaction_event_report_for_draft_order_triggers_webhooks_when_fully_p
 
     assert order.status == OrderStatus.DRAFT
     assert order.charge_status == OrderChargeStatus.FULL
-    mock_order_fully_paid.assert_called_once_with(order, webhooks=set())
-    mock_order_updated.assert_called_once_with(order, webhooks=set())
-    mock_order_paid.assert_called_once_with(order, webhooks=set())
+    mock_order_fully_paid.assert_not_called()
+    mock_order_updated.assert_not_called()
+    mock_order_paid.assert_not_called()
 
 
 @patch("saleor.plugins.manager.PluginsManager.order_updated")
@@ -3199,7 +2937,7 @@ def test_transaction_event_report_update_transaction_private_metadata(
     assert event.app_identifier == app_api_client.app.identifier
     assert event.app == app_api_client.app
     assert event.user is None
-    transaction_item_metadata_updated_mock.assert_not_called()
+    transaction_item_metadata_updated_mock.assert_called_once()
 
 
 def test_transaction_event_report_message_limit_exceeded(
@@ -4021,3 +3759,385 @@ def test_transaction_event_report_event_already_exists_updates_other_payment_met
     transaction.refresh_from_db()
     assert transaction.payment_method_type == PaymentMethodType.OTHER
     assert transaction.payment_method_name == payment_method_name
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        TransactionEventType.AUTHORIZATION_REQUEST,
+        TransactionEventType.AUTHORIZATION_SUCCESS,
+        TransactionEventType.CHARGE_REQUEST,
+        TransactionEventType.CHARGE_SUCCESS,
+    ],
+)
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_invalidate_stored_payment_methods_for_order(
+    cache_delete_mock,
+    result,
+    customer_user,
+    app_api_client,
+    order_with_lines,
+    permission_manage_payments,
+    list_stored_payment_methods_app,
+    transaction_item_generator,
+):
+    # given
+    order = order_with_lines
+    order.user = customer_user
+    order.save(update_fields=["user_id"])
+
+    app = app_api_client.app
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, order_id=order.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    channel = order.channel
+    expected_payload = {
+        "user_id": graphene.Node.to_global_id("User", customer_user.pk),
+        "channel_slug": channel.slug,
+    }
+    # cache key for transaction webhook
+    cache_key = generate_cache_key_for_webhook(
+        expected_payload,
+        webhook.target_url,
+        WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+        app.id,
+    )
+
+    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
+    variables = {
+        "id": transaction_id,
+        "type": result.upper(),
+        "amount": expected_amount,
+        "pspReference": expected_psp_reference,
+        "availableActions": [TransactionActionEnum.REFUND.name],
+    }
+    query = (
+        MUTATION_DATA_FRAGMENT
+        + """
+    mutation TransactionEventReport(
+        $id: ID
+        $type: TransactionEventTypeEnum!
+        $amount: PositiveDecimal!
+        $pspReference: String!
+        $availableActions: [TransactionActionEnum!]!
+    ) {
+        transactionEventReport(
+            id: $id
+            type: $type
+            amount: $amount
+            pspReference: $pspReference
+            availableActions: $availableActions
+        ) {
+            ...TransactionEventData
+        }
+    }
+    """
+    )
+
+    # when
+    response = app_api_client.post_graphql(query, variables)
+
+    # then
+    response = get_graphql_content(response)
+    transaction_report_data = response["data"]["transactionEventReport"]
+    assert transaction_report_data["transaction"]
+
+    # ensure that only cache for result app identifier has been cleared
+    cache_delete_mock.assert_called_once_with(cache_key)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        TransactionEventType.AUTHORIZATION_REQUEST,
+        TransactionEventType.AUTHORIZATION_SUCCESS,
+        TransactionEventType.CHARGE_REQUEST,
+        TransactionEventType.CHARGE_SUCCESS,
+    ],
+)
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_invalidate_stored_payment_methods_for_checkout(
+    cache_delete_mock,
+    result,
+    customer_user,
+    app_api_client,
+    checkout_with_items,
+    permission_manage_payments,
+    list_stored_payment_methods_app,
+    transaction_item_generator,
+    plugins_manager,
+):
+    # given
+    checkout = checkout_with_items
+    checkout.user = customer_user
+    checkout.save(update_fields=["user_id"])
+
+    # Fetch checkout lines and info to recalculate checkout total prices
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
+    fetch_checkout_data(checkout_info, plugins_manager, lines)
+
+    app = app_api_client.app
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, checkout_id=checkout.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    channel = checkout.channel
+    expected_payload = {
+        "user_id": graphene.Node.to_global_id("User", customer_user.pk),
+        "channel_slug": channel.slug,
+    }
+    # cache key for transaction webhook
+    cache_key = generate_cache_key_for_webhook(
+        expected_payload,
+        webhook.target_url,
+        WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+        app.id,
+    )
+
+    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
+    variables = {
+        "id": transaction_id,
+        "type": result.upper(),
+        "amount": expected_amount,
+        "pspReference": expected_psp_reference,
+        "availableActions": [TransactionActionEnum.REFUND.name],
+    }
+    query = (
+        MUTATION_DATA_FRAGMENT
+        + """
+    mutation TransactionEventReport(
+        $id: ID
+        $type: TransactionEventTypeEnum!
+        $amount: PositiveDecimal!
+        $pspReference: String!
+        $availableActions: [TransactionActionEnum!]!
+    ) {
+        transactionEventReport(
+            id: $id
+            type: $type
+            amount: $amount
+            pspReference: $pspReference
+            availableActions: $availableActions
+        ) {
+            ...TransactionEventData
+        }
+    }
+    """
+    )
+
+    # when
+    response = app_api_client.post_graphql(query, variables)
+
+    # then
+    response = get_graphql_content(response)
+    transaction_report_data = response["data"]["transactionEventReport"]
+    assert transaction_report_data["transaction"]
+
+    # ensure that only cache for result app identifier has been cleared
+    cache_delete_mock.assert_called_once_with(cache_key)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        TransactionEventType.AUTHORIZATION_FAILURE,
+        TransactionEventType.CHARGE_ACTION_REQUIRED,
+        TransactionEventType.CHARGE_FAILURE,
+    ],
+)
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_stored_payment_methods_not_invalidated_for_order(
+    cache_delete_mock,
+    result,
+    customer_user,
+    app_api_client,
+    order_with_lines,
+    permission_manage_payments,
+    transaction_item_generator,
+):
+    # given
+    order = order_with_lines
+    order.user = customer_user
+    order.save(update_fields=["user_id"])
+
+    app = app_api_client.app
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, order_id=order.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
+    variables = {
+        "id": transaction_id,
+        "type": result.upper(),
+        "amount": expected_amount,
+        "pspReference": expected_psp_reference,
+        "availableActions": [TransactionActionEnum.REFUND.name],
+    }
+    query = (
+        MUTATION_DATA_FRAGMENT
+        + """
+    mutation TransactionEventReport(
+        $id: ID
+        $type: TransactionEventTypeEnum!
+        $amount: PositiveDecimal!
+        $pspReference: String!
+        $availableActions: [TransactionActionEnum!]!
+    ) {
+        transactionEventReport(
+            id: $id
+            type: $type
+            amount: $amount
+            pspReference: $pspReference
+            availableActions: $availableActions
+        ) {
+            ...TransactionEventData
+        }
+    }
+    """
+    )
+
+    # when
+    response = app_api_client.post_graphql(query, variables)
+
+    # then
+    response = get_graphql_content(response)
+    transaction_report_data = response["data"]["transactionEventReport"]
+    assert transaction_report_data["transaction"]
+
+    # ensure that cache has not been cleared
+    cache_delete_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        TransactionEventType.AUTHORIZATION_FAILURE,
+        TransactionEventType.CHARGE_ACTION_REQUIRED,
+        TransactionEventType.CHARGE_FAILURE,
+    ],
+)
+@patch("saleor.webhook.transport.list_stored_payment_methods.cache.delete")
+def test_stored_payment_methods_not_invalidated_for_checkout(
+    cache_delete_mock,
+    result,
+    customer_user,
+    app_api_client,
+    checkout_with_items,
+    permission_manage_payments,
+    transaction_item_generator,
+    plugins_manager,
+):
+    # given
+    checkout = checkout_with_items
+    checkout.user = customer_user
+    checkout.save(update_fields=["user_id"])
+
+    # Fetch checkout lines and info to recalculate checkout total prices
+    lines, _ = fetch_checkout_lines(checkout)
+    checkout_info = fetch_checkout_info(checkout, lines, plugins_manager)
+    fetch_checkout_data(checkout_info, plugins_manager, lines)
+
+    app = app_api_client.app
+    expected_app_identifier = "webhook.app.identifier"
+    app.identifier = expected_app_identifier
+    app.save()
+
+    app.permissions.add(permission_manage_payments)
+    webhook = Webhook.objects.create(
+        name="list_stored_payment_methods",
+        app=app,
+        target_url="http://localhost:8000/endpoint/",
+    )
+    webhook.events.create(
+        event_type=WebhookEventSyncType.LIST_STORED_PAYMENT_METHODS,
+    )
+
+    transaction = transaction_item_generator(app=app, checkout_id=checkout.pk)
+    expected_amount = Decimal("11.00")
+    expected_psp_reference = "111-abc"
+
+    transaction_id = graphene.Node.to_global_id("TransactionItem", transaction.token)
+    variables = {
+        "id": transaction_id,
+        "type": result.upper(),
+        "amount": expected_amount,
+        "pspReference": expected_psp_reference,
+        "availableActions": [TransactionActionEnum.REFUND.name],
+    }
+    query = (
+        MUTATION_DATA_FRAGMENT
+        + """
+    mutation TransactionEventReport(
+        $id: ID
+        $type: TransactionEventTypeEnum!
+        $amount: PositiveDecimal!
+        $pspReference: String!
+        $availableActions: [TransactionActionEnum!]!
+    ) {
+        transactionEventReport(
+            id: $id
+            type: $type
+            amount: $amount
+            pspReference: $pspReference
+            availableActions: $availableActions
+        ) {
+            ...TransactionEventData
+        }
+    }
+    """
+    )
+
+    # when
+    response = app_api_client.post_graphql(query, variables)
+
+    # then
+    response = get_graphql_content(response)
+    transaction_report_data = response["data"]["transactionEventReport"]
+    assert transaction_report_data["transaction"]
+
+    # ensure that cache has not been cleared
+    cache_delete_mock.assert_not_called()

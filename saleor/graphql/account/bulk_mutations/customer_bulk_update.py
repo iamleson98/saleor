@@ -8,7 +8,7 @@ from graphene.utils.str_converters import to_camel_case
 
 from ....account import models
 from ....account.events import CustomerEvents
-from ....account.search import prepare_user_search_document_value
+from ....account.search import update_user_search_vector
 from ....checkout import AddressType
 from ....core.tracing import traced_atomic_transaction
 from ....core.utils import metadata_manager
@@ -32,6 +32,7 @@ from ...core.validators import validate_one_of_args_is_in_mutation
 from ...meta.inputs import MetadataInput
 from ...payment.utils import deprecated_metadata_contains_empty_key
 from ...plugins.dataloaders import get_app_promise, get_plugin_manager_promise
+from ...site.dataloaders import get_site_promise
 from ..i18n import I18nMixin
 from ..mutations.base import (
     BILLING_ADDRESS_FIELD,
@@ -562,15 +563,15 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
                 customer.default_billing_address = customer.default_billing_address
                 customer.default_shipping_address = customer.default_shipping_address
 
-            search_document = prepare_user_search_document_value(customer)
-            customer.search_document = search_document
+            update_user_search_vector(customer, save=False)
 
         models.User.objects.bulk_update(
             customers_to_update,
             fields=[
                 "default_shipping_address",
                 "default_billing_address",
-                "search_document",
+                "search_vector",
+                "updated_at",
             ],
         )
 
@@ -580,6 +581,8 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
     def post_save_actions(cls, info, manager, instances, old_instances):
         customer_events = []
         app = get_app_promise(info.context).get()
+        site = get_site_promise(info.context).get()
+        use_legacy_webhooks_emission = site.settings.use_legacy_update_webhook_emission
         staff_user = info.context.user
         users_with_name_or_email_updated = []
         webhooks_meta = get_webhooks_for_event(
@@ -591,9 +594,6 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
         for updated_instance, old_instance in zip(
             instances, old_instances, strict=False
         ):
-            cls.call_event(
-                manager.customer_updated, updated_instance, webhooks=webhooks_updated
-            )
             new_email = updated_instance.email
             new_fullname = updated_instance.get_full_name()
 
@@ -602,7 +602,10 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
             has_new_email = old_instance.email != new_email
             was_activated = not old_instance.is_active and updated_instance.is_active
             was_deactivated = old_instance.is_active and not updated_instance.is_active
-            metadata_update = old_instance.metadata != updated_instance.metadata
+            metadata_update = (
+                old_instance.metadata != updated_instance.metadata
+                or old_instance.private_metadata != updated_instance.private_metadata
+            )
             being_confirmed = (
                 not old_instance.is_confirmed and updated_instance.is_confirmed
             )
@@ -655,6 +658,36 @@ class CustomerBulkUpdate(BaseMutation, I18nMixin):
                     )
                 )
 
+            note_changed = old_instance.note != updated_instance.note
+            language_code_changed = (
+                old_instance.language_code != updated_instance.language_code
+            )
+            external_reference_changed = (
+                old_instance.external_reference != updated_instance.external_reference
+            )
+            address_changed = (
+                old_instance.default_billing_address_id
+                != updated_instance.default_billing_address_id
+                or old_instance.default_shipping_address_id
+                != updated_instance.default_shipping_address_id
+            )
+            instance_modified = (
+                has_new_name
+                or has_new_email
+                or was_activated
+                or was_deactivated
+                or being_confirmed
+                or address_changed
+                or note_changed
+                or language_code_changed
+                or external_reference_changed
+            )
+            if instance_modified or (metadata_update and use_legacy_webhooks_emission):
+                cls.call_event(
+                    manager.customer_updated,
+                    updated_instance,
+                    webhooks=webhooks_updated,
+                )
             if metadata_update:
                 cls.call_event(
                     manager.customer_metadata_updated,

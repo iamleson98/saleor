@@ -17,11 +17,10 @@ from ...checkout.models import Checkout
 from ...core import EventDeliveryStatus
 from ...core.models import EventDelivery
 from ...core.notify import NotifyEventType
-from ...core.taxes import TAX_ERROR_FIELD_LENGTH, TaxData, TaxDataError, TaxType
+from ...core.taxes import TaxData, TaxDataError, TaxType
 from ...core.telemetry import get_task_context
 from ...core.utils import build_absolute_uri, get_domain
 from ...core.utils.json_serializer import CustomJsonEncoder
-from ...core.utils.text import safe_truncate
 from ...csv.notifications import get_default_export_payload
 from ...graphql.core.context import SaleorContext
 from ...graphql.webhook.subscription_payload import (
@@ -61,6 +60,7 @@ from ...payment.utils import (
     recalculate_refundable_for_checkout,
 )
 from ...settings import WEBHOOK_SYNC_TIMEOUT
+from ...tax.webhooks.parser import parse_tax_data
 from ...thumbnail.models import Thumbnail
 from ...webhook.const import WEBHOOK_CACHE_DEFAULT_TTL
 from ...webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
@@ -70,14 +70,12 @@ from ...webhook.payloads import (
     generate_collection_payload,
     generate_customer_payload,
     generate_excluded_shipping_methods_for_checkout_payload,
-    generate_excluded_shipping_methods_for_order_payload,
     generate_fulfillment_payload,
     generate_invoice_payload,
     generate_list_gateways_payload,
     generate_meta,
     generate_metadata_updated_payload,
     generate_order_payload,
-    generate_order_payload_for_tax_calculation,
     generate_page_payload,
     generate_payment_payload,
     generate_product_deleted_payload,
@@ -95,7 +93,6 @@ from ...webhook.payloads import (
 from ...webhook.response_schemas.transaction import (
     PaymentGatewayInitializeSessionSchema,
 )
-from ...webhook.response_schemas.utils.helpers import parse_validation_error
 from ...webhook.transport.asynchronous.transport import (
     WebhookPayloadData,
     get_queue_name_for_webhook,
@@ -126,17 +123,12 @@ from ...webhook.transport.synchronous.transport import (
     trigger_webhook_sync,
     trigger_webhook_sync_if_not_cached,
 )
-from ...webhook.transport.taxes import (
-    DEFAULT_TAX_CODE,
-    DEFAULT_TAX_DESCRIPTION,
-    get_current_tax_app,
-    parse_tax_data,
-)
 from ...webhook.transport.utils import (
     delivery_update,
     from_payment_app_id,
     get_meta_code_key,
     get_meta_description_key,
+    get_sqs_message_group_id,
 )
 from ...webhook.utils import get_webhooks_for_event
 from ..base_plugin import BasePlugin, ExcludedShippingMethod
@@ -148,6 +140,7 @@ if TYPE_CHECKING:
     from ...csv.models import ExportFile
     from ...discount.models import Promotion, PromotionRule, Voucher, VoucherCode
     from ...giftcard.models import GiftCard
+    from ...graphql.core.dataloaders import DataLoader
     from ...invoice.models import Invoice
     from ...menu.models import Menu, MenuItem
     from ...order.models import Fulfillment, Order
@@ -2749,10 +2742,8 @@ class WebhookPlugin(BasePlugin):
         if not self.active:
             return previous_value
         delivery_update(delivery, status=EventDeliveryStatus.PENDING)
-        domain = get_domain()
         webhook = delivery.webhook
-        app = webhook.app
-        message_group_id = f"{domain}:{app.identifier or app.id}"
+        message_group_id = get_sqs_message_group_id(get_domain(), webhook.app)
         send_webhook_request_async.apply_async(
             kwargs={
                 "event_delivery_id": delivery.pk,
@@ -3092,7 +3083,9 @@ class WebhookPlugin(BasePlugin):
                 "app not found."
             )
 
-        webhook_payload = generate_payment_payload(payment_information)
+        webhook_payload = generate_payment_payload(
+            payment_information,
+        )
         payment = Payment.objects.filter(id=payment_information.payment_id).first()
         if not payment:
             raise PaymentError(
@@ -3216,16 +3209,27 @@ class WebhookPlugin(BasePlugin):
             apps_identifiers = list(gateways.keys())
 
         webhooks = get_webhooks_for_event(event_type, apps_identifier=apps_identifiers)
-        request = initialize_request(
-            self.requestor, sync_event=True, event_type=event_type
-        )
 
         pregenerated_subscription_payloads: dict[int, dict[str, dict[str, Any]]] = (
             defaultdict(lambda: defaultdict(dict))
         )
 
         promises = []
+        dataloaders: dict[str, type[DataLoader]] = {}
+        request_map: dict[int, SaleorContext] = {}
+
         for webhook in webhooks:
+            request = request_map.get(webhook.app_id)
+            if not request:
+                request = initialize_request(
+                    app=webhook.app,
+                    requestor=self.requestor,
+                    sync_event=True,
+                    event_type=event_type,
+                    dataloaders=dataloaders,
+                )
+                request_map[webhook.app_id] = request
+
             if not webhook.subscription_query:
                 continue
 
@@ -3244,7 +3248,6 @@ class WebhookPlugin(BasePlugin):
                 subscribable_object=subscribable_object,
                 subscription_query=webhook.subscription_query,
                 request=request,
-                app=app,
             )
             promises.append(promise_payload)
 
@@ -3259,6 +3262,15 @@ class WebhookPlugin(BasePlugin):
             promise_payload.then(store_payload)
 
         for webhook in webhooks:
+            request = request_map.get(webhook.pk)
+            if not request:
+                request = initialize_request(
+                    app=webhook.app,
+                    requestor=self.requestor,
+                    sync_event=True,
+                    event_type=event_type,
+                    dataloaders=dataloaders,
+                )
             self._payment_gateway_initialize_session_for_single_webhook(
                 webhook=webhook,
                 gateways=gateways,
@@ -3305,14 +3317,16 @@ class WebhookPlugin(BasePlugin):
         if webhook.subscription_query:
             app = webhook.app
             request = initialize_request(
-                self.requestor, sync_event=True, event_type=webhook_event
+                app=app,
+                requestor=self.requestor,
+                sync_event=True,
+                event_type=webhook_event,
             )
             promise_payload = generate_payload_promise_from_subscription(
                 event_type=webhook_event,
                 subscribable_object=transaction_session_data,
                 subscription_query=webhook.subscription_query,
                 request=request,
-                app=app,
             )
             if promise_payload:
                 pregenerated_subscription_payload = promise_payload.get() or {}
@@ -3521,8 +3535,9 @@ class WebhookPlugin(BasePlugin):
             raise TaxDataError(msg)
 
         request_context = initialize_request(
-            self.requestor,
-            event_type in WebhookEventSyncType.ALL,
+            app=app,
+            requestor=self.requestor,
+            sync_event=event_type in WebhookEventSyncType.ALL,
             allow_replica=False,
             event_type=event_type,
         )
@@ -3540,19 +3555,7 @@ class WebhookPlugin(BasePlugin):
             requestor=self.requestor,
             pregenerated_subscription_payload=pregenerated_subscription_payload,
         )
-        try:
-            tax_data = parse_tax_data(response, expected_lines_count)
-        except ValidationError as e:
-            errors = e.errors()
-            logger.warning(
-                "Webhook response for event %s is invalid: %s",
-                event_type,
-                str(e),
-                extra={"errors": errors},
-            )
-            error_msg = safe_truncate(parse_validation_error(e), TAX_ERROR_FIELD_LENGTH)
-            raise TaxDataError(error_msg, errors=errors) from e
-        return tax_data
+        return parse_tax_data(event_type, response, expected_lines_count)
 
     def get_taxes_for_checkout(
         self,
@@ -3592,32 +3595,11 @@ class WebhookPlugin(BasePlugin):
             pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         )
 
-    def get_taxes_for_order(
-        self, order: "Order", app_identifier, previous_value
-    ) -> TaxData | None:
-        event_type = WebhookEventSyncType.ORDER_CALCULATE_TAXES
-        lines_count = order.lines.count()
-        if app_identifier:
-            return self.__run_tax_webhook(
-                event_type,
-                app_identifier,
-                lambda: generate_order_payload_for_tax_calculation(order),
-                lines_count,
-                order,
-            )
-        # This is deprecated flow, kept to maintain backward compatibility.
-        # In Saleor 4.0 `tax_app_identifier` should be required and the flow should
-        # be dropped.
-        return trigger_taxes_all_webhooks_sync(
-            WebhookEventSyncType.ORDER_CALCULATE_TAXES,
-            lambda: generate_order_payload_for_tax_calculation(order),
-            lines_count,
-            order,
-            self.requestor,
-        )
-
     def get_shipping_methods_for_checkout(
-        self, checkout: "Checkout", previous_value: Any
+        self,
+        checkout: "Checkout",
+        built_in_shipping_methods: list["ShippingMethodData"],
+        previous_value: Any,
     ) -> list["ShippingMethodData"]:
         methods = []
         event_type = WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT
@@ -3632,7 +3614,7 @@ class WebhookPlugin(BasePlugin):
                     webhook=webhook,
                     cache_data=cache_data,
                     allow_replica=self.allow_replica,
-                    subscribable_object=checkout,
+                    subscribable_object=(checkout, built_in_shipping_methods),
                     request_timeout=WEBHOOK_SYNC_TIMEOUT,
                     cache_timeout=CACHE_TIME_SHIPPING_LIST_METHODS_FOR_CHECKOUT,
                     requestor=self.requestor,
@@ -3656,14 +3638,21 @@ class WebhookPlugin(BasePlugin):
         If there is no tax code defined for the product/product type,
         then return dummy values.
         """
-        if not (tax_app := get_current_tax_app()):
+        tax_app = (
+            App.objects.order_by("pk")
+            .filter(removed_at__isnull=True)
+            .for_event_type(WebhookEventSyncType.CHECKOUT_CALCULATE_TAXES)
+            .for_event_type(WebhookEventSyncType.ORDER_CALCULATE_TAXES)
+            .last()
+        )
+        if not tax_app:
             return previous_value
 
         meta_code_key = get_meta_code_key(tax_app)
         meta_description_key = get_meta_description_key(tax_app)
 
-        default_tax_code = DEFAULT_TAX_CODE
-        default_tax_description = DEFAULT_TAX_DESCRIPTION
+        default_tax_code = "UNMAPPED"
+        default_tax_description = "Unmapped Product/Product Type"
 
         code = obj.get_value_from_metadata(meta_code_key, default_tax_code)
         description = obj.get_value_from_metadata(
@@ -3673,26 +3662,6 @@ class WebhookPlugin(BasePlugin):
         return TaxType(
             code=code,
             description=description,
-        )
-
-    def excluded_shipping_methods_for_order(
-        self,
-        order: "Order",
-        available_shipping_methods: list["ShippingMethodData"],
-        previous_value: list[ExcludedShippingMethod],
-    ) -> list[ExcludedShippingMethod]:
-        generate_function = generate_excluded_shipping_methods_for_order_payload
-        payload_fun = lambda: generate_function(  # noqa: E731
-            order,
-            available_shipping_methods,
-        )
-        return get_excluded_shipping_data(
-            event_type=WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
-            previous_value=previous_value,
-            payload_fun=payload_fun,
-            subscribable_object=order,
-            allow_replica=self.allow_replica,
-            requestor=self.requestor,
         )
 
     def excluded_shipping_methods_for_checkout(
@@ -3713,7 +3682,7 @@ class WebhookPlugin(BasePlugin):
             event_type=WebhookEventSyncType.CHECKOUT_FILTER_SHIPPING_METHODS,
             previous_value=previous_value,
             payload_fun=payload_function,
-            subscribable_object=checkout,
+            subscribable_object=(checkout, available_shipping_methods),
             allow_replica=self.allow_replica,
             pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         )

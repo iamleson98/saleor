@@ -111,7 +111,7 @@ def test_calculate_checkout_total_with_gift_cards(
 def test_calculate_checkout_total(
     checkout_with_item,
     address,
-    shipping_zone,
+    checkout_delivery,
     voucher,
     expected_net,
     expected_gross,
@@ -126,7 +126,9 @@ def test_calculate_checkout_total(
 
     checkout.shipping_address = address
     voucher_amount = Money(voucher_amount, "USD")
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
+
     checkout.voucher_code = voucher.code
     checkout.discount = voucher_amount
     checkout.save()
@@ -141,7 +143,7 @@ def test_calculate_checkout_total(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -170,7 +172,7 @@ def test_calculate_checkout_total(
 def test_calculate_checkout_total_with_multiple_tax_rates(
     checkout_with_items,
     address,
-    shipping_zone,
+    checkout_delivery,
     tax_classes,
     expected_net,
     expected_gross,
@@ -182,7 +184,8 @@ def test_calculate_checkout_total_with_multiple_tax_rates(
     _enable_flat_rates(checkout, prices_entered_with_tax, use_weighted_tax_for_shipping)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     first_line = checkout.lines.first()
@@ -203,7 +206,7 @@ def test_calculate_checkout_total_with_multiple_tax_rates(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -226,7 +229,7 @@ def test_calculate_checkout_total_with_multiple_tax_rates(
 def test_calculate_checkout_shipping_with_not_weighted_taxes(
     checkout_with_items,
     address,
-    shipping_zone,
+    checkout_delivery,
     tax_classes,
     expected_net,
     expected_gross,
@@ -239,7 +242,8 @@ def test_calculate_checkout_shipping_with_not_weighted_taxes(
     )
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     first_line = checkout.lines.first()
@@ -260,7 +264,7 @@ def test_calculate_checkout_shipping_with_not_weighted_taxes(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -284,7 +288,7 @@ def test_calculate_checkout_shipping_with_not_weighted_taxes(
 def test_calculate_checkout_shipping_with_weighted_taxes(
     checkout_with_items,
     address,
-    shipping_zone,
+    checkout_delivery,
     tax_classes,
     expected_net,
     expected_gross,
@@ -297,7 +301,8 @@ def test_calculate_checkout_shipping_with_weighted_taxes(
     )
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     first_line = checkout.lines.first()
@@ -318,7 +323,7 @@ def test_calculate_checkout_shipping_with_weighted_taxes(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -347,7 +352,7 @@ def test_calculate_checkout_shipping_with_weighted_taxes(
 def test_calculate_checkout_total_with_sale(
     checkout_with_item_on_promotion,
     address,
-    shipping_zone,
+    checkout_delivery,
     voucher,
     expected_net,
     expected_gross,
@@ -361,7 +366,8 @@ def test_calculate_checkout_total_with_sale(
 
     checkout.shipping_address = address
     voucher_amount = Money(voucher_amount, "USD")
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.voucher_code = voucher.code
     checkout.discount = voucher_amount
     checkout.save()
@@ -380,7 +386,6 @@ def test_calculate_checkout_total_with_sale(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -392,7 +397,7 @@ def test_calculate_checkout_total_with_sale(
 def test_calculate_checkout_total_no_tax_rates(
     checkout_with_item,
     address,
-    shipping_zone,
+    checkout_delivery,
 ):
     # given
     checkout = checkout_with_item
@@ -400,8 +405,8 @@ def test_calculate_checkout_total_no_tax_rates(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    shipping_method = shipping_zone.shipping_methods.get()
-    checkout.shipping_method = shipping_method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     TaxClassCountryRate.objects.all().delete()
@@ -412,7 +417,7 @@ def test_calculate_checkout_total_no_tax_rates(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -424,7 +429,7 @@ def test_calculate_checkout_total_no_tax_rates(
 def test_calculate_checkout_total_default_tax_rate_for_country(
     checkout_with_item,
     address,
-    shipping_zone,
+    checkout_delivery,
 ):
     # given
     checkout = checkout_with_item
@@ -432,8 +437,8 @@ def test_calculate_checkout_total_default_tax_rate_for_country(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    shipping_method = shipping_zone.shipping_methods.get()
-    checkout.shipping_method = shipping_method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     TaxClassCountryRate.objects.all().delete()
@@ -445,7 +450,7 @@ def test_calculate_checkout_total_default_tax_rate_for_country(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -464,7 +469,7 @@ def test_calculate_checkout_total_default_tax_rate_for_country(
 def test_calculate_checkout_total_with_shipping_voucher(
     checkout_with_item,
     address,
-    shipping_zone,
+    checkout_delivery,
     voucher_shipping_type,
     expected_net,
     expected_gross,
@@ -480,7 +485,8 @@ def test_calculate_checkout_total_with_shipping_voucher(
     checkout.save()
     voucher_amount = Money(voucher_amount, "USD")
 
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.voucher_code = voucher_shipping_type.code
     checkout.discount = voucher_amount
     checkout.save()
@@ -494,7 +500,7 @@ def test_calculate_checkout_total_with_shipping_voucher(
 
     # when
     update_checkout_prices_with_flat_rates(
-        checkout, checkout_info, lines, prices_entered_with_tax, address
+        checkout, checkout_info, lines, prices_entered_with_tax
     )
 
     # then
@@ -513,7 +519,7 @@ def test_calculate_checkout_total_with_shipping_voucher(
 def test_calculate_checkout_total_with_shipping_voucher_and_sale(
     checkout_with_item_on_promotion,
     address,
-    shipping_zone,
+    checkout_delivery,
     voucher_shipping_type,
     expected_net,
     expected_gross,
@@ -529,7 +535,8 @@ def test_calculate_checkout_total_with_shipping_voucher_and_sale(
     checkout.save()
     voucher_amount = Money(voucher_amount, "USD")
 
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.voucher_code = voucher_shipping_type.code
     checkout.discount = voucher_amount
     checkout.save()
@@ -547,7 +554,6 @@ def test_calculate_checkout_total_with_shipping_voucher_and_sale(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -566,7 +572,7 @@ def test_calculate_checkout_total_with_shipping_voucher_and_sale(
 def test_calculate_checkout_subtotal(
     checkout_with_item,
     address,
-    shipping_zone,
+    checkout_delivery,
     expected_net,
     expected_gross,
     prices_entered_with_tax,
@@ -581,7 +587,8 @@ def test_calculate_checkout_subtotal(
     product.tax_class.country_rates.update_or_create(country=address.country, rate=23)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -595,7 +602,6 @@ def test_calculate_checkout_subtotal(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -607,7 +613,7 @@ def test_calculate_checkout_subtotal(
 def test_calculate_checkout_subtotal_with_promotion_prices_entered_with_tax(
     checkout_with_item_on_promotion,
     address,
-    shipping_zone,
+    checkout_delivery,
     stock,
 ):
     # given
@@ -620,7 +626,8 @@ def test_calculate_checkout_subtotal_with_promotion_prices_entered_with_tax(
     product.tax_class.country_rates.update_or_create(country=address.country, rate=23)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -634,7 +641,6 @@ def test_calculate_checkout_subtotal_with_promotion_prices_entered_with_tax(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -652,7 +658,7 @@ def test_calculate_checkout_subtotal_with_promotion_prices_entered_with_tax(
 def test_calculate_checkout_subtotal_with_promotion_prices_not_entered_with_tax(
     checkout_with_item_on_promotion,
     address,
-    shipping_zone,
+    checkout_delivery,
     stock,
 ):
     # given
@@ -665,7 +671,8 @@ def test_calculate_checkout_subtotal_with_promotion_prices_not_entered_with_tax(
     product.tax_class.country_rates.update_or_create(country=address.country, rate=23)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -679,7 +686,6 @@ def test_calculate_checkout_subtotal_with_promotion_prices_not_entered_with_tax(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -697,7 +703,7 @@ def test_calculate_checkout_subtotal_with_promotion_prices_not_entered_with_tax(
 def test_calculate_checkout_subtotal_with_order_promotion(
     checkout_with_item_and_order_discount,
     address,
-    shipping_zone,
+    checkout_delivery,
     stock,
 ):
     # given
@@ -707,7 +713,8 @@ def test_calculate_checkout_subtotal_with_order_promotion(
     discount_amount = checkout.discounts.first().amount_value
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -720,7 +727,6 @@ def test_calculate_checkout_subtotal_with_order_promotion(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -739,7 +745,7 @@ def test_calculate_checkout_subtotal_with_order_promotion(
 def test_calculate_checkout_subtotal_with_gift_promotion(
     checkout_with_item_and_gift_promotion,
     address,
-    shipping_zone,
+    checkout_delivery,
     stock,
 ):
     # given
@@ -748,7 +754,8 @@ def test_calculate_checkout_subtotal_with_gift_promotion(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     manager = get_plugins_manager(allow_replica=False)
@@ -761,7 +768,6 @@ def test_calculate_checkout_subtotal_with_gift_promotion(
         checkout_info,
         lines,
         prices_entered_with_tax,
-        address,
     )
 
     # then
@@ -778,7 +784,7 @@ def test_calculate_checkout_subtotal_with_gift_promotion(
     )
 
 
-def test_calculate_checkout_line_total(checkout_with_item, shipping_zone, address):
+def test_calculate_checkout_line_total(checkout_with_item, checkout_delivery, address):
     manager = get_plugins_manager(allow_replica=False)
     checkout = checkout_with_item
 
@@ -789,10 +795,9 @@ def test_calculate_checkout_line_total(checkout_with_item, shipping_zone, addres
     line = checkout.lines.first()
     assert line.quantity > 1
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     variant = line.variant
@@ -814,7 +819,7 @@ def test_calculate_checkout_line_total(checkout_with_item, shipping_zone, addres
 
 
 def test_calculate_checkout_line_total_voucher_on_entire_order(
-    checkout_with_item, shipping_zone, address, voucher
+    checkout_with_item, checkout_delivery, address, voucher
 ):
     # given
     checkout = checkout_with_item
@@ -827,10 +832,9 @@ def test_calculate_checkout_line_total_voucher_on_entire_order(
     line = checkout.lines.first()
     assert line.quantity > 1
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     discount_amount = Decimal(5)
     checkout.discount_amount = discount_amount
     checkout.voucher_code = voucher.code
@@ -864,7 +868,7 @@ def test_calculate_checkout_line_total_voucher_on_entire_order(
 
 
 def test_calculate_checkout_line_total_with_voucher_one_line(
-    checkout_with_item, shipping_zone, address, voucher
+    checkout_with_item, checkout_delivery, address, voucher
 ):
     # given
     checkout = checkout_with_item
@@ -875,10 +879,9 @@ def test_calculate_checkout_line_total_with_voucher_one_line(
     prices_entered_with_tax = True
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     discount_amount = Decimal(5)
     checkout.discount_amount = discount_amount
     checkout.voucher_code = voucher.code
@@ -917,7 +920,7 @@ def test_calculate_checkout_line_total_with_voucher_one_line(
 
 
 def test_calculate_checkout_line_total_with_voucher_multiple_lines(
-    checkout_with_item, shipping_zone, address, voucher, product_list
+    checkout_with_item, checkout_delivery, address, voucher, product_list
 ):
     # given
     manager = get_plugins_manager(allow_replica=False)
@@ -935,10 +938,9 @@ def test_calculate_checkout_line_total_with_voucher_multiple_lines(
     add_variant_to_checkout(checkout_info, variant_1, qty_1)
     add_variant_to_checkout(checkout_info, variant_2, qty_2)
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     discount_amount = Decimal(5)
     checkout.discount_amount = discount_amount
     checkout.voucher_code = voucher.code
@@ -987,7 +989,7 @@ def test_calculate_checkout_line_total_with_voucher_multiple_lines(
 
 
 def test_calculate_checkout_line_total_with_voucher_multiple_lines_last_line(
-    checkout_with_item, shipping_zone, address, voucher, product_list
+    checkout_with_item, checkout_delivery, address, voucher, product_list
 ):
     # given
     manager = get_plugins_manager(allow_replica=False)
@@ -1007,10 +1009,9 @@ def test_calculate_checkout_line_total_with_voucher_multiple_lines_last_line(
     add_variant_to_checkout(checkout_info, variant_1, qty_1)
     add_variant_to_checkout(checkout_info, variant_2, qty_2)
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     discount_amount = Decimal(5)
     checkout.discount_amount = discount_amount
     checkout.voucher_code = voucher.code
@@ -1064,7 +1065,7 @@ def test_calculate_checkout_line_total_with_voucher_multiple_lines_last_line(
 
 
 def test_calculate_checkout_line_total_with_voucher_for_multiple_lines(
-    checkout, shipping_zone, address, voucher, product_list
+    checkout, checkout_delivery, address, voucher, product_list
 ):
     # given
     manager = get_plugins_manager(allow_replica=False)
@@ -1104,10 +1105,9 @@ def test_calculate_checkout_line_total_with_voucher_for_multiple_lines(
     add_variant_to_checkout(checkout_info, variant_2, qty)
     add_variant_to_checkout(checkout_info, variant_3, qty)
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     discount_amount = Decimal(3)
     checkout.discount_amount = discount_amount
     checkout.voucher_code = voucher.code
@@ -1165,7 +1165,7 @@ def test_calculate_checkout_line_total_with_voucher_for_multiple_lines(
 
 def test_calculate_checkout_line_total_with_shipping_voucher(
     checkout_with_item,
-    shipping_zone,
+    checkout_delivery,
     address,
     voucher_shipping_type,
 ):
@@ -1179,10 +1179,9 @@ def test_calculate_checkout_line_total_with_shipping_voucher(
 
     line = checkout.lines.first()
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.discount_amount = Decimal(5)
     checkout.voucher_code = voucher_shipping_type.code
     checkout.save()
@@ -1218,7 +1217,7 @@ def test_calculate_checkout_line_total_with_shipping_voucher(
 
 
 def test_calculate_checkout_line_total_discount_from_order_promotion(
-    checkout_with_item_and_order_discount, shipping_zone, address
+    checkout_with_item_and_order_discount, checkout_delivery, address
 ):
     # given
     manager = get_plugins_manager(allow_replica=False)
@@ -1231,10 +1230,8 @@ def test_calculate_checkout_line_total_discount_from_order_promotion(
     line = checkout.lines.first()
     assert line.quantity > 1
 
-    method = shipping_zone.shipping_methods.get()
-    checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     variant = line.variant
@@ -1266,7 +1263,7 @@ def test_calculate_checkout_line_total_discount_from_order_promotion(
 
 
 def test_calculate_checkout_line_total_discount_for_gift_line(
-    checkout_with_item_and_gift_promotion, shipping_zone, address
+    checkout_with_item_and_gift_promotion, checkout_delivery, address
 ):
     # given
     manager = get_plugins_manager(allow_replica=False)
@@ -1279,10 +1276,9 @@ def test_calculate_checkout_line_total_discount_for_gift_line(
     line = checkout.lines.get(is_gift=True)
     assert line.quantity == 1
 
-    method = shipping_zone.shipping_methods.get()
     checkout.shipping_address = address
-    checkout.shipping_method_name = method.name
-    checkout.shipping_method = method
+    checkout.assigned_delivery = checkout_delivery(checkout)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
     checkout.save()
 
     variant = line.variant
@@ -1304,9 +1300,7 @@ def test_calculate_checkout_line_total_discount_for_gift_line(
 
 
 def test_calculate_checkout_shipping(
-    checkout_with_item,
-    shipping_zone,
-    address,
+    checkout_with_item, checkout_delivery, address, shipping_method
 ):
     # given
     checkout = checkout_with_item
@@ -1316,8 +1310,10 @@ def test_calculate_checkout_shipping(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    checkout.shipping_method = shipping_zone.shipping_methods.get()
-    checkout.shipping_method.tax_class.country_rates.update_or_create(
+    checkout.assigned_delivery = checkout_delivery(checkout, shipping_method)
+    checkout.shipping_method_name = checkout.assigned_delivery.name
+
+    shipping_method.tax_class.country_rates.update_or_create(
         country=address.country, rate=rate
     )
     checkout.save()
@@ -1369,7 +1365,8 @@ def test_calculate_checkout_shipping_no_shipping_price(
 
 def test_calculate_checkout_shipping_voucher_on_shipping(
     checkout_with_item,
-    shipping_zone,
+    checkout_delivery,
+    shipping_method,
     address,
     voucher_shipping_type,
 ):
@@ -1381,9 +1378,9 @@ def test_calculate_checkout_shipping_voucher_on_shipping(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    shipping_method = shipping_zone.shipping_methods.get()
-    checkout.shipping_method = shipping_method
-    checkout.shipping_method.tax_class.country_rates.update_or_create(
+    checkout.assigned_delivery = checkout_delivery(checkout, shipping_method)
+
+    shipping_method.tax_class.country_rates.update_or_create(
         country=address.country, rate=rate
     )
     checkout.voucher_code = voucher_shipping_type.code
@@ -1450,10 +1447,7 @@ def test_calculate_checkout_shipping_free_shipping_voucher(
 
 
 def test_calculate_checkout_shipping_free_entire_order_voucher(
-    checkout_with_item,
-    shipping_zone,
-    address,
-    voucher,
+    checkout_with_item, checkout_delivery, address, voucher, shipping_method
 ):
     # given
     checkout = checkout_with_item
@@ -1463,9 +1457,8 @@ def test_calculate_checkout_shipping_free_entire_order_voucher(
     _enable_flat_rates(checkout, prices_entered_with_tax)
 
     checkout.shipping_address = address
-    shipping_method = shipping_zone.shipping_methods.get()
-    checkout.shipping_method = shipping_method
-    checkout.shipping_method.tax_class.country_rates.update_or_create(
+    checkout.assigned_delivery = checkout_delivery(checkout, shipping_method)
+    shipping_method.tax_class.country_rates.update_or_create(
         country=address.country, rate=rate
     )
     checkout.voucher_code = voucher.code
@@ -1484,14 +1477,10 @@ def test_calculate_checkout_shipping_free_entire_order_voucher(
 
     # then
     shipping_price = quantize_price(shipping_price, shipping_price.currency)
-    assert (
-        shipping_price
-        == shipping_price
-        == TaxedMoney(
-            net=quantize_price(
-                shipping_channel_listings.price / Decimal(1.23),
-                checkout.currency,
-            ),
-            gross=shipping_channel_listings.price,
-        )
+    assert shipping_price == TaxedMoney(
+        net=quantize_price(
+            shipping_channel_listings.price / Decimal(1.23),
+            checkout.currency,
+        ),
+        gross=shipping_channel_listings.price,
     )

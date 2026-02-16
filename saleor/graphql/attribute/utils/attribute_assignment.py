@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, cast
 
 import graphene
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.db.models.expressions import Exists, OuterRef
 from graphql.error import GraphQLError
 
@@ -11,6 +11,7 @@ from ....attribute import AttributeInputType
 from ....attribute import models as attribute_models
 from ....attribute.models import AttributeValue
 from ....attribute.utils import associate_attribute_values_to_instance
+from ....page import models as page_models
 from ....page.error_codes import PageErrorCode
 from ....product import models as product_models
 from ....product.error_codes import ProductErrorCode
@@ -42,6 +43,9 @@ if TYPE_CHECKING:
 
 
 T_INPUT_MAP = list[tuple["attribute_models.Attribute", "AttrValuesInput"]]
+T_PRE_SAVE_BULK = dict[
+    AttributeValueBulkActionEnum, dict[attribute_models.Attribute, list]
+]
 
 
 class AttributeAssignmentMixin:
@@ -76,7 +80,16 @@ class AttributeAssignmentMixin:
             Q(pk__in=id_map.keys()) | Q(external_reference__in=ext_ref_set)
         )
         nodes = list(
-            nodes.prefetch_related("reference_product_types", "reference_page_types")
+            nodes.prefetch_related(
+                Prefetch(
+                    "reference_product_types",
+                    queryset=product_models.ProductType.objects.only("id"),
+                ),
+                Prefetch(
+                    "reference_page_types",
+                    queryset=page_models.PageType.objects.only("id"),
+                ),
+            )
         )
 
         resolved_pks = {node.pk for node in nodes}
@@ -94,6 +107,16 @@ class AttributeAssignmentMixin:
                 code=error_class.NOT_FOUND.value,
             )
         return nodes
+
+    @classmethod
+    def _clear_prefetch_cache(cls, attributes: list[attribute_models.Attribute]):
+        """Clear prefetched objects cache.
+
+        After validation is complete, the prefetched relations are no longer needed.
+        """
+        for attribute in attributes:
+            if hasattr(attribute, "_prefetched_objects_cache"):
+                attribute._prefetched_objects_cache.clear()
 
     @classmethod
     def clean_input(
@@ -125,6 +148,9 @@ class AttributeAssignmentMixin:
             error_class,
             creation,
         )
+
+        # Clear prefetched cache after validation to prevent memory leaks
+        cls._clear_prefetch_cache(attributes)
 
         return cleaned_input
 
@@ -270,9 +296,44 @@ class AttributeAssignmentMixin:
             errors.append(error)
 
     @classmethod
-    def save(cls, instance: T_INSTANCE, cleaned_input: T_INPUT_MAP):
-        """Save the cleaned input against the given instance."""
-        pre_save_bulk: dict = defaultdict(lambda: defaultdict(list))
+    def pre_save_values(
+        cls, instance: T_INSTANCE, cleaned_input: T_INPUT_MAP
+    ) -> T_PRE_SAVE_BULK:
+        """Prepare attribute values data for bulk database operations.
+
+        Example return structure:
+        {
+            AttributeValueBulkActionEnum.CREATE: {
+                <Attribute>: [<AttributeValue>, <AttributeValue>],
+                ...
+            },
+            AttributeValueBulkActionEnum.UPDATE_OR_CREATE: {
+                <Attribute>: [
+                    {
+                        "attribute": <Attribute>,
+                        "slug": "instance_id_attribute_id",
+                        "defaults": {"name": "...", "plain_text": "..."}
+                    }
+                ],
+                ...
+            },
+            AttributeValueBulkActionEnum.GET_OR_CREATE: {
+                <Attribute>: [
+                    {
+                        "attribute": <Attribute>,
+                        "slug": "attribute_id_True",
+                        "defaults": {"name": "Attribute: Yes", "boolean": True}
+                    }
+                ],
+                ...
+            },
+            AttributeValueBulkActionEnum.NONE: {
+                <Attribute>: [<AttributeValue>, <AttributeValue>],
+                ...
+            },
+        }
+        """
+        pre_save_bulk: T_PRE_SAVE_BULK = defaultdict(lambda: defaultdict(list))
         for attribute, values_input in cleaned_input:
             is_legacy_path = values_input.values and attribute.input_type in {
                 AttributeInputType.DROPDOWN,
@@ -301,6 +362,18 @@ class AttributeAssignmentMixin:
                 for action, value_data in prepared_values:
                     pre_save_bulk[action][attribute].append(value_data)
 
+        return pre_save_bulk
+
+    @classmethod
+    def save(
+        cls,
+        instance: T_INSTANCE,
+        cleaned_input: T_INPUT_MAP,
+        pre_save_bulk: T_PRE_SAVE_BULK | None = None,
+    ):
+        """Save the cleaned input against the given instance."""
+        if pre_save_bulk is None:
+            pre_save_bulk = cls.pre_save_values(instance, cleaned_input)
         attribute_and_values = cls._bulk_create_pre_save_values(pre_save_bulk)
 
         attr_val_map = defaultdict(list)

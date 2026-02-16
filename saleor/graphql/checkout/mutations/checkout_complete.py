@@ -1,7 +1,7 @@
 import graphene
 from django.core.exceptions import ValidationError
 
-from ....checkout import AddressType
+from ....checkout import AddressType, models
 from ....checkout.checkout_cleaner import (
     clean_checkout_shipping,
     validate_checkout_email,
@@ -13,6 +13,7 @@ from ....checkout.fetch import (
     CheckoutLineInfo,
     fetch_checkout_info,
     fetch_checkout_lines,
+    get_or_fetch_checkout_deliveries,
 )
 from ....checkout.utils import is_shipping_required
 from ....order import models as order_models
@@ -185,6 +186,9 @@ class CheckoutComplete(BaseMutation, I18nMixin):
         billing_address = checkout_info.billing_address
 
         if is_shipping_required(lines):
+            if checkout_info.assigned_delivery:
+                # Refresh stale shipping if needed
+                get_or_fetch_checkout_deliveries(checkout_info)
             clean_checkout_shipping(checkout_info, lines, CheckoutErrorCode)
             if shipping_address:
                 shipping_address_data = shipping_address.as_data()
@@ -312,7 +316,26 @@ class CheckoutComplete(BaseMutation, I18nMixin):
             )
         checkout_info = fetch_checkout_info(checkout, lines, manager)
 
-        cls.validate_checkout_addresses(checkout_info, lines)
+        try:
+            cls.validate_checkout_addresses(checkout_info, lines)
+        except models.Checkout.DoesNotExist as e:
+            order = order_models.Order.objects.get_by_checkout_token(
+                checkout_info.checkout.token
+            )
+            if order:
+                return CheckoutComplete(
+                    order=SyncWebhookControlContext(order),
+                    confirmation_needed=False,
+                    confirmation_data={},
+                )
+            raise ValidationError(
+                {
+                    "checkout": ValidationError(
+                        "Checkout does not exist anymore.",
+                        code=CheckoutErrorCode.NOT_FOUND.value,
+                    )
+                }
+            ) from e
 
         requestor = get_user_or_app_from_context(info.context)
         if requestor and requestor.has_perm(AccountPermissions.IMPERSONATE_USER):

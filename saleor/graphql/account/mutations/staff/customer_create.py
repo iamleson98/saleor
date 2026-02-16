@@ -6,7 +6,7 @@ from django.db import IntegrityError, transaction
 from .....account import events as account_events
 from .....account import models
 from .....account.notifications import send_set_password_notification
-from .....account.search import prepare_user_search_document_value
+from .....account.search import update_user_search_vector
 from .....core.tokens import token_generator
 from .....core.tracing import traced_atomic_transaction
 from .....core.utils.url import prepare_url
@@ -115,11 +115,11 @@ class CustomerCreate(BaseCustomerCreate):
 
         manager = get_plugin_manager_promise(info.context).get()
 
-        instance.search_document = prepare_user_search_document_value(instance)
-        instance.save()
+        update_user_search_vector(instance)
+
+        account_events.customer_account_created_event(user=instance)
 
         cls.call_event(manager.customer_created, instance)
-        account_events.customer_account_created_event(user=instance)
 
         if redirect_url := cleaned_input.get("redirect_url"):
             cls._process_sending_password(
@@ -128,6 +128,13 @@ class CustomerCreate(BaseCustomerCreate):
                 channel_slug_from_input=cleaned_input.get("channel"),
                 plugins_manager=manager,
             )
+
+    @classmethod
+    def post_save_action(cls, info: ResolveInfo, instance, cleaned_input):
+        if cleaned_input.get("metadata") or cleaned_input.get("private_metadata"):
+            manager = get_plugin_manager_promise(info.context).get()
+            cls.call_event(manager.customer_metadata_updated, instance)
+        super().post_save_action(info, instance, cleaned_input)
 
     @classmethod
     def _process_sending_password(

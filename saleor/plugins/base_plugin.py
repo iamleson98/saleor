@@ -734,14 +734,17 @@ class BasePlugin:
         Optional["TaxData"],
     ]
 
-    # Note: This method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from the plugin to core modules.
-    get_taxes_for_order: Callable[["Order", str, Any], Optional["TaxData"]]
-
     get_client_token: Callable[[Any, Any], Any]
 
     get_order_line_tax_rate: Callable[
-        ["Order", "Product", "ProductVariant", Union["Address", None], Decimal],
+        [
+            "Order",
+            "OrderLine",
+            "Product",
+            "ProductVariant",
+            Union["Address", None],
+            Decimal,
+        ],
         Decimal,
     ]
 
@@ -751,7 +754,7 @@ class BasePlugin:
     # Note: This method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from the plugin to core modules.
     get_shipping_methods_for_checkout: Callable[
-        ["Checkout", Any], list["ShippingMethodData"]
+        ["Checkout", list["ShippingMethodData"], Any], list["ShippingMethodData"]
     ]
 
     get_supported_currencies: Callable[[Any], Any]

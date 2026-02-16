@@ -21,6 +21,8 @@ from ..core.descriptions import (
     ADDED_IN_318,
     ADDED_IN_320,
     ADDED_IN_321,
+    ADDED_IN_322,
+    ADDED_IN_323,
     DEPRECATED_IN_3X_INPUT,
     PREVIEW_FEATURE,
 )
@@ -90,6 +92,31 @@ class CheckoutSettings(ObjectType):
             "checkout's total amount."
         )
         + ADDED_IN_320,
+    )
+    automatic_completion_delay = Minute(
+        required=False,
+        description=(
+            "The time in minutes to wait after a checkout is fully paid "
+            "before automatically completing it."
+        )
+        + ADDED_IN_322,
+    )
+    automatic_completion_cut_off_date = DateTime(
+        required=False,
+        description=(
+            "The date time defines the earliest checkout creation date on which "
+            "fully paid checkouts can begin to be automatically completed. "
+        )
+        + ADDED_IN_322,
+    )
+    allow_legacy_gift_card_use = graphene.Boolean(
+        required=True,
+        description=(
+            "Default to `true`. Determines whether gift cards can be attached to "
+            "a Checkout via `addPromoCode` mutation. Usage of this mutation with gift cards "
+            "is deprecated."
+        )
+        + ADDED_IN_323,
     )
 
     class Meta:
@@ -510,6 +537,9 @@ class Channel(ModelObjectType):
         return CheckoutSettings(
             use_legacy_error_flow=root.use_legacy_error_flow_for_checkout,
             automatically_complete_fully_paid_checkouts=complete_paid_checkouts,
+            automatic_completion_delay=root.automatic_completion_delay,
+            automatic_completion_cut_off_date=root.automatic_completion_cut_off_date,
+            allow_legacy_gift_card_use=root.allow_legacy_gift_card_use,
         )
 
     @staticmethod

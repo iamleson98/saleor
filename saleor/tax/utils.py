@@ -156,11 +156,7 @@ def get_tax_configuration_for_checkout(
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ) -> tuple["TaxConfiguration", Optional["TaxConfigurationPerCountry"]]:
     tax_configuration = checkout_info.tax_configuration
-    country_code = get_active_country(
-        checkout_info.channel,
-        checkout_info.shipping_address,
-        checkout_info.billing_address,
-    )
+    country_code = get_checkout_active_country(checkout_info)
     country_tax_configuration = next(
         (
             tc
@@ -172,6 +168,23 @@ def get_tax_configuration_for_checkout(
         None,
     )
     return tax_configuration, country_tax_configuration
+
+
+def get_checkout_active_country(checkout_info: "CheckoutInfo") -> str:
+    """Get active checkout country for the given checkout info.
+
+    Return country code based on the following rules:
+    - use country code from shipping address if it's provided in the first place
+    - use country code from billing address if shipping address is not provided
+    - if both shipping and billing addresses are not provided use the default country
+    from channel
+    """
+
+    return get_active_country(
+        channel=checkout_info.channel,
+        shipping_address=checkout_info.shipping_address,
+        billing_address=checkout_info.billing_address,
+    )
 
 
 def get_charge_taxes_for_checkout(
@@ -271,9 +284,9 @@ def get_shipping_tax_rate_for_checkout(
             [line_info.line for line_info in lines], default_tax_rate
         )
     shipping_tax_rates: Iterable[TaxClassCountryRate] = []
-    if shipping_method := checkout_info.shipping_method:
+    if assigned_delivery := checkout_info.assigned_delivery:
         # external shipping methods do not have a way to provide tax-class
-        tax_class_id = shipping_method.tax_class_id
+        tax_class_id = assigned_delivery.tax_class_id
         if tax_class_id:
             shipping_tax_rates = TaxClassCountryRate.objects.using(
                 database_connection_name

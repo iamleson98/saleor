@@ -36,7 +36,7 @@ from .utils import (
     ERROR_CC_ADDRESS_CHANGE_FORBIDDEN,
     check_lines_quantity,
     get_checkout,
-    update_checkout_shipping_method_if_invalid,
+    mark_checkout_deliveries_as_stale_if_needed,
 )
 
 if TYPE_CHECKING:
@@ -177,10 +177,7 @@ class CheckoutShippingAddressUpdate(AddressMetadataMixin, BaseMutation, I18nMixi
             ),
         )
         manager = get_plugin_manager_promise(info.context).get()
-        shipping_channel_listings = checkout.channel.shipping_method_listings.all()
-        checkout_info = fetch_checkout_info(
-            checkout, lines, manager, shipping_channel_listings
-        )
+        checkout_info = fetch_checkout_info(checkout, lines, manager)
 
         country = shipping_address_instance.country.code
         checkout.set_country(country, commit=True)
@@ -202,21 +199,21 @@ class CheckoutShippingAddressUpdate(AddressMetadataMixin, BaseMutation, I18nMixi
                 checkout_info,
                 shipping_address_instance,
                 save_address,
-                lines,
-                shipping_channel_listings,
             )
 
-        shipping_update_fields = update_checkout_shipping_method_if_invalid(
-            checkout_info, lines
+        shipping_update_fields = mark_checkout_deliveries_as_stale_if_needed(
+            checkout_info.checkout, lines
         )
 
         invalidate_prices_updated_fields = invalidate_checkout(
             checkout_info, lines, manager, save=False
         )
+        checkout.search_index_dirty = True
         checkout.save(
             update_fields=shipping_address_updated_fields
             + invalidate_prices_updated_fields
             + shipping_update_fields
+            + ["search_index_dirty"]
         )
 
         call_checkout_info_event(

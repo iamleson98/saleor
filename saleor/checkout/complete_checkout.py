@@ -56,9 +56,9 @@ from ..payment.model_helpers import get_subtotal
 from ..payment.models import Payment, Transaction
 from ..payment.utils import fetch_customer_id, store_customer_id
 from ..product.models import ProductTranslation, ProductVariantTranslation
+from ..shipping.interface import ShippingMethodData
 from ..tax.calculations import get_taxed_undiscounted_price
 from ..tax.utils import (
-    get_shipping_tax_class_kwargs_for_order,
     get_tax_class_kwargs_for_order_line,
 )
 from ..warehouse.availability import check_stock_and_preorder_quantity_bulk
@@ -212,7 +212,16 @@ def _process_shipping_data_for_order(
         shipping_address = shipping_address.get_copy()
 
     shipping_method = delivery_method_info.delivery_method
-    tax_class = getattr(shipping_method, "tax_class", None)
+    is_external = getattr(shipping_method, "is_external", False)
+    if is_external and shipping_method:
+        # It is temporary solution for setting up the external shipping method
+        # for order. Order doesn't have any field for storing the external shipping
+        # method.
+        checkout_metadata = get_or_create_checkout_metadata(checkout_info.checkout)
+        checkout_metadata.store_value_in_private_metadata(
+            {PRIVATE_META_APP_SHIPPING_ID: shipping_method.id}
+        )
+        checkout_metadata.save()
 
     result: dict[str, Any] = {
         "undiscounted_base_shipping_price": undiscounted_base_shipping_price,
@@ -220,10 +229,16 @@ def _process_shipping_data_for_order(
         "base_shipping_price": base_shipping_price,
         "shipping_price": shipping_price,
         "weight": calculate_checkout_weight(lines),
-        **get_shipping_tax_class_kwargs_for_order(tax_class),
+        **delivery_method_info.get_details_for_conversion_to_order(),
     }
-    result.update(delivery_method_info.delivery_method_order_field)
-    result.update(delivery_method_info.delivery_method_name)
+
+    if isinstance(shipping_method, ShippingMethodData):
+        result.update(
+            {
+                "shipping_method_metadata": shipping_method.metadata,
+                "shipping_method_private_metadata": shipping_method.private_metadata,
+            }
+        )
 
     return result
 
@@ -864,15 +879,6 @@ def _create_order(
             {data.key: data.value for data in private_metadata_list}
         )
 
-    if checkout_info.checkout.external_shipping_method_id:
-        # Add external shipping method to metadata, as order still uses private
-        # metadata for external shipping id.
-        order.store_value_in_private_metadata(
-            {
-                PRIVATE_META_APP_SHIPPING_ID: checkout_info.checkout.external_shipping_method_id
-            }
-        )
-
     update_order_charge_data(order, with_save=False)
     update_order_authorize_data(order, with_save=False)
     order.search_vector = FlatConcatSearchVector(
@@ -908,7 +914,6 @@ def _create_order(
 
 
 def _prepare_checkout(
-    manager: "PluginsManager",
     checkout_info: "CheckoutInfo",
     lines: list["CheckoutLineInfo"],
     redirect_url,
@@ -940,7 +945,7 @@ def _prepare_checkout(
 
     if to_update:
         to_update.append("last_change")
-        checkout.save(update_fields=to_update)
+        checkout.safe_update(update_fields=to_update)
 
 
 def _prepare_checkout_with_transactions(
@@ -974,7 +979,6 @@ def _prepare_checkout_with_transactions(
         )
     _validate_gift_cards(checkout_info.checkout)
     _prepare_checkout(
-        manager=manager,
         checkout_info=checkout_info,
         lines=lines,
         redirect_url=redirect_url,
@@ -1004,7 +1008,6 @@ def _prepare_checkout_with_payment(
         last_payment=payment,
     )
     _prepare_checkout(
-        manager=manager,
         checkout_info=checkout_info,
         lines=lines,
         redirect_url=redirect_url,
@@ -1114,6 +1117,9 @@ def complete_checkout_pre_payment_part(
             redirect_url=redirect_url,
             payment=payment,
         )
+    except Checkout.DoesNotExist:
+        order = Order.objects.get_by_checkout_token(checkout_info.checkout.token)
+        return order
     except ValidationError as exc:
         _complete_checkout_fail_handler(checkout_info, manager, payment=payment)
         raise exc
@@ -1441,15 +1447,14 @@ def _create_order_from_checkout(
             {data.key: data.value for data in private_metadata_list}
         )
 
-    if checkout_info.checkout.external_shipping_method_id:
-        # Add external shipping method to metadata, as order still uses private
-        # metadata for external shipping id. The metadata will be transfered to the
-        # order.
-        checkout_metadata.store_value_in_private_metadata(
-            {
-                PRIVATE_META_APP_SHIPPING_ID: checkout_info.checkout.external_shipping_method_id
-            }
-        )
+    shipping_details = _process_shipping_data_for_order(
+        checkout_info,
+        undiscounted_base_shipping_price,
+        base_shipping_price,
+        shipping_total,
+        manager,
+        checkout_lines_info,
+    )
 
     # order
     order = Order.objects.create(  # type: ignore[misc] # see below:
@@ -1469,14 +1474,7 @@ def _create_order_from_checkout(
         tax_exemption=checkout_info.checkout.tax_exemption,
         tax_error=checkout_info.checkout.tax_error,
         lines_count=len(checkout_lines_info),
-        **_process_shipping_data_for_order(
-            checkout_info,
-            undiscounted_base_shipping_price,
-            base_shipping_price,
-            shipping_total,
-            manager,
-            checkout_lines_info,
-        ),
+        **shipping_details,
         **_process_user_data_for_order(checkout_info, manager),
     )
 
@@ -1588,13 +1586,19 @@ def create_order_from_checkout(
     """
 
     code = None
+    checkout_pk = checkout_info.checkout.pk
 
     if voucher := checkout_info.voucher:
         with transaction.atomic():
+            checkout = (
+                Checkout.objects.select_for_update().filter(pk=checkout_pk).first()
+            )
+            if not checkout:
+                order = Order.objects.get_by_checkout_token(checkout_pk)
+                return order
             code = _increase_voucher_code_usage_value(checkout_info=checkout_info)
 
     with transaction.atomic():
-        checkout_pk = checkout_info.checkout.pk
         checkout = Checkout.objects.select_for_update().filter(pk=checkout_pk).first()
         if not checkout:
             order = Order.objects.get_by_checkout_token(checkout_pk)
@@ -1607,6 +1611,15 @@ def create_order_from_checkout(
         checkout_info = fetch_checkout_info(
             checkout, checkout_lines, manager, voucher=voucher, voucher_code=code
         )
+        if not checkout_lines:
+            raise ValidationError(
+                {
+                    "lines": ValidationError(
+                        "Cannot complete checkout without lines.",
+                        code=CheckoutErrorCode.NO_LINES.value,
+                    )
+                }
+            )
         assign_checkout_user(user, checkout_info)
 
         try:
@@ -1639,6 +1652,17 @@ def create_order_from_checkout(
             if delete_checkout:
                 delete_checkouts([checkout_info.checkout.pk])
                 checkout_info.checkout.pk = None
+            else:
+                checkout = checkout_info.checkout
+                update_fields = []
+                if checkout.shipping_address:
+                    checkout.shipping_address = checkout.shipping_address.get_copy()
+                    update_fields.append("shipping_address")
+                if checkout.billing_address:
+                    checkout.billing_address = checkout.billing_address.get_copy()
+                    update_fields.append("billing_address")
+                if update_fields:
+                    checkout.save(update_fields=update_fields)
             return order
         except InsufficientStock:
             _complete_checkout_fail_handler(
@@ -1779,6 +1803,9 @@ def complete_checkout_with_transaction(
             private_metadata_list=private_metadata_list,
             is_automatic_completion=is_automatic_completion,
         )
+    except Checkout.DoesNotExist:
+        order = Order.objects.get_by_checkout_token(checkout_info.checkout.token)
+        return order
     except NotApplicable as e:
         raise ValidationError(
             {

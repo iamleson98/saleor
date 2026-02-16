@@ -1,3 +1,4 @@
+import datetime
 import logging
 from decimal import Decimal
 
@@ -5,25 +6,38 @@ import graphene
 from celery.utils.log import get_task_logger
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db.models import Exists, OuterRef, Q, QuerySet, Subquery
-from django.db.utils import DatabaseError, IntegrityError
+from django.db import transaction
+from django.db.models import Exists, F, OuterRef, Q, QuerySet, Subquery
 from django.utils import timezone
 
 from ..account.models import User
 from ..app.models import App
 from ..celeryconf import app
+from ..channel.models import Channel
+from ..checkout import CheckoutAuthorizeStatus
 from ..core.db.connection import allow_writer
+from ..core.utils import get_domain
 from ..payment.models import TransactionItem
 from ..plugins.manager import get_plugins_manager
+from ..webhook.transport.utils import get_sqs_message_group_id
 from .complete_checkout import complete_checkout
 from .fetch import fetch_checkout_info, fetch_checkout_lines
 from .models import Checkout, CheckoutLine
+from .search.indexing import update_checkouts_search_vector
 from .utils import delete_checkouts
 
 task_logger: logging.Logger = get_task_logger(__name__)
 
+# Checkout complete might take even 3 seconds. The task is scheduled to run
+# every 1 minute, so to avoid overlapping executions, the limit is set to 20.
+AUTOMATIC_COMPLETION_BATCH_SIZE = 20
+
+# Results in update time ~0.5s
+UPDATE_SEARCH_BATCH_SIZE = 100
+
 
 @app.task
+@allow_writer()
 def delete_expired_checkouts(
     batch_size: int = 2000,
     batch_count: int = 5,
@@ -87,9 +101,7 @@ def delete_expired_checkouts(
         )
     )
 
-    qs: QuerySet[Checkout] = Checkout.objects.using(
-        settings.DATABASE_CONNECTION_REPLICA_NAME
-    ).filter(
+    qs: QuerySet[Checkout] = Checkout.objects.filter(
         (empty_checkouts | expired_anonymous_checkouts | expired_user_checkout)
         & ~Q(Exists(with_transactions))
     )
@@ -99,8 +111,7 @@ def delete_expired_checkouts(
     has_more: bool = True
     for _batch_number in range(batch_count):
         checkout_ids = list(qs.values_list("pk", flat=True))
-        with allow_writer():
-            deleted_count = delete_checkouts(checkout_ids)
+        deleted_count = delete_checkouts(checkout_ids)
         total_deleted += deleted_count
 
         # Stop deleting inactive checkouts if there was no match.
@@ -125,6 +136,73 @@ def delete_expired_checkouts(
     return total_deleted, has_more
 
 
+@app.task
+def trigger_automatic_checkout_completion_task():
+    """Trigger automatic checkout completion for eligible checkouts.
+
+    This task:
+    - Finds checkouts that are fully authorized and ready for completion
+    - Tracks the last completion attempt time to avoid repeated retries
+    - Sorts by last attempt time to prioritize checkouts that haven't been tried recently
+    - Includes a safety check to skip very old checkouts (older than 30 days)
+    """
+    now = timezone.now()
+    # Don't retry checkouts older than defined threshold
+    oldest_allowed_checkout = (
+        now - settings.AUTOMATIC_CHECKOUT_COMPLETION_OLDEST_MODIFIED
+    )
+
+    with allow_writer():
+        channels = Channel.objects.filter(
+            automatically_complete_fully_paid_checkouts=True
+        )
+        if not channels:
+            task_logger.info(
+                "No channels configured for automatic checkout completion."
+            )
+            return
+
+        lookup = Q()
+        for channel in channels:
+            # calculate threshold time for automatic completion for given channel
+            delay_minutes = channel.automatic_completion_delay or 0
+            threshold_time = now - datetime.timedelta(minutes=float(delay_minutes))
+            kwargs = {
+                "channel_id": channel.pk,
+                "last_change__lt": threshold_time,
+            }
+            if cut_off_date := channel.automatic_completion_cut_off_date:
+                kwargs["created_at__gte"] = cut_off_date
+            lookup |= Q(**kwargs)
+
+        checkouts = (
+            Checkout.objects.filter(authorize_status=CheckoutAuthorizeStatus.FULL)
+            .filter(
+                Q(last_change__gte=oldest_allowed_checkout)
+                & (Q(email__isnull=False) | Q(user__isnull=False))
+                & Q(billing_address__isnull=False)
+                & Q(total_gross_amount__gt=Decimal("0.0"))
+            )
+            .filter(lookup)
+            # Sort by last attempt time (nulls first - never attempted), then by last_change
+            .order_by(
+                F("last_automatic_completion_attempt").asc(nulls_first=True),
+                "last_change",
+            )
+        )
+
+        if not checkouts:
+            task_logger.info("No checkouts found for automatic completion.")
+
+        domain = get_domain()
+        for checkout in checkouts[:AUTOMATIC_COMPLETION_BATCH_SIZE]:
+            automatic_checkout_completion_task.apply_async(
+                args=[checkout.pk],
+                kwargs={},
+                headers={"MessageGroupId": get_sqs_message_group_id(domain)},
+            )
+
+
 @app.task(
     queue=settings.AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME,
     bind=True,
@@ -135,21 +213,23 @@ def delete_expired_checkouts(
 def automatic_checkout_completion_task(
     self,
     checkout_pk,
-    user_id,
-    app_id,
+    user_id=None,
+    app_id=None,
 ):
     """Try to automatically complete the checkout.
 
     If any error is raised during the process, it will be caught and logged.
     """
     checkout_id = graphene.Node.to_global_id("Checkout", checkout_pk)
-    try:
-        checkout = Checkout.objects.get(pk=checkout_pk)
-    except Checkout.DoesNotExist:
-        return
+    with transaction.atomic():
+        checkout = Checkout.objects.select_for_update().filter(pk=checkout_pk).first()
+        if not checkout:
+            return
+        checkout.last_automatic_completion_attempt = timezone.now()
+        checkout.save(update_fields=["last_automatic_completion_attempt"])
 
-    user = User.objects.filter(pk=user_id).first()
-    app = App.objects.filter(pk=app_id).first()
+    user = User.objects.filter(pk=user_id).first() if user_id else None
+    app = App.objects.filter(pk=app_id).first() if app_id else None
 
     manager = get_plugins_manager(allow_replica=False)
     lines, unavailable_variant_pks = fetch_checkout_lines(checkout)
@@ -170,6 +250,29 @@ def automatic_checkout_completion_task(
                 "checkout_id": checkout_id,
                 "variant_ids": not_available_variants_ids,
             },
+        )
+        return
+
+    if not lines:
+        task_logger.info(
+            "The automatic checkout completion not triggered, as the checkout %s "
+            "has no lines.",
+            checkout_id,
+            extra={"checkout_id": checkout_id},
+        )
+        return
+
+    if checkout.is_shipping_required() and (
+        not checkout.shipping_method_id
+        and not checkout.external_shipping_method_id
+        and not checkout.collection_point_id
+        and not checkout.assigned_delivery_id
+    ):
+        task_logger.info(
+            "The automatic checkout completion not triggered, as the checkout %s "
+            "has no shipping method set.",
+            checkout_id,
+            extra={"checkout_id": checkout_id},
         )
         return
 
@@ -200,28 +303,67 @@ def automatic_checkout_completion_task(
                 "error": str(error),
             },
         )
-    except (IntegrityError, DatabaseError) as error:
-        if checkout_not_exists := not Checkout.objects.filter(pk=checkout_pk).exists():
-            failed_error_msg = failed_error_msg + " The checkout no longer exists."
-
-        task_logger.warning(
-            failed_error_msg,
-            checkout_id,
-            extra={
-                "checkout_id": checkout_id,
-                "error": str(error),
-            },
-        )
-        if not checkout_not_exists:
-            task_logger.info(
-                "Retrying automatic checkout completion for checkout: %s.",
-                checkout_id,
-                extra={"checkout_id": checkout_id},
-            )
-            raise self.retry() from error
     else:
         task_logger.info(
             "Automatic checkout completion succeeded for checkout: %s.",
             checkout_id,
             extra={"checkout_id": checkout_id},
         )
+
+
+@app.task(
+    queue=settings.UPDATE_SEARCH_VECTOR_INDEX_QUEUE_NAME,
+    expires=settings.BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC,
+)
+def update_checkouts_search_vector_task():
+    """Update search vectors for dirty checkouts by delegating to parallel batch tasks.
+
+    This task orchestrates the search vector update process by:
+    - Fetching checkout IDs that need search index updates (search_index_dirty=True)
+    - Dividing them into batches for parallel processing
+    - Delegating each batch to a separate worker task
+
+    Processing is done in batches to balance performance and resource usage,
+    with multiple tasks running in parallel to speed up the overall process.
+    """
+    # to speed up processing, delegate multiple checkouts to batch processing tasks
+    parallel_tasks = settings.CHECKOUT_SEARCH_UPDATE_PARALLEL_TASKS
+    batch = UPDATE_SEARCH_BATCH_SIZE * parallel_tasks
+    # process the oldest modified checkouts first to prevent repeated updates
+    # in case of high update frequency of the checkout instance
+    checkout_ids = list(
+        Checkout.objects.using(settings.DATABASE_CONNECTION_REPLICA_NAME)
+        .filter(search_index_dirty=True)
+        .order_by("last_change")
+        .values_list("pk", flat=True)[:batch]
+    )
+    if not checkout_ids:
+        return
+
+    for i in range(parallel_tasks):
+        start = i * UPDATE_SEARCH_BATCH_SIZE
+        batch_ids = checkout_ids[start : start + UPDATE_SEARCH_BATCH_SIZE]
+        if batch_ids:
+            update_checkouts_search_vector_task_batch_process.delay(batch_ids)
+
+
+@app.task(expires=settings.BEAT_UPDATE_SEARCH_EXPIRE_AFTER_SEC)
+def update_checkouts_search_vector_task_batch_process(pks: list[int]):
+    """Process a batch of checkouts to update their search vectors.
+
+    This worker task handles a subset of checkouts by:
+    - Updating their search_vector fields with indexed content
+    - Marking them as clean (search_index_dirty=False)
+
+    :param pks: List of checkout primary keys to process in this batch.
+    """
+    checkouts = list(
+        Checkout.objects.using(settings.DATABASE_CONNECTION_REPLICA_NAME).filter(
+            pk__in=pks, search_index_dirty=True
+        )
+    )
+
+    if not checkouts:
+        return
+
+    update_checkouts_search_vector(checkouts)

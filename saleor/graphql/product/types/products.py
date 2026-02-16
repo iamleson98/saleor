@@ -1000,12 +1000,16 @@ class Product(ChannelContextType[models.Product]):
     )
     media_by_id = graphene.Field(
         lambda: ProductMedia,
-        id=graphene.Argument(graphene.ID, description="ID of a product media."),
+        id=graphene.Argument(
+            graphene.ID, description="ID of a product media.", required=True
+        ),
         description="Get a single product media by ID.",
     )
     image_by_id = graphene.Field(
         lambda: ProductImage,
-        id=graphene.Argument(graphene.ID, description="ID of a product image."),
+        id=graphene.Argument(
+            graphene.ID, description="ID of a product image.", required=True
+        ),
         description="Get a single product image by ID.",
         deprecation_reason="Use the `mediaById` field instead.",
     )
@@ -1732,7 +1736,12 @@ class ProductType(ModelObjectType[models.ProductType]):
     name = graphene.String(required=True, description="Name of the product type.")
     slug = graphene.String(required=True, description="Slug of the product type.")
     has_variants = graphene.Boolean(
-        required=True, description="Whether the product type has variants."
+        required=True,
+        description="Whether the product type has variants.",
+        deprecation_reason=(
+            "This is a leftover from the past Simple/Configurable product distinction. "
+            "Products can have multiple variants regardless of this setting. "
+        ),
     )
     is_shipping_required = graphene.Boolean(
         required=True, description="Whether shipping is required for this product type."

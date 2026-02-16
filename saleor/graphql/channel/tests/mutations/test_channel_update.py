@@ -4,6 +4,8 @@ from unittest.mock import call, patch
 
 import graphene
 import pytest
+from django.conf import settings
+from django.utils import timezone
 from django.utils.functional import SimpleLazyObject
 from django.utils.text import slugify
 from freezegun import freeze_time
@@ -14,7 +16,11 @@ from .....discount.models import VoucherCode
 from .....order.models import Order
 from .....webhook.event_types import WebhookEventAsyncType
 from .....webhook.payloads import generate_meta, generate_requestor
-from ....tests.utils import assert_no_permission, get_graphql_content
+from ....tests.utils import (
+    assert_no_permission,
+    get_graphql_content,
+    get_graphql_content_from_response,
+)
 from ...enums import (
     AllocationStrategyEnum,
     MarkAsPaidStrategyEnum,
@@ -63,7 +69,11 @@ CHANNEL_UPDATE_MUTATION = """
 """
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_as_staff_user(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -121,10 +131,18 @@ def test_channel_update_mutation_as_staff_user(
     assert channel_data["orderSettings"]["expireOrdersAfter"] == 10
     assert channel_data["orderSettings"]["includeDraftOrderInVoucherUsage"] is True
     assert channel_data["orderSettings"]["allowUnpaidOrders"] is True
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_as_app(
-    permission_manage_channels, app_api_client, channel_USD
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    app_api_client,
+    channel_USD,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -148,6 +166,8 @@ def test_channel_update_mutation_as_app(
     assert channel_data["name"] == channel_USD.name == name
     assert channel_data["slug"] == channel_USD.slug == slug
     assert channel_data["currencyCode"] == channel_USD.currency_code == "USD"
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
 def test_channel_update_mutation_as_customer(user_api_client, channel_USD):
@@ -231,8 +251,14 @@ def test_channel_update_mutation_with_duplicated_slug(
     assert error["code"] == ChannelErrorCode.UNIQUE.name
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_only_name(
-    permission_manage_channels, staff_api_client, channel_USD
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -256,10 +282,18 @@ def test_channel_update_mutation_only_name(
     assert channel_data["name"] == channel_USD.name == name
     assert channel_data["slug"] == channel_USD.slug == slug
     assert channel_data["currencyCode"] == channel_USD.currency_code == "USD"
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_only_slug(
-    permission_manage_channels, staff_api_client, channel_USD
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -283,10 +317,19 @@ def test_channel_update_mutation_only_slug(
     assert channel_data["name"] == channel_USD.name == name
     assert channel_data["slug"] == channel_USD.slug == slug
     assert channel_data["currencyCode"] == channel_USD.currency_code == "USD"
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_add_shipping_zone(
-    permission_manage_channels, staff_api_client, channel_USD, shipping_zone
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+    shipping_zone,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -317,14 +360,20 @@ def test_channel_update_mutation_add_shipping_zone(
     assert channel_data["currencyCode"] == channel_USD.currency_code == "USD"
     actual_shipping_zone = channel_USD.shipping_zones.first()
     assert actual_shipping_zone == shipping_zone
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 @patch(
     "saleor.graphql.channel.mutations.channel_update."
     "drop_invalid_shipping_methods_relations_for_given_channels.delay"
 )
 def test_channel_update_mutation_remove_shipping_zone(
     mocked_drop_invalid_shipping_methods_relations,
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -389,6 +438,9 @@ def test_channel_update_mutation_remove_shipping_zone(
     # ensure another shipping zone has all warehouses assigned
     for zone in shipping_zones[1:]:
         assert zone.warehouses.count() == len(warehouses)
+
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
 def test_channel_update_mutation_add_and_remove_shipping_zone(
@@ -551,8 +603,15 @@ def test_channel_update_mutation_trigger_webhook(
     )
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_add_warehouse(
-    permission_manage_channels, staff_api_client, channel_USD, warehouse
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+    warehouse,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -583,11 +642,17 @@ def test_channel_update_mutation_add_warehouse(
     assert channel_data["currencyCode"] == channel_USD.currency_code == "USD"
     assert len(channel_data["warehouses"]) == 1
     assert channel_data["warehouses"][0]["slug"] == warehouse.slug
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
 @pytest.mark.django_db
 @pytest.mark.count_queries(autouse=False)
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_remove_warehouse(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -662,8 +727,15 @@ def test_channel_update_mutation_remove_warehouse(
     # without JPY channel
     assert warehouses[1] not in shipping_zones[1].warehouses.all()
 
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
+
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_mutation_add_and_remove_warehouse(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -706,6 +778,9 @@ def test_channel_update_mutation_add_and_remove_warehouse(
     assert {
         warehouse_data["slug"] for warehouse_data in channel_data["warehouses"]
     } == {warehouse.slug for warehouse in warehouses[1:] + [warehouse]}
+
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
 def test_channel_update_mutation_duplicated_warehouses(
@@ -806,16 +881,24 @@ def test_channel_update_mutation_negative_expire_orders(
         CHANNEL_UPDATE_MUTATION,
         variables=variables,
         permissions=(permission_manage_channels,),
+        check_no_permissions=False,
     )
 
     # then
-    content = get_graphql_content(response)
-    error = content["data"]["channelUpdate"]["errors"][0]
-    assert error["field"] == "expireOrdersAfter"
-    assert error["code"] == ChannelErrorCode.INVALID.name
+    content = get_graphql_content_from_response(response)
+    assert "errors" in content
+    expected_msg = (
+        'In field "orderSettings": In field "expireOrdersAfter":'
+        ' Expected type "Minute", found -1.'
+    )
+    assert expected_msg in content["errors"][0]["message"]
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_order_settings_manage_orders(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_orders,
     staff_api_client,
     channel_USD,
@@ -853,6 +936,8 @@ def test_channel_update_order_settings_manage_orders(
         is False
     )
     assert channel_data["orderSettings"]["allowUnpaidOrders"] is False
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
 def test_channel_update_order_settings_empty_order_settings(
@@ -1074,7 +1159,40 @@ def test_channel_update_delete_expired_orders_after(
     )
 
 
-@pytest.mark.parametrize("delete_expired_after", [-1, 0, 121, 300])
+def test_channel_update_mutation_negative_delete_expired_orders_after(
+    permission_manage_channels,
+    app_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+
+    variables = {
+        "id": channel_id,
+        "input": {
+            "orderSettings": {"deleteExpiredOrdersAfter": -1},
+        },
+    }
+
+    # when
+    response = app_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+        check_no_permissions=False,
+    )
+
+    # then
+    content = get_graphql_content_from_response(response)
+    assert "errors" in content
+    expected_msg = (
+        'In field "orderSettings": In field "deleteExpiredOrdersAfter":'
+        ' Expected type "Day", found -1.'
+    )
+    assert expected_msg in content["errors"][0]["message"]
+
+
+@pytest.mark.parametrize("delete_expired_after", [0, 121, 300])
 def test_channel_update_set_incorrect_delete_expired_orders_after(
     delete_expired_after,
     permission_manage_orders,
@@ -1271,13 +1389,17 @@ def test_channel_update_draft_order_line_price_freeze_period_negative_value(
         CHANNEL_UPDATE_MUTATION,
         variables=variables,
         permissions=(permission_manage_orders,),
+        check_no_permissions=False,
     )
-    content = get_graphql_content(response)
+    content = get_graphql_content_from_response(response)
 
     # then
-    error = content["data"]["channelUpdate"]["errors"][0]
-    assert error["field"] == "draftOrderLinePriceFreezePeriod"
-    assert error["code"] == ChannelErrorCode.INVALID.name
+    assert "errors" in content
+    expected_msg = (
+        'In field "orderSettings": In field "draftOrderLinePriceFreezePeriod":'
+        ' Expected type "Hour", found -5.'
+    )
+    assert expected_msg in content["errors"][0]["message"]
 
 
 CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS = """
@@ -1291,6 +1413,9 @@ CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS = """
                 checkoutSettings {
                     useLegacyErrorFlow
                     automaticallyCompleteFullyPaidCheckouts
+                    automaticCompletionDelay
+                    automaticCompletionCutOffDate
+                    allowLegacyGiftCardUse
                 }
             }
             errors{
@@ -1305,8 +1430,15 @@ CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS = """
 """
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
+@freeze_time("2022-05-12 12:00:00")
 def test_channel_update_channel_settings(
-    permission_manage_channels, staff_api_client, channel_USD
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
 ):
     # given
     channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
@@ -1342,12 +1474,485 @@ def test_channel_update_channel_settings(
         channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
         == automatically_complete_fully_paid_checkouts
     )
+    default_delay = 30
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] == default_delay
+    assert (
+        channel_data["checkoutSettings"]["automaticCompletionCutOffDate"]
+        == timezone.now().isoformat()
+    )
+
     channel_USD.refresh_from_db()
     assert channel_USD.use_legacy_error_flow_for_checkout == use_legacy_error_flow
     assert (
         channel_USD.automatically_complete_fully_paid_checkouts
         == automatically_complete_fully_paid_checkouts
     )
+    assert channel_USD.automatic_completion_delay == default_delay
+    assert channel_USD.automatic_completion_cut_off_date == timezone.now()
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
+
+
+@freeze_time("2022-05-12 12:00:00")
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
+def test_channel_update_set_automatic_checkout_completion(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticallyCompleteFullyPaidCheckouts": True,
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    delay = settings.DEFAULT_AUTOMATIC_CHECKOUT_COMPLETION_DELAY
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is True
+    )
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] == delay
+    assert (
+        channel_data["checkoutSettings"]["automaticCompletionCutOffDate"]
+        == timezone.now().isoformat()
+    )
+    assert channel_USD.automatically_complete_fully_paid_checkouts is True
+    assert channel_USD.automatic_completion_delay == delay
+    assert channel_USD.automatic_completion_cut_off_date == timezone.now()
+
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
+
+
+def test_channel_update_set_automatic_checkout_completion_change_to_false(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    channel_USD.automatic_completion_delay = 10
+    channel_USD.automatically_complete_fully_paid_checkouts = True
+    channel_USD.save(
+        update_fields=[
+            "automatic_completion_delay",
+            "automatically_complete_fully_paid_checkouts",
+        ]
+    )
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticallyCompleteFullyPaidCheckouts": False,
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert channel_USD.automatically_complete_fully_paid_checkouts is False
+    assert channel_USD.automatic_completion_delay is None
+    assert channel_USD.automatic_completion_cut_off_date is None
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is False
+    )
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] is None
+    assert channel_data["checkoutSettings"]["automaticCompletionCutOffDate"] is None
+
+
+def test_channel_update_set_automatic_checkout_completion_false(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": False,
+                },
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert channel_USD.automatically_complete_fully_paid_checkouts is False
+    assert channel_USD.automatic_completion_delay is None
+    assert channel_USD.automatic_completion_cut_off_date is None
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is False
+    )
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] is None
+    assert channel_data["checkoutSettings"]["automaticCompletionCutOffDate"] is None
+
+
+def test_channel_update_with_automatic_completion_delay_below_0(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": True,
+                    "delay": -1,
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+        check_no_permissions=False,
+    )
+    content = get_graphql_content_from_response(response)
+
+    # then
+    assert "errors" in content
+    expected_msg = (
+        'In field "checkoutSettings": In field "automaticCompletion":'
+        ' In field "delay": Expected type "Minute", found -1.'
+    )
+    assert expected_msg in content["errors"][0]["message"]
+
+
+def test_channel_update_with_delay_exceeding_threshold(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+    settings,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    oldest_allowed_checkout = (
+        settings.AUTOMATIC_CHECKOUT_COMPLETION_OLDEST_MODIFIED.total_seconds() // 60
+    )
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": True,
+                    "delay": oldest_allowed_checkout + 1,  # Exceeds threshold
+                },
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    errors = content["data"]["channelUpdate"]["errors"]
+    assert errors
+    assert errors[0]["field"] == "delay"
+    assert errors[0]["code"] == ChannelErrorCode.INVALID.name
+
+
+@freeze_time("2024-01-01 12:00:00")
+def test_channel_update_with_new_automatic_completion_enabled_with_default_delay(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": True,
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is True
+    )
+    default_delay = settings.DEFAULT_AUTOMATIC_CHECKOUT_COMPLETION_DELAY
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] == default_delay
+    assert channel_USD.automatically_complete_fully_paid_checkouts is True
+    assert channel_USD.automatic_completion_delay == default_delay
+    assert channel_USD.automatic_completion_cut_off_date == timezone.now()
+
+
+def test_channel_update_with_new_automatic_completion_enabled_with_custom_delay_and_cut_off(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    delay = 15
+    cut_off = timezone.now() + datetime.timedelta(days=5)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": True,
+                    "delay": delay,
+                    "cutOffDate": cut_off.isoformat(),
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is True
+    )
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] == delay
+    assert (
+        channel_data["checkoutSettings"]["automaticCompletionCutOffDate"]
+        == cut_off.isoformat()
+    )
+    assert channel_USD.automatically_complete_fully_paid_checkouts is True
+    assert channel_USD.automatic_completion_delay == delay
+    assert channel_USD.automatic_completion_cut_off_date == cut_off
+
+
+def test_channel_update_mutation_with_invalid_cutoff_date(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    invalid_cut_off_date = timezone.now() - datetime.timedelta(days=40)
+    variables = {
+        "id": graphene.Node.to_global_id("Channel", channel_USD.id),
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": True,
+                    "cutOffDate": invalid_cut_off_date.isoformat(),
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert data["errors"]
+    assert data["errors"][0]["field"] == "cutOffDate"
+    assert data["errors"][0]["code"] == ChannelErrorCode.INVALID.name
+
+
+def test_channel_update_with_new_automatic_completion_disabled(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    # Set initial state
+    channel_USD.automatically_complete_fully_paid_checkouts = True
+    channel_USD.automatic_completion_delay = 10
+    channel_USD.save(
+        update_fields=[
+            "automatically_complete_fully_paid_checkouts",
+            "automatic_completion_delay",
+        ]
+    )
+
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": False,
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert channel_USD.automatically_complete_fully_paid_checkouts is False
+    assert channel_USD.automatic_completion_delay is None
+    assert channel_USD.automatic_completion_cut_off_date is None
+    assert (
+        channel_data["checkoutSettings"]["automaticallyCompleteFullyPaidCheckouts"]
+        is False
+    )
+    assert channel_data["checkoutSettings"]["automaticCompletionDelay"] is None
+    assert channel_data["checkoutSettings"]["automaticCompletionCutOffDate"] is None
+
+
+def test_channel_update_with_new_automatic_completion_disabled_with_delay(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticCompletion": {
+                    "enabled": False,
+                    "delay": 10,
+                }
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    error = content["data"]["channelUpdate"]["errors"][0]
+    assert error["field"] == "delay"
+    assert error["code"] == ChannelErrorCode.INVALID.name
+
+
+def test_channel_update_with_both_old_and_new_automatic_completion_fields(
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {
+                "automaticallyCompleteFullyPaidCheckouts": True,
+                "automaticCompletion": {
+                    "enabled": True,
+                    "delay": 10,
+                },
+            },
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    error = content["data"]["channelUpdate"]["errors"][0]
+    assert error["field"] == "automaticallyCompleteFullyPaidCheckouts"
+    assert error["code"] == ChannelErrorCode.INVALID.name
 
 
 def test_channel_update_channel_settings_with_checkout_permission(
@@ -1553,7 +2158,11 @@ CHANNEL_UPDATE_MUTATION_WITH_PAYMENT_SETTINGS = """
 """
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_default_transaction_flow_strategy(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -1592,9 +2201,15 @@ def test_channel_update_default_transaction_flow_strategy(
         channel_USD.default_transaction_flow_strategy
         == TransactionFlowStrategyEnum.AUTHORIZATION.value
     )
+    channel_updated_mock.assert_called_once()
+    channel_metadata_updated_mock.assert_not_called()
 
 
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
 def test_channel_update_checkout_release_settings(
+    channel_updated_mock,
+    channel_metadata_updated_mock,
     permission_manage_channels,
     staff_api_client,
     channel_USD,
@@ -1642,6 +2257,8 @@ def test_channel_update_checkout_release_settings(
         hours=ttl_before_releasing_funds
     )
     assert channel_USD.checkout_release_funds_cut_off_date == date
+    channel_metadata_updated_mock.assert_not_called()
+    channel_updated_mock.assert_called_once()
 
 
 def test_channel_create_set_incorect_checkout_ttl_before_releasing_funds(
@@ -1768,3 +2385,81 @@ def test_channel_update_set_use_legacy_line_discount_propagation(
         == expected_result
     )
     assert channel_USD.use_legacy_line_discount_propagation_for_order == expected_result
+
+
+@pytest.mark.parametrize("allow_legacy_gift_card_use", [True, False])
+def test_channel_update_allow_legacy_gift_card_use(
+    allow_legacy_gift_card_use,
+    permission_manage_channels,
+    staff_api_client,
+    channel_USD,
+):
+    # given
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {
+            "checkoutSettings": {"allowLegacyGiftCardUse": allow_legacy_gift_card_use},
+        },
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION_WITH_CHECKOUT_SETTINGS,
+        variables=variables,
+        permissions=(permission_manage_channels,),
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["channelUpdate"]
+    assert not data["errors"]
+    channel_data = data["channel"]
+    channel_USD.refresh_from_db()
+    assert (
+        channel_data["checkoutSettings"]["allowLegacyGiftCardUse"]
+        == allow_legacy_gift_card_use
+    )
+    assert channel_USD.allow_legacy_gift_card_use == allow_legacy_gift_card_use
+
+
+@pytest.mark.parametrize("meta_field", ["metadata", "privateMetadata"])
+@patch("saleor.plugins.manager.PluginsManager.channel_updated")
+@patch("saleor.plugins.manager.PluginsManager.channel_metadata_updated")
+def test_channel_update_with_legacy_webhook_emission_off(
+    channel_metadata_updated_mock,
+    channel_updated_mock,
+    meta_field,
+    staff_api_client,
+    channel_USD,
+    permission_manage_channels,
+    site_settings,
+):
+    # Given
+    site_settings.use_legacy_update_webhook_emission = False
+    site_settings.save(update_fields=["use_legacy_update_webhook_emission"])
+
+    metadata_key = "key"
+    metadata_value = "value"
+
+    channel_id = graphene.Node.to_global_id("Channel", channel_USD.id)
+    variables = {
+        "id": channel_id,
+        "input": {meta_field: [{"key": metadata_key, "value": metadata_value}]},
+    }
+
+    # When
+    response = staff_api_client.post_graphql(
+        CHANNEL_UPDATE_MUTATION,
+        variables=variables,
+        permissions=[permission_manage_channels],
+    )
+    channel_USD.refresh_from_db()
+    content = get_graphql_content(response)
+    data = content["data"]["channelUpdate"]
+
+    # Then
+    assert not data["errors"]
+
+    channel_updated_mock.assert_not_called()
+    channel_metadata_updated_mock.assert_called_once()
