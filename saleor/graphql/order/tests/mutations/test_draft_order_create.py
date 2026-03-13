@@ -19,7 +19,6 @@ from .....discount import DiscountType, DiscountValueType, RewardType, RewardVal
 from .....discount.models import VoucherChannelListing, VoucherCode, VoucherCustomer
 from .....order import OrderStatus
 from .....order import events as order_events
-from .....order.actions import call_order_event
 from .....order.calculations import process_order_prices
 from .....order.error_codes import OrderErrorCode
 from .....order.models import Order, OrderEvent, OrderLine
@@ -28,6 +27,7 @@ from .....product.models import ProductVariant
 from .....tax import TaxCalculationStrategy
 from .....tests.utils import round_up
 from .....webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
+from .....webhook.transport.asynchronous.transport import generate_deferred_payloads
 from ....tests.utils import assert_no_permission, get_graphql_content
 
 DRAFT_ORDER_CREATE_MUTATION = """
@@ -3697,18 +3697,21 @@ def test_draft_order_create_voucher_with_usage_limit(
 
 
 @patch(
-    "saleor.graphql.order.mutations.draft_order_create.call_order_event",
-    wraps=call_order_event,
+    "saleor.webhook.transport.asynchronous.transport.generate_deferred_payloads.apply_async",
+    wraps=generate_deferred_payloads.apply_async,
 )
+@patch("saleor.webhook.transport.synchronous.transport.cache")
 @patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
 @patch(
     "saleor.webhook.transport.asynchronous.transport.send_webhook_request_async.apply_async"
 )
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+@override_settings(WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME="deferred_queue")
 def test_draft_order_create_triggers_webhooks(
     mocked_send_webhook_request_async,
     mocked_send_webhook_request_sync,
-    wrapped_call_order_event,
+    mocked_cache,
+    wrapped_generate_deferred_payloads,
     setup_order_webhooks,
     app_api_client,
     permission_manage_orders,
@@ -3718,8 +3721,11 @@ def test_draft_order_create_triggers_webhooks(
     channel_PLN,
     graphql_address_data,
     settings,
+    setup_mock_for_cache,
 ):
     # given
+    setup_mock_for_cache({}, mocked_cache)
+
     mocked_send_webhook_request_sync.return_value = []
     (
         tax_webhook,
@@ -3765,8 +3771,25 @@ def test_draft_order_create_triggers_webhooks(
     assert not content["data"]["draftOrderCreate"]["errors"]
 
     # confirm that event delivery was generated for each async webhook.
+    order = Order.objects.get()
     draft_order_created_delivery = EventDelivery.objects.get(
         webhook_id=draft_order_created_webhook.id
+    )
+    wrapped_generate_deferred_payloads.assert_called_once_with(
+        kwargs={
+            "event_delivery_ids": [draft_order_created_delivery.id],
+            "deferred_payload_data": {
+                "model_name": "order.order",
+                "object_id": order.pk,
+                "requestor_model_name": "app.app",
+                "requestor_object_id": app_api_client.app.pk,
+                "request_time": None,
+            },
+            "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
+            "telemetry_context": ANY,
+        },
+        queue=settings.WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME,
+        MessageGroupId="example.com",
     )
     mocked_send_webhook_request_async.assert_called_once_with(
         kwargs={
@@ -3779,12 +3802,20 @@ def test_draft_order_create_triggers_webhooks(
 
     # confirm each sync webhook was called without saving event delivery
     assert mocked_send_webhook_request_sync.call_count == 2
+
     assert not EventDelivery.objects.exclude(
         webhook_id=draft_order_created_webhook.id
     ).exists()
 
-    tax_delivery_call, filter_shipping_call = (
-        mocked_send_webhook_request_sync.mock_calls
+    filter_shipping_call = next(
+        call
+        for call in mocked_send_webhook_request_sync.mock_calls
+        if call.args[0].webhook_id == shipping_filter_webhook.id
+    )
+    tax_delivery_call = next(
+        call
+        for call in mocked_send_webhook_request_sync.mock_calls
+        if call.args[0].webhook_id == tax_webhook.id
     )
 
     tax_delivery = tax_delivery_call.args[0]
@@ -3796,8 +3827,6 @@ def test_draft_order_create_triggers_webhooks(
         filter_shipping_delivery.event_type
         == WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS
     )
-
-    assert wrapped_call_order_event.called
 
 
 def test_draft_order_create_with_metadata(

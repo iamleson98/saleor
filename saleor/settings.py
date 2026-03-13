@@ -891,9 +891,7 @@ BUILTIN_PLUGINS = [
     "saleor.payment.gateways.stripe.plugin.StripeGatewayPlugin",
     "saleor.payment.gateways.braintree.plugin.DeprecatedBraintreeGatewayPlugin",
     "saleor.payment.gateways.razorpay.plugin.DeprecatedRazorpayGatewayPlugin",
-    "saleor.payment.gateways.adyen.plugin.AdyenGatewayPlugin",
     "saleor.payment.gateways.authorize_net.plugin.AuthorizeNetGatewayPlugin",
-    "saleor.payment.gateways.np_atobarai.plugin.NPAtobaraiGatewayPlugin",
     "saleor.plugins.user_email.plugin.UserEmailPlugin",
     "saleor.plugins.admin_email.plugin.AdminEmailPlugin",
     "saleor.plugins.sendgrid.plugin.DeprecatedSendgridEmailPlugin",
@@ -939,7 +937,6 @@ CACHE_URL = (
 CACHES = {"default": django_cache_url.config()}
 CACHES["default"]["TIMEOUT"] = parse(os.environ.get("CACHE_TIMEOUT", "7 days"))
 
-JWT_EXPIRE = True
 JWT_TTL_ACCESS = datetime.timedelta(
     seconds=parse(os.environ.get("JWT_TTL_ACCESS", "5 minutes"))
 )
@@ -1027,6 +1024,11 @@ UPDATE_SEARCH_VECTOR_INDEX_QUEUE_NAME = os.environ.get(
 )
 # Queue name for "async webhook" events
 WEBHOOK_CELERY_QUEUE_NAME = os.environ.get("WEBHOOK_CELERY_QUEUE_NAME", None)
+
+WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME = os.environ.get(
+    "WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME", None
+)
+
 WEBHOOK_SQS_CELERY_QUEUE_NAME = os.environ.get(
     "WEBHOOK_SQS_CELERY_QUEUE_NAME", WEBHOOK_CELERY_QUEUE_NAME
 )

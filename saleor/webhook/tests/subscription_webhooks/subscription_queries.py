@@ -3084,86 +3084,6 @@ PAYMENT_LIST_GATEWAYS = """
     """
 
 
-CHECKOUT_FILTER_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-      }
-      shippingMethods{
-        name
-        id
-      }
-    }
-  }
-}
-"""
-
-
-SHIPPING_LIST_METHODS_FOR_CHECKOUT = """
-subscription{
-  event{
-    ...on ShippingListMethodsForCheckout{
-      checkout{
-        id
-      }
-      shippingMethods{
-        name
-        id
-      }
-    }
-  }
-}
-"""
-
-
-CHECKOUT_FILTER_SHIPPING_METHODS_CIRCULAR_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        shippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-CHECKOUT_FILTER_SHIPPING_METHODS_AVAILABLE_SHIPPING_METHODS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        availableShippingMethods{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-CHECKOUT_FILTER_SHIPPING_METHODS_AVAILABLE_PAYMENT_GATEWAYS = """
-subscription{
-  event{
-    ...on CheckoutFilterShippingMethods{
-      checkout{
-        id
-        availablePaymentGateways{
-          id
-        }
-      }
-    }
-  }
-}
-"""
-
-
 INVALID_MULTIPLE_EVENTS = """
     subscription{
       event{
@@ -3254,25 +3174,6 @@ THUMBNAIL_CREATED = """
           id
           objectId
           mediaUrl
-        }
-      }
-    }
-"""
-
-CHECKOUT_SHIPPING_LIST_AND_FILTER = """
-    subscription {
-      event {
-        ... on CheckoutFilterShippingMethods {
-          __typename
-          checkout {
-            id
-          }
-        }
-        ... on ShippingListMethodsForCheckout {
-          __typename
-          checkout {
-            id
-          }
         }
       }
     }

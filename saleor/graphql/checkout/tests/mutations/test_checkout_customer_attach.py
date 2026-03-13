@@ -6,7 +6,7 @@ from django.test import override_settings
 from django.utils import timezone
 from freezegun import freeze_time
 
-from .....account.models import User
+from .....account.tests.fixtures.user import dangerously_create_test_user
 from .....checkout.actions import call_checkout_event
 from .....checkout.error_codes import CheckoutErrorCode
 from .....core.models import EventDelivery
@@ -257,7 +257,7 @@ def test_checkout_customer_attach_user_to_checkout_with_user(
 """
 
     default_address = address.get_copy()
-    second_user = User.objects.create_user(
+    second_user = dangerously_create_test_user(
         "test2@example.com",
         "password",
         default_billing_address=default_address,
@@ -304,6 +304,7 @@ def test_with_active_problems_flow(user_api_client, checkout_with_problems):
     "saleor.webhook.transport.asynchronous.transport.generate_deferred_payloads.apply_async"
 )
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
+@override_settings(WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME="deferred_queue")
 def test_checkout_customer_triggers_webhooks(
     mocked_generate_deferred_payloads,
     mocked_send_webhook_request_async,
@@ -368,6 +369,7 @@ def test_checkout_customer_triggers_webhooks(
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
         },
+        queue=settings.WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME,
         MessageGroupId="example.com",
     )
 

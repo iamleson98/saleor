@@ -331,7 +331,7 @@ def test_app_fetch_manifest_missing_fields(
     assert errors[0] == {
         "code": "REQUIRED",
         "field": missing_field,
-        "message": "Field required.",
+        "message": "Field required",
     }
 
 
@@ -379,7 +379,7 @@ def test_app_fetch_manifest_missing_extension_fields(
     assert errors[0] == {
         "code": "REQUIRED",
         "field": "extensions",
-        "message": f"Missing required fields for app extension: {missing_field}.",
+        "message": "Field required",
     }
 
 
@@ -921,6 +921,7 @@ def test_app_fetch_manifest_extension_with_relative_url(
     staff_api_client, app_manifest, permission_manage_apps, monkeypatch
 ):
     # given
+    app_manifest["appUrl"] = "http://127.0.0.1:5000"
     app_manifest["extensions"] = [
         {
             "permissions": [],

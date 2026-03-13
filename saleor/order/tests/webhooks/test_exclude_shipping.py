@@ -10,14 +10,13 @@ from measurement.measures import Weight
 from prices import Money
 from promise import Promise
 
+from ....core.prices import quantize_price
 from ....shipping.interface import ShippingMethodData
-from ....webhook.const import CACHE_EXCLUDED_SHIPPING_TIME
+from ....shipping.webhooks.shared import CACHE_EXCLUDED_SHIPPING_TIME
 from ....webhook.event_types import WebhookEventSyncType
 from ....webhook.models import Webhook
-from ....webhook.transport.shipping_helpers import to_shipping_app_id
 from ....webhook.transport.utils import generate_cache_key_for_webhook
 from ...webhooks.exclude_shipping import (
-    _get_excluded_shipping_methods_from_response,
     excluded_shipping_methods_for_order,
     generate_excluded_shipping_methods_for_order_payload,
 )
@@ -60,31 +59,7 @@ def available_shipping_methods():
     return methods
 
 
-@mock.patch("saleor.order.webhooks.exclude_shipping._get_excluded_shipping_data")
-def test_excluded_shipping_methods_for_order_run_webhook_when_shipping_methods_provided(
-    mocked_get_excluded_shipping_data, draft_order
-):
-    # given
-    shipping_method = ShippingMethodData(
-        id="123",
-        price=Money(Decimal("10.59"), "USD"),
-    )
-
-    non_empty_shipping_methods = [shipping_method]
-
-    # when
-    excluded_shipping_methods_for_order(
-        order=draft_order,
-        available_shipping_methods=non_empty_shipping_methods,
-        allow_replica=False,
-        requestor=None,
-    ).get()
-
-    # then
-    mocked_get_excluded_shipping_data.assert_called_once()
-
-
-@mock.patch("saleor.order.webhooks.exclude_shipping._get_excluded_shipping_data")
+@mock.patch("saleor.order.webhooks.exclude_shipping.get_excluded_shipping_data")
 def test_excluded_shipping_methods_for_order_dont_run_webhook_on_missing_shipping_methods(
     mocked_get_excluded_shipping_data, draft_order
 ):
@@ -139,6 +114,28 @@ def test_excluded_shipping_methods_for_order(
     payload_dict = {"order": {"id": 1, "some_field": "12"}}
     payload = json.dumps(payload_dict)
     mocked_payload.return_value = payload
+    expected_cache_key_data = {
+        "order": {
+            "id": 1,
+            "some_field": "12",
+            "base_shipping_price_amount": str(
+                quantize_price(
+                    order_with_lines.base_shipping_price.amount,
+                    order_with_lines.currency,
+                )
+            ),
+            "lines_pricing": [
+                {
+                    "base_unit_price_amount": str(
+                        quantize_price(
+                            line.base_unit_price.amount, order_with_lines.currency
+                        )
+                    ),
+                }
+                for line in order_with_lines.lines.all()
+            ],
+        }
+    }
 
     # when
     excluded_methods = excluded_shipping_methods_for_order(
@@ -165,7 +162,7 @@ def test_excluded_shipping_methods_for_order(
         requestor=None,
     )
     expected_cache_key = generate_cache_key_for_webhook(
-        payload_dict,
+        expected_cache_key_data,
         shipping_webhook.target_url,
         WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
         shipping_app.id,
@@ -245,6 +242,28 @@ def test_multiple_app_with_excluded_shipping_methods_for_order(
     payload_dict = {"order": {"id": 1, "some_field": "12"}}
     payload = json.dumps(payload_dict)
     mocked_payload.return_value = payload
+    expected_cache_key_data = {
+        "order": {
+            "id": 1,
+            "some_field": "12",
+            "base_shipping_price_amount": str(
+                quantize_price(
+                    order_with_lines.base_shipping_price.amount,
+                    order_with_lines.currency,
+                )
+            ),
+            "lines_pricing": [
+                {
+                    "base_unit_price_amount": str(
+                        quantize_price(
+                            line.base_unit_price.amount, order_with_lines.currency
+                        )
+                    ),
+                }
+                for line in order_with_lines.lines.all()
+            ],
+        }
+    }
 
     # when
     excluded_methods = excluded_shipping_methods_for_order(
@@ -285,13 +304,13 @@ def test_multiple_app_with_excluded_shipping_methods_for_order(
     )
     assert mocked_webhook.call_count == 2
     expected_cache_for_first_webhook_key = generate_cache_key_for_webhook(
-        payload_dict,
+        expected_cache_key_data,
         shipping_webhook.target_url,
         WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
         shipping_app.id,
     )
     expected_cache_for_second_webhook_key = generate_cache_key_for_webhook(
-        payload_dict,
+        expected_cache_key_data,
         second_shipping_webhook.target_url,
         WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
         second_shipping_app.id,
@@ -379,6 +398,28 @@ def test_multiple_webhooks_on_the_same_app_with_excluded_shipping_methods_for_or
     payload_dict = {"order": {"id": 1, "some_field": "12"}}
     payload = json.dumps(payload_dict)
     mocked_payload.return_value = payload
+    expected_cache_key_data = {
+        "order": {
+            "id": 1,
+            "some_field": "12",
+            "base_shipping_price_amount": str(
+                quantize_price(
+                    order_with_lines.base_shipping_price.amount,
+                    order_with_lines.currency,
+                )
+            ),
+            "lines_pricing": [
+                {
+                    "base_unit_price_amount": str(
+                        quantize_price(
+                            line.base_unit_price.amount, order_with_lines.currency
+                        )
+                    ),
+                }
+                for line in order_with_lines.lines.all()
+            ],
+        }
+    }
 
     # when
     excluded_methods = excluded_shipping_methods_for_order(
@@ -417,13 +458,13 @@ def test_multiple_webhooks_on_the_same_app_with_excluded_shipping_methods_for_or
     assert mocked_webhook.call_count == 2
 
     expected_cache_for_first_webhook_key = generate_cache_key_for_webhook(
-        payload_dict,
+        expected_cache_key_data,
         first_webhook.target_url,
         WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
         shipping_app.id,
     )
     expected_cache_for_second_webhook_key = generate_cache_key_for_webhook(
-        payload_dict,
+        expected_cache_key_data,
         second_webhook.target_url,
         WebhookEventSyncType.ORDER_FILTER_SHIPPING_METHODS,
         shipping_app.id,
@@ -444,65 +485,6 @@ def test_multiple_webhooks_on_the_same_app_with_excluded_shipping_methods_for_or
             ),
         ]
     )
-
-
-def test_parse_excluded_shipping_methods_response(app):
-    # given
-    external_id = to_shipping_app_id(app, "test-1234")
-    response = {
-        "excluded_methods": [
-            {
-                "id": "",
-            },
-            {
-                "id": "not-an-id",
-            },
-            {
-                "id": graphene.Node.to_global_id("Car", "1"),
-            },
-            {
-                "id": graphene.Node.to_global_id("ShippingMethod", "2"),
-            },
-            {
-                "id": external_id,
-            },
-        ]
-    }
-    webhook = Webhook.objects.create(
-        name="shipping-webhook-1",
-        app=app,
-        target_url="https://shipping-gateway.com/apiv2/",
-    )
-
-    # when
-    excluded_methods = _get_excluded_shipping_methods_from_response(response, webhook)
-
-    # then
-    assert len(excluded_methods) == 2
-    assert excluded_methods[0].id == "2"
-    assert excluded_methods[1].id == external_id
-
-
-def test_parse_excluded_shipping_methods_response_invalid(app):
-    # given
-    response = {
-        "excluded_methods": [
-            {
-                "id": "not-an-id",
-            },
-        ]
-    }
-    webhook = Webhook.objects.create(
-        name="shipping-webhook-1",
-        app=app,
-        target_url="https://shipping-gateway.com/apiv2/",
-    )
-
-    # when
-    excluded_methods = _get_excluded_shipping_methods_from_response(response, webhook)
-
-    # then
-    assert not excluded_methods
 
 
 def test_generate_excluded_shipping_methods_for_order_payload(

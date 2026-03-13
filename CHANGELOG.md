@@ -5,9 +5,10 @@ All notable, unreleased changes to this project will be documented in this file.
 # 3.23.0 [Unreleased]
 
 ### Breaking changes
+
 - Fix missing denormalization of shipping methods metadata when creating an order.
-    - Shipping method metadata is now copied to dedicated order fields (`shipping_method_metadata` and `shipping_method_private_metadata`) during checkout-to-order conversion. This ensures that order metadata remains consistent even if the original shipping method is modified or deleted. As a result, updates made to a shipping method's metadata after order creation will no longer be reflected in the order's `shippingMethod.metadata` field.
-    - Shipping method metadata is now also denormalized during draft order finalization, ensuring consistent behavior across all order creation flows.
+  - Shipping method metadata is now copied to dedicated order fields (`shipping_method_metadata` and `shipping_method_private_metadata`) during checkout-to-order conversion. This ensures that order metadata remains consistent even if the original shipping method is modified or deleted. As a result, updates made to a shipping method's metadata after order creation will no longer be reflected in the order's `shippingMethod.metadata` field.
+  - Shipping method metadata is now also denormalized during draft order finalization, ensuring consistent behavior across all order creation flows.
 - Fields `options`, `mount` and `target` are removed from `AppExtension` and `AppManifestExtension` types. Use `mountName`, `targetName` and `settings`
 - Deprecate the `hasVariants` field on `ProductType`. This setting is a legacy artifact from the former Simple/Configurable product distinction. Products can have multiple variants regardless of this flag. Previously, it only prevented assigning variant attributes to a product type; this restriction will no longer apply.
 - Improved error handling in Federation - #18718 by @NyanKiyoshi
@@ -19,26 +20,47 @@ All notable, unreleased changes to this project will be documented in this file.
 
   Make sure to adapt your GraphQL queries if you use the `_entities` query.
 - Mutations `channelCreate` and `channelUpdate` now raise GraphQL errors instead `INVALID` when negative `MINUTE`/`HOUR`/`DAY` values are passed.
+- `AppInstallInput` for `appInstall` mutation now requires `appName` and `manifestUrl` fields in the schema, matching the validation that was always enforced by the mutation logic.
+- Removed Adyen plugin (payment gateway). [Switch to the app](https://docs.saleor.io/developer/app-store/apps/adyen/overview).
+- Removed `partial` field from the `Payment` GraphQL type. This field was an Adyen-specific workaround and always returned `false` after the Adyen plugin removal. Ensure you are not relying on this field (on Adyen gateway in general) before upgrading.
+- Removed the NP Atobarai payment gateway plugin (`saleor.payment.gateways.np_atobarai`). Use the [App](https://docs.saleor.io/developer/app-store/apps/np-atobarai/overview) instead.
 
 ### GraphQL API
+
 - Gift cards support as payment method within Transaction API (read more in the [docs](https://docs.saleor.io/developer/gift-cards#using-gift-cards-in-checkout)).
 - `Attribute` fields `name`, `slug` and `type` are now non-nullable in schema.
 - Added new scalar `NonNegativeInt` which allows integer values greater than or equal to zero.
 - Scalars `Minute`, `Hour` and `Day` now inherit from `NonNegativeInt`, which mean GraphQL disallows negative values for time units.
+- Removed `partial` field from the `Payment` GraphQL type.
 
 ### Webhooks
+- For order webhook events, sync webhooks (such as `ORDER_CALCULATE_TAXES` and `ORDER_FILTER_SHIPPING_METHODS`) are no longer pre-fired before sending async webhook events. Sync webhooks are now only triggered when their data is actually requested, improving performance and decoupling async event delivery from sync webhook execution.
+-  Building payloads for webhook order events (including draft orders and fulfillments) is now delegated to a separate background task. This speeds up the execution of most order mutations by deferring the expensive payload serialization out of the request path.
 
 ### Other changes
-- Improved page search with search vectors. Pages can now be searched by slug, title, content, attribute values, and page type information.
 
 - Fix send order confirmation email to staff - #18342 by @Shaokun-X
-
 - Validation on `AppExtension` is now removed. Saleor will accept string values for `mount` and `target` from Manifest during App installation and JSON value for `options` field.
 Validation is now performed on the frontend (Dashboard). This change increases velocity of features related to apps and extensions, now Dashboard is only entity that ensures the contract
+- Add optional usage telemetry. - #18789 by @wcislo-saleor
+- The app can now be installed without providing a `tokenTargetUrl` in the manifest file.
+- Removed the setting `JWT_EXPIRE` which allowed to configure Saleor to ignore the JWT token expiration. - #18856 by @NyanKiyoshi
+- Removed support for custom `User` DB models in `./manage.py createsuperuser` command. - #18890 by @NyanKiyoshi
+
+#### Search improvements
+
+- Improved page search with search vectors. Pages can now be searched by slug, title, content, attribute values, and page type information.
 - Improve user search. Use search vector functionality to enable searching users by email address, first name, last name, and addresses.
 - Improved checkout search with search vectors. The `search_index_dirty` flag is set whenever indexed checkout data changes, and a background task runs every minute to update search vectors for dirty checkouts, processing the oldest first. Search results are returned in order of best match relevance.
-- Add optional usage telemetry. - #18789 by @wcislo-saleor
+- Enhanced search functionality across key entities (products, orders, gift cards, checkouts, pages, and users) with advanced query capabilities:
+  - Prefix matching: partial word searches (e.g., "coff" matches "coffee")
+  - Boolean operators: `AND`, `OR`, and `-` (NOT) for complex queries
+  - Exact phrase matching: use quotation marks `" "` for precise searches
+  - Accent-insensitive search: queries automatically normalize diacritical marks, allowing searches to match regardless of accents (e.g., "cafe" matches "café")
+  - Relevance-based ranking: exact matches score higher than prefix matches and appear first by default (can be overridden with `sortBy` parameter)
+  - New `RANK` sort field available when using search filters to sort by relevance score
 
 ### Deprecations
+
 - Deprecate the `hasVariants` field on `ProductType`.
 - Deprecate export mutations (`exportProducts`, `exportGiftCards`, `exportVoucherCodes`). All data can be fetched via the GraphQL API and parsed into the desired format by apps or external tools.

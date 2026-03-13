@@ -7,7 +7,7 @@ from graphene import relay
 from promise import Promise
 
 from ...core.exceptions import PermissionDenied
-from ...graphql.core.descriptions import ADDED_IN_322
+from ...graphql.core.descriptions import ADDED_IN_322, ADDED_IN_323
 from ...payment import PaymentMethodType, models
 from ...payment.interface import PaymentMethodData
 from ...permission.enums import OrderPermissions
@@ -199,10 +199,6 @@ class Payment(ModelObjectType[models.Payment]):
     )
     credit_card = graphene.Field(
         CreditCard, description="The details of the card used for this payment."
-    )
-    partial = graphene.Boolean(
-        required=True,
-        description="Informs whether this is a partial payment.",
     )
     psp_reference = graphene.String(
         required=False, description="PSP reference of the payment."
@@ -476,6 +472,8 @@ class PaymentMethodDetails(graphene.Interface):
     def resolve_type(cls, instance, info: graphene.ResolveInfo):
         if instance.payment_method_type == PaymentMethodType.CARD:
             return CardPaymentMethodDetails
+        if instance.payment_method_type == PaymentMethodType.GIFT_CARD:
+            return GiftCardPaymentMethodDetails
         return OtherPaymentMethodDetails
 
     @staticmethod
@@ -536,6 +534,45 @@ class OtherPaymentMethodDetails(BaseObjectType):
             "Represents a payment method used for a transaction." + ADDED_IN_322
         )
         interfaces = [PaymentMethodDetails]
+
+
+class GiftCardPaymentMethodDetails(BaseObjectType):
+    name = graphene.String(required=True, description="Name of the gift card.")
+    brand = graphene.String(
+        description="Brand of the gift card." + ADDED_IN_323,
+        required=False,
+    )
+    last_chars = graphene.String(
+        description="Last characters of the gift card code. Max 4 characters."
+        + ADDED_IN_323,
+        required=False,
+    )
+    is_saleor_giftcard = graphene.Boolean(
+        required=True,
+        description=(
+            "Indicates whether the gift card is a built-in Saleor gift card."
+            + ADDED_IN_323
+        ),
+    )
+
+    class Meta:
+        description = (
+            "Represents a gift card payment method used for a transaction."
+            + ADDED_IN_323
+        )
+        interfaces = [PaymentMethodDetails]
+
+    @staticmethod
+    def resolve_brand(root: models.TransactionItem, _info):
+        return root.gift_card_brand
+
+    @staticmethod
+    def resolve_last_chars(root: models.TransactionItem, _info):
+        return root.gift_card_last_chars
+
+    @staticmethod
+    def resolve_is_saleor_giftcard(root: models.TransactionItem, _info):
+        return bool(root.gift_card_id)
 
 
 class TransactionItem(ModelObjectType[models.TransactionItem]):

@@ -4,7 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable, Iterable
 from decimal import Decimal
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Optional, Union, cast
 
 import graphene
 from django.conf import settings
@@ -69,7 +69,6 @@ from ...webhook.payloads import (
     generate_checkout_payload_for_tax_calculation,
     generate_collection_payload,
     generate_customer_payload,
-    generate_excluded_shipping_methods_for_checkout_payload,
     generate_fulfillment_payload,
     generate_invoice_payload,
     generate_list_gateways_payload,
@@ -112,11 +111,6 @@ from ...webhook.transport.payment import (
     parse_list_payment_gateways_response,
     parse_payment_action_response,
 )
-from ...webhook.transport.shipping import (
-    get_cache_data_for_shipping_list_methods_for_checkout,
-    get_excluded_shipping_data,
-    parse_list_shipping_methods_response,
-)
 from ...webhook.transport.synchronous.transport import (
     trigger_taxes_all_webhooks_sync,
     trigger_transaction_request,
@@ -131,7 +125,7 @@ from ...webhook.transport.utils import (
     get_sqs_message_group_id,
 )
 from ...webhook.utils import get_webhooks_for_event
-from ..base_plugin import BasePlugin, ExcludedShippingMethod
+from ..base_plugin import BasePlugin
 
 if TYPE_CHECKING:
     from ...account.models import Address, Group, User
@@ -153,18 +147,12 @@ if TYPE_CHECKING:
         ProductType,
         ProductVariant,
     )
-    from ...shipping.interface import ShippingMethodData
     from ...shipping.models import ShippingMethod, ShippingZone
     from ...site.models import SiteSettings
     from ...tax.models import TaxClass
     from ...warehouse.models import Stock, Warehouse
     from ...webhook.models import Webhook
 
-
-# Set the timeout for the shipping methods cache to 12 hours as it was the lowest
-# time labels were valid for when checking documentation for the carriers
-# (FedEx, UPS, TNT, DHL).
-CACHE_TIME_SHIPPING_LIST_METHODS_FOR_CHECKOUT: Final[int] = 3600 * 12
 
 logger = logging.getLogger(__name__)
 
@@ -3595,38 +3583,6 @@ class WebhookPlugin(BasePlugin):
             pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         )
 
-    def get_shipping_methods_for_checkout(
-        self,
-        checkout: "Checkout",
-        built_in_shipping_methods: list["ShippingMethodData"],
-        previous_value: Any,
-    ) -> list["ShippingMethodData"]:
-        methods = []
-        event_type = WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT
-        webhooks = get_webhooks_for_event(event_type)
-        if webhooks:
-            payload = generate_checkout_payload(checkout, self.requestor)
-            cache_data = get_cache_data_for_shipping_list_methods_for_checkout(payload)
-            for webhook in webhooks:
-                response_data = trigger_webhook_sync_if_not_cached(
-                    event_type=WebhookEventSyncType.SHIPPING_LIST_METHODS_FOR_CHECKOUT,
-                    payload=payload,
-                    webhook=webhook,
-                    cache_data=cache_data,
-                    allow_replica=self.allow_replica,
-                    subscribable_object=(checkout, built_in_shipping_methods),
-                    request_timeout=WEBHOOK_SYNC_TIMEOUT,
-                    cache_timeout=CACHE_TIME_SHIPPING_LIST_METHODS_FOR_CHECKOUT,
-                    requestor=self.requestor,
-                )
-
-                if response_data:
-                    shipping_methods = parse_list_shipping_methods_response(
-                        response_data, webhook.app, checkout.currency
-                    )
-                    methods.extend(shipping_methods)
-        return methods
-
     def get_tax_code_from_object_meta(
         self,
         obj: Union["Product", "ProductType", "TaxClass"],
@@ -3662,29 +3618,6 @@ class WebhookPlugin(BasePlugin):
         return TaxType(
             code=code,
             description=description,
-        )
-
-    def excluded_shipping_methods_for_checkout(
-        self,
-        checkout: "Checkout",
-        available_shipping_methods: list["ShippingMethodData"],
-        previous_value: list[ExcludedShippingMethod],
-        pregenerated_subscription_payloads: dict | None = None,
-    ) -> list[ExcludedShippingMethod]:
-        if pregenerated_subscription_payloads is None:
-            pregenerated_subscription_payloads = {}
-        generate_function = generate_excluded_shipping_methods_for_checkout_payload
-        payload_function = lambda: generate_function(  # noqa: E731
-            checkout,
-            available_shipping_methods,
-        )
-        return get_excluded_shipping_data(
-            event_type=WebhookEventSyncType.CHECKOUT_FILTER_SHIPPING_METHODS,
-            previous_value=previous_value,
-            payload_fun=payload_function,
-            subscribable_object=(checkout, available_shipping_methods),
-            allow_replica=self.allow_replica,
-            pregenerated_subscription_payloads=pregenerated_subscription_payloads,
         )
 
     def is_event_active(self, event: str, channel: str | None = None):
