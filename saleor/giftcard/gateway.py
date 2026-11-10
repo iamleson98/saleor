@@ -1,3 +1,4 @@
+import logging
 from decimal import Decimal
 from typing import Annotated
 from uuid import uuid4
@@ -7,6 +8,8 @@ from django.db import transaction
 from django.db.models import Exists, F, OuterRef, Q
 from django.utils import timezone
 
+from ..account.models import User
+from ..app.models import App
 from ..checkout.models import Checkout
 from ..core.prices import quantize_price
 from ..graphql.payment.mutations.transaction.utils import (
@@ -27,7 +30,15 @@ from .const import (
     SALEOR_GIFT_CARD_BRAND,
     SALEOR_GIFT_CARD_PAYMENT_METHOD_NAME,
 )
+from .events import gift_card_refunded_in_order_event, gift_cards_used_in_order_event
 from .models import GiftCard
+from .search import mark_gift_cards_search_index_as_dirty
+
+logger = logging.getLogger(__name__)
+
+# Returned for every reason a code cannot be used, so the response never reveals
+# whether the card exists or belongs to another customer.
+INVALID_GIFT_CARD_CODE_MESSAGE = "Gift card code is not valid."
 
 
 class GiftCardPaymentGatewayDataSchema(pydantic.BaseModel):
@@ -64,7 +75,9 @@ def transaction_initialize_session_with_gift_card_payment_method(
 
     try:
         validate_transaction_session_data(transaction_session_data, source_object)
-        gift_card = validate_and_get_gift_card(transaction_session_data)
+        gift_card = validate_and_get_gift_card(
+            transaction_session_data, source_object.user_id
+        )
     except GiftCardPaymentGatewayException as exc:
         return TransactionSessionResult(
             app_identifier=GIFT_CARD_PAYMENT_GATEWAY_ID,
@@ -121,8 +134,13 @@ def validate_transaction_session_data(
 
 def validate_and_get_gift_card(
     transaction_session_data: "TransactionSessionData",
+    source_object_user_id: int | None,
 ):
-    """Check for the existence of given gift card and lock it for use in a database transaction. Check whether gift card has enough funds to cover transaction amount."""
+    """Check for the existence of given gift card and lock it for use in a database transaction.
+
+    Check that a card restricted to a customer is used by that customer, and that the
+    gift card has enough funds to cover transaction amount.
+    """
     try:
         gift_card = (
             GiftCard.objects.active(date=timezone.now().date())
@@ -135,8 +153,18 @@ def validate_and_get_gift_card(
         )
     except GiftCard.DoesNotExist as exc:
         raise GiftCardPaymentGatewayException(
-            msg="Gift card code is not valid."
+            msg=INVALID_GIFT_CARD_CODE_MESSAGE
         ) from exc
+
+    # Restriction is checked before the balance so a caller who is not the assignee
+    # never learns the card's remaining balance from the rejection message.
+    if rejection_reason := gift_card.usage_restriction_reason(source_object_user_id):
+        logger.info(
+            "Rejected use of gift card %s %s in a payment transaction.",
+            gift_card.pk,
+            rejection_reason,
+        )
+        raise GiftCardPaymentGatewayException(msg=INVALID_GIFT_CARD_CODE_MESSAGE)
 
     if transaction_session_data.action.amount > gift_card.current_balance_amount:
         raise GiftCardPaymentGatewayException(
@@ -220,8 +248,30 @@ def detach_gift_card_from_previous_checkout_transactions(
     transactions_to_cancel_qs.update(gift_card=None)
 
 
-def charge_gift_card_transactions(
+def charge_gift_card(
+    gift_card: GiftCard,
+    authorized_value: Decimal,
     order: "Order",
+):
+    """Deduct authorized amount from the gift card balance and update usage metadata."""
+    gift_card.current_balance_amount -= authorized_value
+    gift_card.used_by = (
+        order.user or User.objects.filter(email=order.user_email).first()
+    )
+    gift_card.used_by_email = order.user_email
+    gift_card.last_used_on = timezone.now()
+    gift_card.save(
+        update_fields=[
+            "current_balance_amount",
+            "used_by",
+            "used_by_email",
+            "last_used_on",
+        ]
+    )
+
+
+def charge_gift_card_transactions(
+    order: "Order", user: User | None = None, app: App | None = None
 ):
     """Find all gift card payment gateway transactions tied to an order and attempt to charge funds from gift cards.
 
@@ -287,10 +337,20 @@ def charge_gift_card_transactions(
                         f"to cover requested amount ({quantize_price(gift_card_transaction.authorized_value, gift_card_transaction.currency)})."
                     )
                 else:
-                    gift_card.current_balance_amount -= (
-                        gift_card_transaction.authorized_value
+                    previous_balance = gift_card.current_balance_amount
+                    charge_gift_card(
+                        gift_card,
+                        gift_card_transaction.authorized_value,
+                        order,
                     )
-                    gift_card.save(update_fields=["current_balance_amount"])
+                    mark_gift_cards_search_index_as_dirty([gift_card])
+
+                    gift_cards_used_in_order_event(
+                        balance_data=[(gift_card, previous_balance)],
+                        order=order,
+                        user=user,
+                        app=app,
+                    )
 
                     response["result"] = TransactionEventType.CHARGE_SUCCESS.upper()
                     response["message"] = (
@@ -346,7 +406,10 @@ def cancel_gift_card_transaction(
 
 
 def refund_gift_card_transaction(
-    transaction_item: "TransactionItem", request_event: "TransactionEvent"
+    transaction_item: "TransactionItem",
+    request_event: "TransactionEvent",
+    user: User | None = None,
+    app: App | None = None,
 ):
     """Refund funds to a gift card which previously were charged from the same gift card.
 
@@ -376,8 +439,18 @@ def refund_gift_card_transaction(
                 .select_for_update()
                 .get()
             )
+            previous_balance = gift_card.current_balance_amount
             gift_card.current_balance_amount = F("current_balance_amount") + amount
             gift_card.save(update_fields=["current_balance_amount"])
+
+            gift_card_refunded_in_order_event(
+                gift_card=gift_card,
+                order=transaction_item.order,
+                previous_balance=previous_balance,
+                current_balance=previous_balance + amount,
+                user=user,
+                app=app,
+            )
     except GiftCard.DoesNotExist:
         # Gift card must have been just deleted.
         # Eat the exception, failure response dict is already prepared.

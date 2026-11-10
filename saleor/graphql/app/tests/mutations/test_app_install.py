@@ -2,7 +2,7 @@ from unittest.mock import Mock, patch
 
 import graphene
 
-from .....app.models import App, AppInstallation
+from .....app.models import URL_MAX_LENGTH, App, AppInstallation
 from .....app.tasks import install_app_task
 from .....core import JobStatus
 from ....core.enums import AppErrorCode, PermissionEnum
@@ -218,6 +218,36 @@ def test_install_app_mutation_with_invalid_manifest_url_returns_error(
     assert error["code"] == AppErrorCode.INVALID_URL_FORMAT.name
 
 
+def test_install_app_mutation_with_long_manifest_url(
+    permission_manage_apps,
+    staff_api_client,
+    staff_user,
+    monkeypatch,
+):
+    # given
+    monkeypatch.setattr(
+        "saleor.graphql.app.mutations.app_install.install_app_task.delay", Mock()
+    )
+    staff_user.user_permissions.set([permission_manage_apps])
+    prefix = "http://localhost:3000/manifest?token="
+    manifest_url = prefix + "a" * (URL_MAX_LENGTH - len(prefix))
+    assert len(manifest_url) == URL_MAX_LENGTH
+    variables = {
+        "app_name": "New external integration",
+        "manifest_url": manifest_url,
+        "permissions": [],
+    }
+
+    # when
+    data = _mutate_app_install(staff_api_client, variables)
+
+    # then
+    assert data["errors"] == []
+    app_installation = AppInstallation.objects.get()
+    assert app_installation.manifest_url == manifest_url
+    assert data["appInstallation"]["manifestUrl"] == manifest_url
+
+
 def test_install_app_mutation_with_null_permissions(
     permission_manage_apps,
     staff_api_client,
@@ -237,3 +267,25 @@ def test_install_app_mutation_with_null_permissions(
     # then
     assert data["appInstallation"]
     assert not data["errors"]
+
+
+def test_app_install_rejects_manage_apps_permission(superuser_api_client):
+    # given - even a superuser cannot grant MANAGE_APPS to an installed app
+    variables = {
+        "app_name": "Privileged integration",
+        "manifest_url": "http://localhost:3000/manifest",
+        "permissions": [PermissionEnum.MANAGE_APPS.name],
+    }
+
+    # when
+    data = _mutate_app_install(superuser_api_client, variables)
+
+    # then
+    errors = data["errors"]
+    assert not data["appInstallation"]
+    assert len(errors) == 1
+    error = errors[0]
+    assert error["field"] == "permissions"
+    assert error["code"] == AppErrorCode.OUT_OF_SCOPE_PERMISSION.name
+    assert error["permissions"] == [PermissionEnum.MANAGE_APPS.name]
+    assert AppInstallation.objects.count() == 0

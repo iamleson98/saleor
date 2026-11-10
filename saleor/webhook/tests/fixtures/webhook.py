@@ -15,6 +15,18 @@ def webhook(app):
 
 
 @pytest.fixture
+def webhook_with_identifier(app):
+    webhook = Webhook.objects.create(
+        name="Identified webhook",
+        app=app,
+        target_url="http://www.example.com/identified",
+        identifier="order-created-handler",
+    )
+    webhook.events.create(event_type=WebhookEventAsyncType.ORDER_CREATED)
+    return webhook
+
+
+@pytest.fixture
 def webhook_without_name(app):
     webhook = Webhook.objects.create(app=app, target_url="http://www.example.com/test")
     webhook.events.create(event_type=WebhookEventAsyncType.ORDER_CREATED)
@@ -191,25 +203,25 @@ def setup_checkout_webhooks(
                 Webhook(
                     name="Tax webhook",
                     app=tax_app,
-                    target_url="http://127.0.0.1/test",
+                    target_url="http://tax.app/test",
                     subscription_query="subscription{ event{ ...on CalculateTaxes{ __typename } } }",
                 ),
                 Webhook(
                     name="Shipping webhook",
                     app=shipping_app,
-                    target_url="http://127.0.0.1/test",
+                    target_url="http://shipping.app/test",
                     subscription_query="subscription { event { ... on ShippingListMethodsForCheckout { __typename } } }",
                 ),
                 Webhook(
                     name="Shipping webhook",
                     app=shipping_app,
-                    target_url="http://127.0.0.1/test",
+                    target_url="http://shipping.app/test",
                     subscription_query="subscription { event { ... on CheckoutFilterShippingMethods { __typename } } }",
                 ),
                 Webhook(
                     name="Checkout additional webhook",
                     app=additional_app,
-                    target_url="http://127.0.0.1/test",
+                    target_url="http://checkout.app/test",
                     subscription_query=subscription_async_webhooks,
                 ),
             ]

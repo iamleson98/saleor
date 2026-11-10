@@ -176,6 +176,8 @@ def validate_order_lines(
     channel: "Channel",
     country: str,
     errors: T_ERRORS,
+    *,
+    calculate_stocks_with_shipping_zones: bool,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
 ):
     for line in lines:
@@ -195,6 +197,7 @@ def validate_order_lines(
                     line.quantity,
                     order_line=line,
                     database_connection_name=database_connection_name,
+                    include_shipping_zones=calculate_stocks_with_shipping_zones,
                 )
             except InsufficientStock as exc:
                 errors["lines"].extend(
@@ -354,6 +357,7 @@ def _validate_voucher(
                 ValidationError(
                     message=e.args[0],
                     code=OrderErrorCode.INVALID_VOUCHER.value,
+                    params={"promo_code_details": e.rejection},
                 )
             )
 
@@ -363,6 +367,8 @@ def validate_draft_order(
     lines: Iterable["OrderLine"],
     country: str,
     requestor: Union["App", "User", None],
+    *,
+    calculate_stocks_with_shipping_zones: bool,
     database_connection_name: str = settings.DATABASE_CONNECTION_DEFAULT_NAME,
     allow_sync_webhooks: bool = True,
 ) -> Promise[None]:
@@ -394,7 +400,13 @@ def validate_draft_order(
         )
     validate_total_quantity(lines, errors)
     validate_order_lines(
-        order, lines, channel, country, errors, database_connection_name
+        order,
+        lines,
+        channel,
+        country,
+        errors,
+        calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
+        database_connection_name=database_connection_name,
     )
     validate_channel_is_active(channel, errors)
     validate_product_is_published(channel, lines, errors, database_connection_name)

@@ -14,7 +14,7 @@ from ....permission.models import Permission
 from ....tests.utils import dummy_editorjs
 from ....webhook.event_types import WebhookEventAsyncType
 from ....webhook.transport.asynchronous.transport import WebhookPayloadData
-from ...core.enums import LanguageCodeEnum
+from ...core.enums import LanguageCodeEnum, TranslationErrorCode
 from ...tests.utils import assert_no_permission, get_graphql_content
 from ..schema import TranslatableKinds
 
@@ -467,7 +467,8 @@ def test_attribute_value_translation(user_api_client, attribute_value_generator)
     ]
     assert attribute_value["translation"]["name"] == "Różowy"
     assert attribute_value["translation"]["richText"] == json.dumps(
-        dummy_editorjs("Pink")
+        dummy_editorjs("Pink"),
+        sort_keys=True,
     )
     assert attribute_value["translation"]["language"]["code"] == "PL"
 
@@ -2136,7 +2137,7 @@ def test_rich_text_attribute_value_create_translation(
         "AttributeValue", attribute_value.id
     )
     expected_base_text = "Nowy Opis"
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2270,7 +2271,7 @@ def test_rich_text_attribute_value_update_translation_only_rich_text(
         "AttributeValue", attribute_value.id
     )
     expected_base_text = "Nowy Opis"
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2307,7 +2308,7 @@ def test_rich_text_attribute_value_update_translation_only_rich_text_long_text(
         "AttributeValue", attribute_value.id
     )
     expected_base_text = "Nowy Opis. " * 250
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2347,7 +2348,7 @@ def test_rich_text_attribute_value_update_translation_only_rich_text_name_set_ma
     )
     expected_name = "Moja nazwa attrybutu"
     expected_base_text = "Nowy Opis"
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2384,7 +2385,7 @@ def test_rich_text_attribute_value_update_translation_only_rich_text_empty_name(
         "AttributeValue", attribute_value.id
     )
     expected_base_text = "Nowy Opis"
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2421,7 +2422,7 @@ def test_rich_text_attribute_value_update_translation_only_rich_text_name_null(
         "AttributeValue", attribute_value.id
     )
     expected_base_text = "Nowy Opis"
-    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text))
+    expected_rich_text = json.dumps(dummy_editorjs(expected_base_text), sort_keys=True)
 
     # when
     response = staff_api_client.post_graphql(
@@ -2641,6 +2642,61 @@ def test_plain_text_attribute_value_update_translation_name_null(
     assert data["attributeValue"]["translation"]["language"]["code"] == "PL"
     assert data["attributeValue"]["translation"]["name"] == expected_text
     assert data["attributeValue"]["translation"]["plainText"] == expected_text
+
+
+ATTRIBUTE_VALUE_TRANSLATE_WITH_ERRORS_MUTATION = """
+    mutation attributeValueTranslate(
+        $attributeValueId: ID!,
+        $input: AttributeValueTranslationInput!
+    ) {
+        attributeValueTranslate(
+            id: $attributeValueId,
+            languageCode: PL,
+            input: $input
+        ) {
+            attributeValue {
+                id
+            }
+            errors {
+                field
+                code
+                message
+            }
+        }
+    }
+"""
+
+
+@patch("saleor.plugins.webhook.plugin.trigger_webhooks_async_for_multiple_objects")
+def test_attribute_value_translate_customer_attribute_value_rejected(
+    mocked_webhook_trigger_for_multiple_objects,
+    staff_api_client,
+    loyalty_customer_attribute,
+    permission_manage_translations,
+    settings,
+):
+    # given
+    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
+    customer_value = loyalty_customer_attribute.values.first()
+    attribute_value_id = graphene.Node.to_global_id("AttributeValue", customer_value.id)
+
+    # when
+    response = staff_api_client.post_graphql(
+        ATTRIBUTE_VALUE_TRANSLATE_WITH_ERRORS_MUTATION,
+        {"attributeValueId": attribute_value_id, "input": {"name": "Złoty"}},
+        permissions=[permission_manage_translations],
+    )
+
+    # then
+    data = get_graphql_content(response)["data"]["attributeValueTranslate"]
+    assert data["attributeValue"] is None
+    assert len(data["errors"]) == 1
+    error = data["errors"][0]
+    assert error["field"] == "id"
+    assert error["code"] == TranslationErrorCode.INVALID.name
+    assert error["message"] == "Values of customer attributes cannot be translated."
+    assert not customer_value.translations.exists()
+    mocked_webhook_trigger_for_multiple_objects.assert_not_called()
 
 
 SHIPPING_PRICE_TRANSLATE = """
@@ -3377,6 +3433,78 @@ def test_translation_query_attribute_value(
     assert data["translation"]["name"] == translated_attribute_value.name
 
 
+def test_translation_query_customer_attribute_value_returns_null(
+    staff_api_client,
+    loyalty_customer_attribute,
+    permission_manage_translations,
+):
+    # given
+    customer_value = loyalty_customer_attribute.values.first()
+    variables = {
+        "id": graphene.Node.to_global_id("AttributeValue", customer_value.id),
+        "kind": TranslatableKinds.ATTRIBUTE_VALUE.name,
+        "languageCode": LanguageCodeEnum.PL.name,
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_TRANSLATION_ATTRIBUTE_VALUE,
+        variables,
+        permissions=[permission_manage_translations],
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["translation"] is None
+
+
+def test_translations_query_excludes_customer_attribute_values(
+    staff_api_client,
+    pink_attribute_value,
+    loyalty_customer_attribute,
+    permission_manage_translations,
+):
+    # given the values of a catalog attribute and of a customer attribute
+    catalog_value_ids = {
+        graphene.Node.to_global_id("AttributeValueTranslatableContent", pk)
+        for pk in pink_attribute_value.attribute.values.values_list("pk", flat=True)
+    }
+    customer_value_ids = {
+        graphene.Node.to_global_id("AttributeValueTranslatableContent", pk)
+        for pk in loyalty_customer_attribute.values.values_list("pk", flat=True)
+    }
+    assert catalog_value_ids
+    assert customer_value_ids
+    query = """
+    query TranslationsQuery($kind: TranslatableKinds!) {
+        translations(kind: $kind, first: 100) {
+            edges {
+                node {
+                    ... on AttributeValueTranslatableContent {
+                        id
+                    }
+                }
+            }
+            totalCount
+        }
+    }
+    """
+
+    # when
+    response = staff_api_client.post_graphql(
+        query,
+        {"kind": TranslatableKinds.ATTRIBUTE_VALUE.name},
+        permissions=[permission_manage_translations],
+    )
+
+    # then exactly the catalog values are listed, the customer values are not
+    data = get_graphql_content(response)["data"]["translations"]
+    returned_ids = {edge["node"]["id"] for edge in data["edges"]}
+    assert returned_ids == catalog_value_ids
+    assert returned_ids.isdisjoint(customer_value_ids)
+    assert data["totalCount"] == len(catalog_value_ids)
+
+
 QUERY_TRANSLATION_VARIANT = """
     query translation(
         $kind: TranslatableKinds!, $id: ID!, $languageCode: LanguageCodeEnum!
@@ -3854,8 +3982,12 @@ def test_product_attribute_value_rich_text_translation(
 
     attribute_value_response = data["translation"]["attributeValues"][0]
     assert attribute_value_response["name"] == attribute_value.name
-    assert attribute_value_response["richText"] == json.dumps(attribute_value.rich_text)
-    assert attribute_value_response["translation"]["richText"] == json.dumps(rich_text)
+    assert attribute_value_response["richText"] == json.dumps(
+        attribute_value.rich_text, sort_keys=True
+    )
+    assert attribute_value_response["translation"]["richText"] == json.dumps(
+        rich_text, sort_keys=True
+    )
 
 
 def test_product_attribute_value_plain_text_translation(
@@ -4086,8 +4218,12 @@ def test_product_variant_attribute_value_rich_text_translation(
 
     translations_response = data["translation"]["attributeValues"][0]
     assert translations_response["name"] == attribute_value.name
-    assert translations_response["richText"] == json.dumps(attribute_value.rich_text)
-    assert translations_response["translation"]["richText"] == json.dumps(rich_text)
+    assert translations_response["richText"] == json.dumps(
+        attribute_value.rich_text, sort_keys=True
+    )
+    assert translations_response["translation"]["richText"] == json.dumps(
+        rich_text, sort_keys=True
+    )
 
 
 def test_product_variant_attribute_value_plain_text_translation(
@@ -4229,8 +4365,12 @@ def test_page_attribute_value_rich_text_translation(
 
     attribute_value_response = data["translation"]["attributeValues"][0]
     assert attribute_value_response["name"] == attribute_value.name
-    assert attribute_value_response["richText"] == json.dumps(attribute_value.rich_text)
-    assert attribute_value_response["translation"]["richText"] == json.dumps(rich_text)
+    assert attribute_value_response["richText"] == json.dumps(
+        attribute_value.rich_text, sort_keys=True
+    )
+    assert attribute_value_response["translation"]["richText"] == json.dumps(
+        rich_text, sort_keys=True
+    )
 
 
 def test_page_attribute_value_plain_text_translation(
@@ -4446,7 +4586,8 @@ def test_translation_query_promotion(
     assert data["name"] == promotion.name
     assert data["translation"]["name"] == promotion_translation_fr.name
     assert data["translation"]["description"] == json.dumps(
-        promotion_translation_fr.description
+        promotion_translation_fr.description,
+        sort_keys=True,
     )
 
 
@@ -4496,5 +4637,6 @@ def test_translation_query_promotion_rule(
     assert data["name"] == promotion_rule.name
     assert data["translation"]["name"] == promotion_rule_translation_fr.name
     assert data["translation"]["description"] == json.dumps(
-        promotion_rule_translation_fr.description
+        promotion_rule_translation_fr.description,
+        sort_keys=True,
     )

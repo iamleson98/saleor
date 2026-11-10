@@ -45,7 +45,6 @@ from ..giftcard.models import GiftCard
 from ..giftcard.search import mark_gift_cards_search_index_as_dirty
 from ..payment import TransactionEventType
 from ..payment.model_helpers import get_total_authorized
-from ..product.utils.digital_products import get_default_digital_content_settings
 from ..tax.utils import get_display_gross_prices, get_tax_class_kwargs_for_order_line
 from ..warehouse.management import (
     decrease_allocations,
@@ -74,6 +73,7 @@ if TYPE_CHECKING:
     from ..graphql.order.utils import OrderLineData
     from ..payment.models import Payment, TransactionItem
     from ..plugins.manager import PluginsManager
+    from ..site.models import SiteSettings
 
 
 logger = logging.getLogger(__name__)
@@ -84,28 +84,6 @@ def get_order_country(order: Order) -> str:
     return get_active_country(
         order.channel, order.shipping_address, order.billing_address
     )
-
-
-def order_line_needs_automatic_fulfillment(line_data: OrderLineInfo) -> bool:
-    """Check if given line is digital and should be automatically fulfilled."""
-    digital_content_settings = get_default_digital_content_settings()
-    default_automatic_fulfillment = digital_content_settings["automatic_fulfillment"]
-    content = line_data.digital_content
-    if not content:
-        return False
-    if default_automatic_fulfillment and content.use_default_settings:
-        return True
-    if content.automatic_fulfillment:
-        return True
-    return False
-
-
-def order_needs_automatic_fulfillment(lines_data: list["OrderLineInfo"]) -> bool:
-    """Check if order has digital products which should be automatically fulfilled."""
-    for line_data in lines_data:
-        if line_data.is_digital and order_line_needs_automatic_fulfillment(line_data):
-            return True
-    return False
 
 
 def get_voucher_discount_assigned_to_order(order: Order):
@@ -252,7 +230,8 @@ def determine_order_status(
 def create_order_line(
     order,
     line_data,
-    manager,
+    requestor,
+    site_settings,
     allocate_stock=False,
 ) -> OrderLine:
     channel = order.channel
@@ -358,7 +337,11 @@ def create_order_line(
                 )
             ],
             channel,
-            manager=manager,
+            site_settings=site_settings,
+            requestor=requestor,
+            calculate_stocks_with_shipping_zones=(
+                site_settings.use_legacy_shipping_zone_stock_availability
+            ),
         )
 
     if is_line_level_voucher(order.voucher):
@@ -376,14 +359,14 @@ def add_variant_to_order(
     user: Optional["User"],
     app: Optional["App"],
     manager: "PluginsManager",
+    site_settings: "SiteSettings",
     allocate_stock: bool = False,
 ) -> OrderLine:
     """Add total_quantity of variant to order.
 
     Returns an order line the variant was added to.
     """
-    is_new_line = not line_data.line_id
-    if not is_new_line:
+    if line_data.line_id is not None:
         line = order.lines.get(pk=line_data.line_id)
         old_quantity = line.quantity
         new_quantity = old_quantity + line_data.quantity
@@ -404,6 +387,7 @@ def add_variant_to_order(
             new_quantity,
             order,
             manager=manager,
+            site_settings=site_settings,
             send_event=False,
             update_fields=update_fields,
             allocate_stock=allocate_stock,
@@ -417,7 +401,8 @@ def add_variant_to_order(
     return create_order_line(
         order,
         line_data,
-        manager,
+        app or user,
+        site_settings,
         allocate_stock,
     )
 
@@ -546,7 +531,8 @@ def _update_allocations_for_line(
     old_quantity: int,
     new_quantity: int,
     channel: "Channel",
-    manager: "PluginsManager",
+    requestor: "App | User | None",
+    site_settings: "SiteSettings",
 ):
     if old_quantity == new_quantity:
         return
@@ -555,10 +541,19 @@ def _update_allocations_for_line(
         if not get_order_lines_with_track_inventory([line_info]):
             return
         line_info.quantity = new_quantity - old_quantity
-        increase_allocations([line_info], channel, manager)
+        calculate_stocks_with_shipping_zones = (
+            site_settings.use_legacy_shipping_zone_stock_availability
+        )
+        increase_allocations(
+            [line_info],
+            channel,
+            site_settings,
+            requestor,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
+        )
     else:
         line_info.quantity = old_quantity - new_quantity
-        decrease_allocations([line_info], manager)
+        decrease_allocations([line_info], site_settings, requestor)
 
 
 def change_order_line_quantity(
@@ -569,6 +564,7 @@ def change_order_line_quantity(
     new_quantity: int,
     order: "Order",
     manager: "PluginsManager",
+    site_settings: "SiteSettings",
     send_event: bool = True,
     update_fields: list[str] | None = None,
     allocate_stock: bool = False,
@@ -579,8 +575,9 @@ def change_order_line_quantity(
     currency = channel.currency_code
     if new_quantity:
         if allocate_stock:
+            requestor = app or user
             _update_allocations_for_line(
-                line_info, old_quantity, new_quantity, channel, manager
+                line_info, old_quantity, new_quantity, channel, requestor, site_settings
             )
         line.quantity = new_quantity
         total_price_net_amount = line.quantity * line.unit_price_net_amount
@@ -626,7 +623,7 @@ def change_order_line_quantity(
             )
 
     else:
-        delete_order_line(line_info, manager)
+        delete_order_line(line_info, site_settings, app or user)
 
     quantity_diff = old_quantity - new_quantity
 
@@ -653,10 +650,12 @@ def create_order_event(line, user, app, quantity_diff):
         )
 
 
-def delete_order_line(line_info, manager):
+def delete_order_line(
+    line_info, site_settings: "SiteSettings", requestor: "App | User | None"
+):
     """Delete an order line from an order."""
     if line_info.line.order.is_unconfirmed():
-        decrease_allocations([line_info], manager)
+        decrease_allocations([line_info], site_settings, requestor)
     line_info.line.delete()
 
 

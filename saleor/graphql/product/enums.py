@@ -49,7 +49,6 @@ class ProductTypeConfigurable(BaseEnum):
 
 
 class ProductTypeEnum(BaseEnum):
-    DIGITAL = "digital"
     SHIPPABLE = "shippable"
 
     class Meta:

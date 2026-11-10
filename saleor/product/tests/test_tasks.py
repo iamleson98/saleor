@@ -1,17 +1,29 @@
 import datetime
 import logging
+from contextlib import contextmanager
 from decimal import Decimal
-from unittest.mock import patch
+from io import BytesIO
+from unittest.mock import MagicMock, patch
 
 import pytest
 from django.utils import timezone
 from faker import Faker
+from PIL import Image
+from requests.exceptions import HTTPError, InvalidSchema, RequestException
 
 from ...discount import PromotionType, RewardValueType
 from ...discount.models import Promotion, PromotionRule
-from ..models import Product, ProductChannelListing, ProductVariantChannelListing
+from ...thumbnail.exceptions import ImageTooLargeError
+from ..interface import VariantDiscountedPriceChange
+from ..models import (
+    Product,
+    ProductChannelListing,
+    ProductMedia,
+    ProductVariantChannelListing,
+)
 from ..tasks import (
     _get_preorder_variants_to_clean,
+    fetch_product_media_image_task,
     mark_products_search_vector_as_dirty,
     recalculate_discounted_price_for_products_task,
     update_products_search_vector_task,
@@ -19,6 +31,63 @@ from ..tasks import (
     update_variants_names,
 )
 from ..utils.variants import fetch_variants_for_promotion_rules
+
+
+def _create_1px_image() -> bytes:
+    image_buffer = BytesIO()
+    Image.new("RGB", (1, 1)).save(image_buffer, format="JPEG")
+    return image_buffer.getvalue()
+
+
+IMAGE_1PX = _create_1px_image()
+
+
+@contextmanager
+def mock_http_response_for_product_task(
+    status_code: int = 200,
+    content_type: str | None = None,
+    content: bytes | None = None,
+    content_length: str | None = None,
+    content_chunks: list[bytes] | None = None,
+):
+    """Patch HTTPClient.send_request to return a response with the given attributes."""
+    mock_response = MagicMock()
+    mock_response.status_code = status_code
+    mock_response.headers = {"content-type": content_type}
+    if content_length is not None:
+        mock_response.headers["content-length"] = content_length
+    if content_chunks is None:
+        content_chunks = [content] if content is not None else []
+    mock_response.iter_content.return_value = content_chunks
+
+    with patch("saleor.product.tasks.HTTPClient") as mock_client:
+        mock_client.send_request.return_value.__enter__ = MagicMock(
+            return_value=mock_response
+        )
+        yield mock_response
+
+
+def assert_product_media_fetch_rejected(caplog, product_media, expected_error):
+    """Assert the media fetch rejection using captured logs."""
+    records = [
+        record for record in caplog.records if record.name == "saleor.product.tasks"
+    ]
+    assert len(records) == 2
+    rejection_record, failure_record = records
+
+    # Rejection log
+    assert rejection_record.levelno == logging.WARNING
+    assert rejection_record.getMessage() == (
+        f"Image fetched for product media {product_media.pk} was rejected: "
+        f"{expected_error}"
+    )
+
+    # Clean-up log
+    assert failure_record.levelno == logging.WARNING
+    assert failure_record.getMessage() == (
+        "Failed to fetch image for product media with id: "
+        f"{product_media.pk}. Removing product media."
+    )
 
 
 @patch(
@@ -172,7 +241,7 @@ def test_recalculate_discounted_price_for_products_task(
     assert recalculate_discounted_price_for_products_task_mock.called
 
 
-@patch("saleor.product.tasks.update_discounted_prices_for_promotion")
+@patch("saleor.product.tasks.update_discounted_prices_for_promotion", return_value=[])
 @patch("saleor.product.tasks.recalculate_discounted_price_for_products_task.delay")
 def test_recalculate_discounted_price_for_products_task_with_correct_prices(
     recalculate_discounted_price_for_products_task_mock,
@@ -190,7 +259,7 @@ def test_recalculate_discounted_price_for_products_task_with_correct_prices(
     assert not update_discounted_prices_for_promotion_mock.called
 
 
-@patch("saleor.product.tasks.update_discounted_prices_for_promotion")
+@patch("saleor.product.tasks.update_discounted_prices_for_promotion", return_value=[])
 @patch("saleor.product.tasks.recalculate_discounted_price_for_products_task.delay")
 def test_recalculate_discounted_price_for_products_task_updates_only_dirty_listings(
     recalculate_discounted_price_for_products_task_mock,
@@ -335,3 +404,525 @@ def test_mark_products_search_vector_as_dirty(product_list):
             "search_index_dirty", flat=True
         )
     )
+
+
+def test_fetch_product_media_image_already_has_image(product_media_image):
+    # given
+    assert product_media_image.image
+    image = product_media_image.image
+
+    # when
+    fetch_product_media_image_task.apply(args=(product_media_image.pk,))
+
+    # then
+    product_media_image.refresh_from_db(fields=["image"])
+    assert product_media_image.image == image
+
+
+def test_fetch_product_media_image_not_found():
+    # given
+    non_existent_id = -1
+    assert not ProductMedia.objects.filter(pk=non_existent_id).exists()
+
+    # when
+    fetch_product_media_image_task.apply(args=(non_existent_id,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=non_existent_id).exists()
+
+
+def test_fetch_product_media_image_missing_external_url_and_image(
+    product_media_image_not_yet_fetched,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    product_media.external_url = None
+    product_media.save(update_fields=["external_url"])
+    assert not product_media.image
+
+    # when
+    fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_wrong_type(product_media_video):
+    # given
+    product_media = product_media_video
+    assert not product_media.image
+
+    # when
+    fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    product_media.refresh_from_db()
+    assert not product_media.image
+
+
+def test_fetch_product_media_image_non_image_content_type(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert product_media.external_url
+    assert not product_media.image
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200, content_type="text/plain"
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_success(
+    product_media_image_not_yet_fetched, media_root
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert product_media.external_url
+    assert not product_media.image
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200, content_type="image/jpeg", content=IMAGE_1PX
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    product_media.refresh_from_db()
+    assert product_media.external_url is None
+    assert product_media.image
+
+
+def test_fetch_product_media_image_pixel_count_exceeds_limit_sanitizes_url(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    product_media.external_url = "https://username:password@example.com/image.jpg"
+    product_media.save(update_fields=("external_url",))
+    pillow_error = "Image exceeds the pixel limit."
+
+    # when
+    with (
+        mock_http_response_for_product_task(
+            status_code=200, content_type="image/jpeg", content=IMAGE_1PX
+        ),
+        patch(
+            "saleor.product.tasks.validate_image_exif",
+            side_effect=ImageTooLargeError(pillow_error),
+        ),
+        pytest.raises(ImageTooLargeError),
+    ):
+        fetch_product_media_image_task(product_media.pk)
+
+    # then
+    sanitized_url = "https://***:***@example.com/image.jpg"
+    assert len(caplog.records) == 1
+    assert caplog.records[0].getMessage() == (
+        f"Image fetched for product media {product_media.pk} exceeds the pixel "
+        f"limit: {sanitized_url}"
+    )
+    assert caplog.records[0].image_source == sanitized_url
+    assert caplog.records[0].object_type == "ProductMedia"
+    assert caplog.records[0].object_pk == product_media.pk
+    assert caplog.records[0].pillow_error == pillow_error
+
+
+def test_fetch_product_media_image_declared_file_size_exceeds_limit(
+    product_media_image_not_yet_fetched,
+    settings,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    product_media.external_url = "https://username:password@example.com/image.jpg"
+    product_media.save(update_fields=("external_url",))
+
+    max_file_size = 1
+    settings.MAX_IMAGE_FILE_SIZE = max_file_size
+    content_length = str(max_file_size + 1)
+    expected_error = f"File too big. Maximal file size is {max_file_size}."
+    caplog.set_level(logging.WARNING)
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200,
+        content_type="image/jpeg",
+        content_length=content_length,
+    ) as response:
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    response.iter_content.assert_not_called()
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists() is False
+    assert_product_media_fetch_rejected(caplog, product_media, expected_error)
+
+
+@pytest.mark.parametrize(
+    ("_case", "content_length"),
+    [
+        ("missing", None),
+        ("negative", "-1"),  # advertized content-length is invalid
+        ("understated", "1"),  # advertized content-length is spoofed or wrong
+    ],
+)
+def test_fetch_product_media_image_streamed_file_size_exceeds_limit(
+    _case,
+    content_length,
+    product_media_image_not_yet_fetched,
+    settings,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    max_file_size = 1
+    settings.MAX_IMAGE_FILE_SIZE = max_file_size
+    content_chunks = [b"a", b"b"]
+    expected_error = f"File too big. Maximal file size is {max_file_size}."
+    caplog.set_level(logging.WARNING)
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200,
+        content_type="image/jpeg",
+        content_length=content_length,
+        content_chunks=content_chunks,
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists() is False
+    assert_product_media_fetch_rejected(caplog, product_media, expected_error)
+
+
+@pytest.mark.parametrize(
+    ("_case", "chunks", "is_valid"),
+    [
+        # NOTE: we need a valid image hence why we use IMAGE_1PX. Otherwise it will
+        #       be rejected by the API.
+        ("below max image size while image is in 1 chunk", [IMAGE_1PX], True),
+        (
+            "below max image size but image is split into 2 chunks",
+            [IMAGE_1PX[: len(IMAGE_1PX) // 2], IMAGE_1PX[len(IMAGE_1PX) // 2 :]],
+            True,
+        ),
+        ("greater than max image size while in 1 chunk", [IMAGE_1PX + b"\0"], False),
+        ("greater than max image size while in 2 chunks", [IMAGE_1PX, b"\0"], False),
+    ],
+)
+def test_fetch_product_media_image_streamed_allowed_when_under_limit(
+    _case,
+    chunks: list[bytes],
+    is_valid: bool,
+    product_media_image_not_yet_fetched,
+    settings,
+    caplog,
+):
+    """Ensures the images are allowed when `<=` the limit."""
+
+    # given
+    product_media = product_media_image_not_yet_fetched
+    max_file_size = len(IMAGE_1PX)
+    settings.MAX_IMAGE_FILE_SIZE = max_file_size
+    expected_error = f"File too big. Maximal file size is {max_file_size}."
+    caplog.set_level(logging.WARNING)
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200,
+        content_type="image/jpeg",
+        content_chunks=chunks,
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    exists = ProductMedia.objects.filter(pk=product_media.pk).exists()
+    if is_valid is True:
+        assert exists is True
+        records = [
+            record for record in caplog.records if record.name == "saleor.product.tasks"
+        ]
+        assert records == [], "shouldn't have logged any rejections or cleanups"
+    else:
+        assert exists is False
+        assert_product_media_fetch_rejected(caplog, product_media, expected_error)
+
+
+def test_fetch_product_media_image_invalid_content_length(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    """Ensure invalid Content-Length headers are rejected."""
+
+    # given
+    product_media = product_media_image_not_yet_fetched
+    content_length = "invalid"
+    expected_error = "Received an invalid content-length header"
+    caplog.set_level(logging.WARNING)
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200,
+        content_type="image/jpeg",
+        content_length=content_length,
+        content_chunks=[b"a"],
+    ) as response:
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    response.iter_content.assert_not_called()
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists() is False
+    assert_product_media_fetch_rejected(caplog, product_media, expected_error)
+
+
+def test_fetch_product_media_image_unsupported_image_content_type(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert not product_media.image
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200, content_type="image/svg+xml"
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_request_exception(
+    product_media_image_not_yet_fetched,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert product_media.external_url
+    assert not product_media.image
+
+    # when
+    with patch("saleor.product.tasks.HTTPClient") as mock_http_client:
+        mock_http_client.send_request.side_effect = RequestException(
+            "Connection timeout"
+        )
+        with pytest.raises(RequestException):
+            # this call simulates a single attempt for executing the task
+            # does not call .apply as otherwise on_failure hook would be called
+            # and this results in removing ProductMedia object
+            fetch_product_media_image_task(product_media.pk)
+
+    # then
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+@pytest.mark.parametrize("exc_class", [InvalidSchema, ValueError])
+def test_fetch_product_media_image_non_retryable_exception(
+    exc_class,
+    product_media_image_not_yet_fetched,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert product_media.external_url
+    assert not product_media.image
+
+    # when
+    with patch("saleor.product.tasks.HTTPClient") as mock_http_client:
+        mock_http_client.send_request.side_effect = exc_class()
+        with pytest.raises(exc_class):
+            # this call simulates a single attempt for executing the task
+            fetch_product_media_image_task(product_media.pk)
+
+    # then
+    assert ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+@pytest.mark.parametrize("exc_class", [InvalidSchema, ValueError])
+def test_fetch_product_media_image_non_retryable_exception_on_failure_handler(
+    exc_class,
+    product_media_image_not_yet_fetched,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert product_media.external_url
+    assert not product_media.image
+
+    # when
+    with patch("saleor.product.tasks.HTTPClient") as mock_http_client:
+        mock_http_client.send_request.side_effect = exc_class()
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_deleted_after_final_retry(
+    product_media_image_not_yet_fetched,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+
+    # when
+    with patch("saleor.product.tasks.HTTPClient") as mock_http_client:
+        mock_http_client.send_request.side_effect = RequestException(
+            "Connection timeout"
+        )
+        # mind that .apply will execute retries and as well as hooks (like on_failure hook)
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_invalid_exif(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert not product_media.image
+
+    # when
+    with (
+        mock_http_response_for_product_task(
+            status_code=200, content_type="image/jpeg", content=IMAGE_1PX
+        ),
+        patch("saleor.product.utils.tasks_utils.Image.open") as mock_image_open,
+    ):
+        mock_pil_image = MagicMock()
+        mock_pil_image.getexif.side_effect = SyntaxError("Invalid EXIF")
+        mock_image_open.return_value = mock_pil_image
+
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+def test_fetch_product_media_image_invalid_metadata(
+    product_media_image_not_yet_fetched,
+    caplog,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+    assert not product_media.image
+
+    # when
+    with mock_http_response_for_product_task(
+        status_code=200, content_type="image/jpeg", content=b"not an image"
+    ):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+@pytest.mark.parametrize("status_code", [500, 502, 503])
+def test_fetch_product_media_image_server_error_triggers_retry(
+    product_media_image_not_yet_fetched,
+    status_code,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+
+    # when & then
+    with mock_http_response_for_product_task(status_code=status_code):
+        with pytest.raises(HTTPError):
+            # this call simulates a single attempt for executing the task
+            # does not call .apply as otherwise on_failure hook would be called
+            # and this results in removing ProductMedia object
+            fetch_product_media_image_task(product_media.pk)
+
+    # then
+    product_media.refresh_from_db()
+    assert not product_media.image
+    assert product_media.external_url
+
+
+@pytest.mark.parametrize("status_code", [100, 199, 300, 301, 401, 404, 499])
+def test_fetch_product_media_image_client_error_does_not_retry(
+    product_media_image_not_yet_fetched,
+    caplog,
+    status_code,
+):
+    # given
+    product_media = product_media_image_not_yet_fetched
+
+    # when
+    with mock_http_response_for_product_task(status_code=status_code):
+        fetch_product_media_image_task.apply(args=(product_media.pk,))
+
+    # then
+    assert not ProductMedia.objects.filter(pk=product_media.pk).exists()
+
+
+@patch("saleor.product.tasks.call_event")
+@patch("saleor.product.tasks.get_plugins_manager")
+@patch("saleor.product.tasks.get_webhooks_for_event")
+@patch("saleor.product.tasks.recalculate_discounted_price_for_products_task.delay")
+def test_recalculate_discounted_price_triggers_variant_price_updated_webhook(
+    recalculate_task_mock,
+    get_webhooks_mock,
+    get_manager_mock,
+    call_event_mock,
+    product_list,
+    channel_USD,
+):
+    # given
+    variant_listings = ProductVariantChannelListing.objects.filter(
+        variant__product__in=product_list
+    )
+    expected_prices = {
+        listing.variant_id: listing.price_amount for listing in variant_listings
+    }
+    current_price = Decimal(1)
+    ProductChannelListing.objects.update(
+        discounted_price_amount=current_price, discounted_price_dirty=True
+    )
+    ProductVariantChannelListing.objects.update(discounted_price_amount=current_price)
+
+    mock_webhooks = [patch]
+    get_webhooks_mock.return_value = mock_webhooks
+
+    # when
+    recalculate_discounted_price_for_products_task()
+
+    # then
+    assert call_event_mock.called
+    calls = call_event_mock.call_args_list
+    assert len(calls) == len(expected_prices)
+    for call in calls:
+        price_info = call[0][1]
+        assert isinstance(price_info, VariantDiscountedPriceChange)
+        assert price_info.channel_slug == channel_USD.slug
+        assert price_info.currency == channel_USD.currency_code
+        assert price_info.previous_price_amount == current_price
+        assert price_info.new_price_amount == expected_prices[price_info.variant_id]
+
+
+@patch("saleor.product.tasks.call_event")
+@patch("saleor.product.tasks.get_webhooks_for_event")
+@patch("saleor.product.tasks.update_discounted_prices_for_promotion", return_value=[])
+@patch("saleor.product.tasks.recalculate_discounted_price_for_products_task.delay")
+def test_recalculate_discounted_price_no_webhook_when_prices_unchanged(
+    recalculate_task_mock,
+    update_prices_mock,
+    get_webhooks_mock,
+    call_event_mock,
+    product_list,
+):
+    # given
+    ProductChannelListing.objects.update(discounted_price_dirty=True)
+
+    # when
+    recalculate_discounted_price_for_products_task()
+
+    # then
+    assert not call_event_mock.called

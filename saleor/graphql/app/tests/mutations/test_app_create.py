@@ -2,6 +2,7 @@ import json
 from unittest import mock
 
 import graphene
+import pytest
 from django.utils.functional import SimpleLazyObject
 from freezegun import freeze_time
 
@@ -110,8 +111,41 @@ def test_app_create_no_identifier_mutation(
     assert app.identifier == graphene.Node.to_global_id("App", app.pk)
 
 
+@pytest.mark.parametrize(
+    ("_case", "permissions_variable"),
+    [
+        ("omitted", {}),
+        ("explicit_null", {"permissions": None}),
+        ("empty_list", {"permissions": []}),
+    ],
+)
+def test_app_create_without_permissions(
+    _case,
+    permissions_variable,
+    permission_manage_apps,
+    staff_api_client,
+):
+    # given
+    name = "New integration"
+    variables = {"name": name, **permissions_variable}
+
+    # when
+    response = staff_api_client.post_graphql(
+        APP_CREATE_MUTATION, variables=variables, permissions=(permission_manage_apps,)
+    )
+    content = get_graphql_content(response)
+
+    # then
+    data = content["data"]["appCreate"]
+    assert data["errors"] == []
+    app = App.objects.get()
+    assert app.name == name
+    assert list(app.permissions.all()) == []
+    assert data["app"]["permissions"] == []
+
+
 @freeze_time("2022-05-12 12:00:00")
-@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
+@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_app_lifecycle_event")
 @mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async")
 def test_app_create_trigger_webhook(
     mocked_webhook_trigger,
@@ -257,3 +291,27 @@ def test_app_create_mutation_no_permissions(
     }
     response = staff_api_client.post_graphql(query, variables=variables)
     assert_no_permission(response)
+
+
+def test_app_create_rejects_manage_apps_permission(superuser_api_client):
+    # given - even a superuser cannot grant MANAGE_APPS to an app
+    query = APP_CREATE_MUTATION
+    variables = {
+        "name": "Privileged integration",
+        "permissions": [PermissionEnum.MANAGE_APPS.name],
+    }
+
+    # when
+    response = superuser_api_client.post_graphql(query, variables=variables)
+    content = get_graphql_content(response)
+    data = content["data"]["appCreate"]
+
+    # then
+    errors = data["errors"]
+    assert not data["app"]
+    assert len(errors) == 1
+    error = errors[0]
+    assert error["field"] == "permissions"
+    assert error["code"] == AppErrorCode.OUT_OF_SCOPE_PERMISSION.name
+    assert error["permissions"] == [PermissionEnum.MANAGE_APPS.name]
+    assert App.objects.count() == 0

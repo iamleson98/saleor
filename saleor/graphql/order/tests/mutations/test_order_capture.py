@@ -185,7 +185,7 @@ def test_order_capture_by_app(
 @override_settings(
     PLUGINS=[
         "saleor.plugins.webhook.plugin.WebhookPlugin",
-        "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin",
+        "saleor.plugins.tests.gateways.dummy.DummyGatewayPlugin",
     ]
 )
 @override_settings(WEBHOOK_DEFERRED_PAYLOAD_QUEUE_NAME="deferred_queue")
@@ -270,6 +270,7 @@ def test_order_capture_triggers_webhooks(
                         "requestor_model_name": "account.user",
                         "requestor_object_id": staff_api_client.user.pk,
                         "request_time": None,
+                        "subscribable_object_data": None,
                     },
                     "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                     "telemetry_context": ANY,
@@ -329,7 +330,7 @@ def test_order_capture_triggers_webhooks(
 @override_settings(
     PLUGINS=[
         "saleor.plugins.webhook.plugin.WebhookPlugin",
-        "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin",
+        "saleor.plugins.tests.gateways.dummy.DummyGatewayPlugin",
     ]
 )
 def test_draft_order_capture_dont_triggers_fully_paid_webhook(

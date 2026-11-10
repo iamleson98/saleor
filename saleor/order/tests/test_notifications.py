@@ -3,6 +3,7 @@ from functools import partial
 from unittest import mock
 
 import graphene
+import pytest
 from django.core.files import File
 from measurement.measures import Weight
 from prices import Money, fixed_discount
@@ -21,7 +22,6 @@ from ...order import notifications
 from ...order.fetch import fetch_order_info
 from ...payment.model_helpers import get_subtotal
 from ...plugins.manager import get_plugins_manager
-from ...product.models import DigitalContentUrl
 from ...thumbnail import THUMBNAIL_SIZES
 from ...thumbnail.models import Thumbnail
 from ..notifications import (
@@ -182,8 +182,6 @@ def test_get_order_line_payload(order_line):
         "total_net_amount": quantize_price(total_net.amount, currency),
         "total_tax_amount": quantize_price(total_tax.amount, currency),
         "tax_rate": order_line.tax_rate,
-        "is_digital": order_line.is_digital,
-        "digital_url": None,
         "unit_discount_amount": order_line.unit_discount_amount,
         "unit_discount_reason": order_line.unit_discount_reason,
         "unit_discount_type": order_line.unit_discount_type,
@@ -294,15 +292,11 @@ def test_get_default_order_payload(order_line):
     }
 
 
-def test_get_default_fulfillment_payload(fulfillment, digital_content, site_settings):
+def test_get_default_fulfillment_payload(fulfillment, site_settings):
     # given
     order = fulfillment.order
     fulfillment.tracking_number = "http://tracking.url.com/123"
     fulfillment.save(update_fields=["tracking_number"])
-    line = order.lines.first()
-    line.variant = digital_content.product_variant
-    line.save(update_fields=["variant"])
-    DigitalContentUrl.objects.create(content=digital_content, line=line)
     attribute_data = get_attribute_data_from_order_lines(order.lines.all())
 
     order_payload = get_default_order_payload(order)
@@ -319,21 +313,21 @@ def test_get_default_fulfillment_payload(fulfillment, digital_content, site_sett
         payload["physical_lines"], key=lambda line: line["id"]
     )
     order_payload["lines"] = sorted(order_payload["lines"], key=lambda line: line["id"])
+    expected_physical_lines = sorted(
+        [
+            get_default_fulfillment_line_payload(line, attribute_data)
+            for line in fulfillment.lines.all()
+        ],
+        key=lambda line: line["id"],
+    )
 
-    digital_line = fulfillment.lines.get(order_line=line.id)
-    physical_line = fulfillment.lines.exclude(id=digital_line.id).first()
     assert payload == {
         "order": order_payload,
         "fulfillment": {
             "tracking_number": fulfillment.tracking_number,
             "is_tracking_number_url": fulfillment.is_tracking_number_url,
         },
-        "physical_lines": [
-            get_default_fulfillment_line_payload(physical_line, attribute_data)
-        ],
-        "digital_lines": [
-            get_default_fulfillment_line_payload(digital_line, attribute_data)
-        ],
+        "physical_lines": expected_physical_lines,
         "recipient_email": order.get_customer_email(),
         **get_site_context_payload(site_settings.site),
     }
@@ -456,30 +450,93 @@ def test_send_email_order_confirmation_with_staff_recipients(
     assert called_kwargs["payload_func"]() == expected_payload
 
 
+@pytest.mark.parametrize(
+    ("_case", "input_kwargs", "expects_customers_notify"),
+    [
+        # When ``notify_customer`` argument is omitted, then it should notify everyone
+        ("default args should notify customers", {}, True),
+        (
+            "notify_customer=True should notify customers",
+            {"notify_customer": True},
+            True,
+        ),
+        (
+            "notify_customer=False should not notify customers",
+            {"notify_customer": False},
+            False,
+        ),
+    ],
+)
+@mock.patch("saleor.plugins.manager.PluginsManager.notify")
+def test_send_email_order_confirmation_only_to_staff(
+    mocked_notify,
+    order,
+    staff_notification_recipient,  # needed to dispatch staff notification
+    _case: str,
+    input_kwargs: dict,
+    expects_customers_notify: bool,
+):
+    """Calling with ``notify_customer=False`` shouldn't notify customers.
+
+    When calling ``send_order_confirmation()`` with ``notify_customer=False``
+    it shouldn't notify customers, and instead only notify staff users.
+    """
+
+    # given
+    manager = get_plugins_manager(allow_replica=False)
+    redirect_url = "https://www.example.com"
+    order_info = fetch_order_info(order)
+
+    # when
+    notifications.send_order_confirmation(
+        order_info,
+        redirect_url,
+        manager,
+        **input_kwargs,
+    )
+
+    # then
+    expected_calls = [
+        mock.call(NotifyEventType.STAFF_ORDER_CONFIRMATION, payload_func=mock.ANY),
+    ]
+    if expects_customers_notify is True:
+        expected_calls.insert(
+            0,
+            mock.call(
+                NotifyEventType.ORDER_CONFIRMATION,
+                payload_func=mock.ANY,
+                channel_slug=order.channel.slug,
+            ),
+        )
+
+    mocked_notify.assert_has_calls(expected_calls)
+
+
 @mock.patch("saleor.plugins.manager.PluginsManager.notify")
 def test_send_confirmation_emails_without_addresses_for_payment(
     mocked_notify,
     site_settings,
     anonymous_plugins,
-    digital_content,
+    product_without_shipping,
     payment_dummy,
 ):
     # given
     order = payment_dummy.order
+    variant = product_without_shipping.variants.get()
     line_data = OrderLineData(
-        variant_id=str(digital_content.product_variant.id),
-        variant=digital_content.product_variant,
+        variant_id=str(variant.pk),
+        variant=variant,
         quantity=1,
     )
 
-    line = add_variant_to_order(
+    add_variant_to_order(
         order=order,
         line_data=line_data,
         user=None,
         app=None,
         manager=anonymous_plugins,
+        site_settings=site_settings,
     )
-    DigitalContentUrl.objects.create(content=digital_content, line=line)
 
     order.shipping_address = None
     order.shipping_method = None
@@ -519,25 +576,26 @@ def test_send_confirmation_emails_without_addresses_for_order(
     mocked_notify,
     order,
     site_settings,
-    digital_content,
+    product_without_shipping,
     anonymous_plugins,
 ):
     # given
     assert not order.lines.count()
+    variant = product_without_shipping.variants.get()
     line_data = OrderLineData(
-        variant_id=str(digital_content.product_variant.id),
-        variant=digital_content.product_variant,
+        variant_id=str(variant.pk),
+        variant=variant,
         quantity=1,
     )
 
-    line = add_variant_to_order(
+    add_variant_to_order(
         order=order,
         line_data=line_data,
         user=None,
         app=None,
         manager=anonymous_plugins,
+        site_settings=site_settings,
     )
-    DigitalContentUrl.objects.create(content=digital_content, line=line)
 
     order.shipping_address = None
     order.shipping_method = None

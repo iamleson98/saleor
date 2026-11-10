@@ -832,11 +832,8 @@ def test_applies_limit_to_multi_product_references(
     # given
     page_type = page.page_type
 
-    # make sure that our attribute is on first position
-    page_type.page_attributes.update(storefront_search_position=10)
     page_type.page_attributes.set([page_type_product_reference_attribute])
     page_type_product_reference_attribute.input_type = AttributeInputType.REFERENCE
-    page_type_product_reference_attribute.storefront_search_position = 1
     page_type_product_reference_attribute.save()
 
     first_reference = AttributeValue.objects.create(
@@ -950,10 +947,7 @@ def test_applies_limit_to_multi_variant_references(
     # given
     page_type = page.page_type
 
-    # make sure that our attribute is on first position
-    page_type.page_attributes.update(storefront_search_position=10)
     page_type.page_attributes.set([page_type_variant_reference_attribute])
-    page_type_variant_reference_attribute.storefront_search_position = 1
     page_type_variant_reference_attribute.input_type = AttributeInputType.REFERENCE
     page_type_variant_reference_attribute.save()
 
@@ -1068,11 +1062,8 @@ def test_applies_limit_to_multi_category_references(
     # given
     page_type = page.page_type
 
-    # make sure that our attribute is on first position
-    page_type.page_attributes.update(storefront_search_position=10)
     page_type.page_attributes.set([page_type_category_reference_attribute])
     page_type_category_reference_attribute.input_type = AttributeInputType.REFERENCE
-    page_type_category_reference_attribute.storefront_search_position = 1
     page_type_category_reference_attribute.save()
 
     first_reference = AttributeValue.objects.create(
@@ -1190,11 +1181,8 @@ def test_applies_limit_to_multi_collection_references(
 ):
     # given
     page_type = page.page_type
-    # make sure that our attribute is on first position
-    page_type.page_attributes.update(storefront_search_position=10)
     page_type.page_attributes.set([page_type_collection_reference_attribute])
     page_type_collection_reference_attribute.input_type = AttributeInputType.REFERENCE
-    page_type_collection_reference_attribute.storefront_search_position = 1
     page_type_collection_reference_attribute.save()
 
     first_reference = AttributeValue.objects.create(
@@ -1556,6 +1544,58 @@ def test_assigned_swatch_file_attribute(staff_api_client, page, swatch_attribute
     assert attr_value_data["slug"] == attr_value.slug
     assert attr_value_data["file"]["url"] == attr_value.file_url
     assert attr_value_data["file"]["contentType"] == attr_value.content_type
+
+
+ASSIGNED_SWATCH_ATTRIBUTE_TRANSLATION_QUERY = """
+query PageQuery($id: ID) {
+  page(id: $id) {
+    assignedAttributes(limit:10) {
+      ... on AssignedSwatchAttribute {
+        value {
+          name
+          slug
+          translation(languageCode: FR)
+        }
+      }
+    }
+  }
+}
+"""
+
+
+def test_assigned_swatch_attribute_translation(
+    staff_api_client,
+    page,
+    swatch_attribute,
+):
+    # given
+    swatch_attribute.type = AttributeType.PAGE_TYPE
+    swatch_attribute.save()
+
+    page_type = page.page_type
+    page_type.page_attributes.set([swatch_attribute])
+
+    attr_value = swatch_attribute.values.first()
+    translation = AttributeValueTranslation.objects.create(
+        language_code="fr",
+        attribute_value=attr_value,
+        name="French Red",
+    )
+
+    associate_attribute_values_to_instance(page, {swatch_attribute.pk: [attr_value]})
+
+    # when
+    response = staff_api_client.post_graphql(
+        ASSIGNED_SWATCH_ATTRIBUTE_TRANSLATION_QUERY,
+        variables={"id": graphene.Node.to_global_id("Page", page.pk)},
+    )
+
+    # then
+    content = get_graphql_content(response)
+
+    assert len(content["data"]["page"]["assignedAttributes"]) == 1
+    attr_value_data = content["data"]["page"]["assignedAttributes"][0]["value"]
+    assert attr_value_data["translation"] == translation.name
 
 
 ASSIGNED_BOOLEAN_ATTRIBUTE_QUERY = """

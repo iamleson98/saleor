@@ -17,8 +17,8 @@ from .....checkout.calculations import (
 from .....checkout.error_codes import CheckoutErrorCode
 from .....checkout.fetch import fetch_checkout_info, fetch_checkout_lines
 from .....checkout.models import Checkout, CheckoutLine
+from .....checkout.tests.utils import add_variant_to_checkout
 from .....checkout.utils import (
-    add_variant_to_checkout,
     add_variants_to_checkout,
     calculate_checkout_quantity,
     invalidate_checkout,
@@ -1198,6 +1198,33 @@ def test_checkout_lines_update_channel_without_shipping_zones(
     assert errors[0]["field"] == "quantity"
 
 
+def test_checkout_lines_update_channel_without_shipping_zones_excluded_from_stock_calculations(
+    user_api_client, checkout_with_item, site_settings
+):
+    # given
+    site_settings.use_legacy_shipping_zone_stock_availability = False
+    site_settings.save(update_fields=["use_legacy_shipping_zone_stock_availability"])
+
+    checkout = checkout_with_item
+    checkout.channel.shipping_zones.clear()
+    line = checkout.lines.first()
+    variant = line.variant
+    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
+
+    variables = {
+        "id": to_global_id_or_none(checkout),
+        "lines": [{"variantId": variant_id, "quantity": 1}],
+    }
+
+    # when
+    response = user_api_client.post_graphql(MUTATION_CHECKOUT_LINES_UPDATE, variables)
+    content = get_graphql_content(response)
+
+    # then - no INSUFFICIENT_STOCK error when flag is disabled
+    data = content["data"]["checkoutLinesUpdate"]
+    assert not data["errors"]
+
+
 def test_checkout_lines_update_variant_quantity_over_avability_stock(
     user_api_client, checkout_with_item
 ):
@@ -1445,13 +1472,13 @@ def test_checkout_lines_update_marks_shipping_as_stale(
 def test_checkout_lines_update_do_not_remove_shipping_if_removed_product_with_shipping(
     user_api_client,
     checkout_with_item,
-    digital_content,
+    product_without_shipping,
     address,
     checkout_delivery,
 ):
     # given
     checkout = checkout_with_item
-    digital_variant = digital_content.product_variant
+    variant_without_shipping = product_without_shipping.variants.get()
     checkout.shipping_address = address
     checkout.assigned_delivery = checkout_delivery(checkout)
     checkout.save()
@@ -1459,7 +1486,7 @@ def test_checkout_lines_update_do_not_remove_shipping_if_removed_product_with_sh
     checkout_info = fetch_checkout_info(
         checkout, [], get_plugins_manager(allow_replica=False)
     )
-    add_variant_to_checkout(checkout_info, digital_variant, 1)
+    add_variant_to_checkout(checkout_info, variant_without_shipping, 1)
     line = checkout.lines.first()
     variant = line.variant
 
@@ -1636,6 +1663,7 @@ def test_checkout_lines_update_triggers_webhooks(
                 "requestor_model_name": None,
                 "requestor_object_id": None,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
@@ -1984,7 +2012,7 @@ def test_checkout_lines_update_with_new_metadata_merge_old(
     wraps=_calculate_and_add_tax,
 )
 @mock.patch(
-    "saleor.checkout.calculations.fetch_checkout_data",
+    "saleor.graphql.checkout.dataloaders.calculations.fetch_checkout_data",
     wraps=fetch_checkout_data,
 )
 def test_checkout_lines_update_checkout_updated_during_price_recalculation(
@@ -2011,8 +2039,8 @@ def test_checkout_lines_update_checkout_updated_during_price_recalculation(
         checkout_to_modify.email = expected_email
         checkout_to_modify.save(update_fields=["email", "last_change"])
 
-    with race_condition.RunAfter(
-        "saleor.checkout.calculations._calculate_and_add_tax", modify_checkout
+    with race_condition.RunBefore(
+        "saleor.checkout.calculations.checkout_qs_select_for_update", modify_checkout
     ):
         response = user_api_client.post_graphql(
             MUTATION_CHECKOUT_LINES_UPDATE, variables
@@ -2024,7 +2052,7 @@ def test_checkout_lines_update_checkout_updated_during_price_recalculation(
     assert not data["errors"]
 
     # Ensure that the checkout prices recalculation was triggered more than one time.
-    assert mock_fetch_checkout_data.call_count > 1
+    assert mock_fetch_checkout_data.call_count == 1
 
     # Ensure that the checkout price are recalculated only one time
     assert mock_calculate_and_add_tax.call_count == 1

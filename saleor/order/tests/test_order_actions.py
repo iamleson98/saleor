@@ -6,7 +6,7 @@ from django.test import override_settings
 
 from ...channel import MarkAsPaidStrategy
 from ...core.models import EventDelivery
-from ...core.utils.events import call_event_including_protected_events
+from ...core.utils.events import call_event
 from ...giftcard import GiftCardEvents
 from ...giftcard.const import GIFT_CARD_PAYMENT_GATEWAY_ID
 from ...giftcard.models import GiftCard, GiftCardEvent
@@ -20,8 +20,6 @@ from ...payment import (
 )
 from ...payment.models import Payment
 from ...plugins.manager import get_plugins_manager
-from ...product.models import DigitalContent
-from ...product.tests.utils import create_image
 from ...warehouse.models import Allocation, Stock
 from ...webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
 from ...webhook.transport.asynchronous.transport import generate_deferred_payloads
@@ -35,7 +33,6 @@ from .. import (
 )
 from ..actions import (
     WEBHOOK_EVENTS_FOR_FULLY_PAID,
-    automatically_fulfill_digital_lines,
     call_order_event,
     call_order_events,
     cancel_fulfillment,
@@ -56,60 +53,8 @@ from ..actions import (
     order_voided,
 )
 from ..fetch import OrderInfo
-from ..models import Fulfillment, OrderLine
-from ..notifications import (
-    send_fulfillment_confirmation_to_customer,
-    send_payment_confirmation,
-)
+from ..models import OrderLine
 from ..utils import updates_amounts_for_order
-
-
-@patch(
-    "saleor.order.actions.send_fulfillment_confirmation_to_customer",
-    wraps=send_fulfillment_confirmation_to_customer,
-)
-@patch(
-    "saleor.order.actions.send_payment_confirmation", wraps=send_payment_confirmation
-)
-@patch("saleor.plugins.manager.PluginsManager.fulfillment_created")
-def test_handle_fully_paid_order_digital_lines(
-    mock_fulfillment_created,
-    mock_send_payment_confirmation,
-    send_fulfillment_confirmation_to_customer,
-    order_with_digital_line,
-):
-    # given
-    order = order_with_digital_line
-    order.payments.add(Payment.objects.create())
-    redirect_url = "http://localhost.pl"
-    order = order_with_digital_line
-    order.redirect_url = redirect_url
-    order.save()
-    order_info = fetch_order_info(order)
-    manager = get_plugins_manager(allow_replica=False)
-
-    webhook_event_map = get_webhooks_for_multiple_events(WEBHOOK_EVENTS_FOR_FULLY_PAID)
-
-    # when
-    handle_fully_paid_order(manager, order_info, webhook_event_map=webhook_event_map)
-
-    # then
-    fulfillment = order.fulfillments.first()
-    assert set(order.events.values_list("type", flat=True)) == {
-        OrderEvents.ORDER_FULLY_PAID,
-        OrderEvents.FULFILLMENT_FULFILLED_ITEMS,
-    }
-    fulfilled_event = order.events.get(type=OrderEvents.FULFILLMENT_FULFILLED_ITEMS)
-    assert fulfilled_event.parameters["auto"] is True
-
-    mock_send_payment_confirmation.assert_called_once_with(order_info, manager)
-    send_fulfillment_confirmation_to_customer.assert_called_once_with(
-        order, fulfillment, user=order.user, app=None, manager=manager
-    )
-
-    order.refresh_from_db()
-    assert order.status == OrderStatus.FULFILLED
-    mock_fulfillment_created.assert_called_once_with(fulfillment)
 
 
 @patch("saleor.order.actions.send_payment_confirmation")
@@ -568,7 +513,12 @@ def test_cancel_fulfillment(fulfilled_order, warehouse):
     line_1, line_2 = fulfillment.lines.all()
 
     cancel_fulfillment(
-        fulfillment, None, None, warehouse, get_plugins_manager(allow_replica=False)
+        fulfillment,
+        None,
+        None,
+        warehouse,
+        get_plugins_manager(allow_replica=False),
+        calculate_stocks_with_shipping_zones=True,
     )
 
     fulfillment.refresh_from_db()
@@ -596,6 +546,7 @@ def test_cancel_fulfillment_waiting_for_approval(fulfilled_order):
         None,
         warehouse,
         manager=get_plugins_manager(allow_replica=False),
+        calculate_stocks_with_shipping_zones=True,
     )
 
     # then
@@ -617,7 +568,12 @@ def test_cancel_fulfillment_variant_without_inventory_tracking(
     stock_quantity_before = stock.quantity
 
     cancel_fulfillment(
-        fulfillment, None, None, warehouse, get_plugins_manager(allow_replica=False)
+        fulfillment,
+        None,
+        None,
+        warehouse,
+        get_plugins_manager(allow_replica=False),
+        calculate_stocks_with_shipping_zones=True,
     )
 
     fulfillment.refresh_from_db()
@@ -634,6 +590,7 @@ def test_cancel_order(
     send_order_canceled_confirmation_mock,
     fulfilled_order_with_all_cancelled_fulfillments,
     django_capture_on_commit_callbacks,
+    site_settings,
 ):
     # given
     order = fulfilled_order_with_all_cancelled_fulfillments
@@ -645,7 +602,7 @@ def test_cancel_order(
 
     # when
     with django_capture_on_commit_callbacks(execute=True):
-        cancel_order(order, None, None, manager)
+        cancel_order(order, None, None, manager, site_settings)
 
     # then
     order_event = order.events.last()
@@ -678,6 +635,7 @@ def test_cancel_order_dont_trigger_webhooks(
     order_with_lines,
     settings,
     django_capture_on_commit_callbacks,
+    site_settings,
 ):
     # given
     plugins_manager = get_plugins_manager(False)
@@ -701,7 +659,7 @@ def test_cancel_order_dont_trigger_webhooks(
 
     # when
     with django_capture_on_commit_callbacks(execute=True):
-        cancel_order(order, None, None, plugins_manager)
+        cancel_order(order, None, None, plugins_manager, site_settings)
 
     # then
     # confirm that event delivery was generated for each async webhook.
@@ -1440,7 +1398,7 @@ def test_order_charged_triggers_webhooks(
     assert filter_shipping_call.kwargs["timeout"] == settings.WEBHOOK_SYNC_TIMEOUT
 
 
-def test_fulfill_order_lines(order_with_lines):
+def test_fulfill_order_lines(order_with_lines, site_settings):
     order = order_with_lines
     line = order.lines.first()
     quantity_fulfilled_before = line.quantity_fulfilled
@@ -1457,7 +1415,8 @@ def test_fulfill_order_lines(order_with_lines):
                 warehouse_pk=stock.warehouse.pk,
             )
         ],
-        get_plugins_manager(allow_replica=False),
+        site_settings=site_settings,
+        requestor=None,
     )
 
     stock.refresh_from_db()
@@ -1465,7 +1424,7 @@ def test_fulfill_order_lines(order_with_lines):
     assert line.quantity_fulfilled == quantity_fulfilled_before + line.quantity
 
 
-def test_fulfill_order_lines_multiple_lines(order_with_lines):
+def test_fulfill_order_lines_multiple_lines(order_with_lines, site_settings):
     order = order_with_lines
     lines = order.lines.all()
 
@@ -1496,7 +1455,8 @@ def test_fulfill_order_lines_multiple_lines(order_with_lines):
                 warehouse_pk=stock_2.warehouse.pk,
             ),
         ],
-        get_plugins_manager(allow_replica=False),
+        site_settings=site_settings,
+        requestor=None,
     )
 
     stock_1.refresh_from_db()
@@ -1512,7 +1472,7 @@ def test_fulfill_order_lines_multiple_lines(order_with_lines):
     )
 
 
-def test_fulfill_order_lines_with_variant_deleted(order_with_lines):
+def test_fulfill_order_lines_with_variant_deleted(order_with_lines, site_settings):
     line = order_with_lines.lines.first()
     line.variant.delete()
 
@@ -1520,11 +1480,14 @@ def test_fulfill_order_lines_with_variant_deleted(order_with_lines):
 
     fulfill_order_lines(
         [OrderLineInfo(line=line, quantity=line.quantity)],
-        get_plugins_manager(allow_replica=False),
+        site_settings=site_settings,
+        requestor=None,
     )
 
 
-def test_fulfill_order_lines_without_inventory_tracking(order_with_lines):
+def test_fulfill_order_lines_without_inventory_tracking(
+    order_with_lines, site_settings
+):
     order = order_with_lines
     line = order.lines.first()
     quantity_fulfilled_before = line.quantity_fulfilled
@@ -1545,117 +1508,13 @@ def test_fulfill_order_lines_without_inventory_tracking(order_with_lines):
                 warehouse_pk=stock.warehouse.pk,
             )
         ],
-        get_plugins_manager(allow_replica=False),
+        site_settings=site_settings,
+        requestor=None,
     )
 
     stock.refresh_from_db()
     assert stock.quantity == stock_quantity_after
     assert line.quantity_fulfilled == quantity_fulfilled_before + line.quantity
-
-
-@patch("saleor.order.actions.send_fulfillment_confirmation_to_customer")
-@patch("saleor.order.utils.get_default_digital_content_settings")
-@patch("saleor.plugins.manager.PluginsManager.fulfillment_created")
-def test_fulfill_digital_lines(
-    mock_fulfillment_created,
-    mock_digital_settings,
-    mock_email_fulfillment,
-    order_with_lines,
-    media_root,
-):
-    mock_digital_settings.return_value = {"automatic_fulfillment": True}
-    line = order_with_lines.lines.all()[0]
-
-    image_file, image_name = create_image()
-    variant = line.variant
-
-    product_type = variant.product.product_type
-    product_type.is_digital = True
-    product_type.is_shipping_required = False
-    product_type.save(update_fields=["is_digital", "is_shipping_required"])
-
-    digital_content = DigitalContent.objects.create(
-        content_file=image_file, product_variant=variant, use_default_settings=True
-    )
-
-    line.variant.digital_content = digital_content
-    line.is_shipping_required = False
-    line.save()
-
-    order_with_lines.refresh_from_db()
-    order_info = fetch_order_info(order_with_lines)
-    manager = get_plugins_manager(allow_replica=False)
-
-    automatically_fulfill_digital_lines(order_info, manager)
-
-    line.refresh_from_db()
-    fulfillment = Fulfillment.objects.get(order=order_with_lines)
-    fulfillment_lines = fulfillment.lines.all()
-
-    assert fulfillment_lines.count() == 1
-    assert line.digital_content_url
-    assert mock_email_fulfillment.called
-    mock_fulfillment_created.assert_called_once_with(fulfillment)
-
-    event = order_with_lines.events.filter(
-        type=OrderEvents.FULFILLMENT_FULFILLED_ITEMS
-    ).first()
-    assert event
-    assert set(event.parameters["fulfilled_items"]) == {
-        line.pk for line in fulfillment_lines
-    }
-
-
-@patch("saleor.order.actions.send_fulfillment_confirmation_to_customer")
-@patch("saleor.order.utils.get_default_digital_content_settings")
-@patch("saleor.plugins.manager.PluginsManager.fulfillment_created")
-def test_fulfill_digital_lines_no_allocation(
-    mock_fulfillment_created,
-    mock_digital_settings,
-    mock_email_fulfillment,
-    order_with_lines,
-    media_root,
-):
-    # given
-    mock_digital_settings.return_value = {"automatic_fulfillment": True}
-    line = order_with_lines.lines.all()[0]
-
-    image_file, image_name = create_image()
-    variant = line.variant
-
-    product_type = variant.product.product_type
-    product_type.is_digital = True
-    product_type.is_shipping_required = False
-    product_type.save(update_fields=["is_digital", "is_shipping_required"])
-
-    digital_content = DigitalContent.objects.create(
-        content_file=image_file, product_variant=variant, use_default_settings=True
-    )
-
-    variant.digital_content = digital_content
-    variant.track_inventory = False
-    variant.save()
-
-    line.is_shipping_required = False
-    line.allocations.all().delete()
-    line.save()
-
-    order_with_lines.refresh_from_db()
-    order_info = fetch_order_info(order_with_lines)
-    manager = get_plugins_manager(allow_replica=False)
-
-    # when
-    automatically_fulfill_digital_lines(order_info, manager)
-
-    # then
-    line.refresh_from_db()
-    fulfillment = Fulfillment.objects.get(order=order_with_lines)
-    fulfillment_lines = fulfillment.lines.all()
-
-    assert fulfillment_lines.count() == 1
-    assert line.digital_content_url
-    assert mock_email_fulfillment.called
-    mock_fulfillment_created.assert_called_once_with(fulfillment)
 
 
 @patch("saleor.plugins.manager.PluginsManager.order_updated")
@@ -2514,13 +2373,10 @@ def test_call_order_event_incorrect_webhook_event(
 @patch(
     "saleor.webhook.transport.asynchronous.transport.send_webhook_request_async.apply_async"
 )
-@patch(
-    "saleor.core.utils.events.call_event_including_protected_events",
-    wraps=call_event_including_protected_events,
-)
+@patch("saleor.order.actions.call_event", wraps=call_event)
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
 def test_call_order_for_draft_order_deleted(
-    mocked_call_event_including_protected_events,
+    mocked_call_event,
     mocked_send_webhook_request_async,
     mocked_send_webhook_request_sync,
     mocked_cache,
@@ -2576,7 +2432,7 @@ def test_call_order_for_draft_order_deleted(
     )
     assert filter_shipping_call.kwargs["timeout"] == settings.WEBHOOK_SYNC_TIMEOUT
 
-    mocked_call_event_including_protected_events.assert_called_once_with(
+    mocked_call_event.assert_called_once_with(
         ANY, order_with_lines, webhooks={order_webhook}
     )
 
@@ -2677,13 +2533,10 @@ def test_call_order_events_incorrect_webhook_event(
 @patch(
     "saleor.webhook.transport.asynchronous.transport.send_webhook_request_async.apply_async"
 )
-@patch(
-    "saleor.core.utils.events.call_event_including_protected_events",
-    wraps=call_event_including_protected_events,
-)
+@patch("saleor.order.actions.call_event", wraps=call_event)
 @override_settings(PLUGINS=["saleor.plugins.webhook.plugin.WebhookPlugin"])
 def test_call_order_events_for_draft_order_deleted(
-    mocked_call_event_including_protected_events,
+    mocked_call_event,
     mocked_send_webhook_request_async,
     mocked_send_webhook_request_sync,
     mocked_cache,
@@ -2743,7 +2596,7 @@ def test_call_order_events_for_draft_order_deleted(
     )
     assert filter_shipping_call.kwargs["timeout"] == settings.WEBHOOK_SYNC_TIMEOUT
 
-    mocked_call_event_including_protected_events.assert_has_calls(
+    mocked_call_event.assert_has_calls(
         [
             call(
                 plugins_manager.draft_order_deleted,
@@ -3143,7 +2996,8 @@ def test_order_confirmed_charges_funds_authorized_from_gift_card(
     order = order_with_lines
     manager = get_plugins_manager(False)
 
-    gift_card_created_by_staff.current_balance_amount = Decimal(100)
+    balance = Decimal(100)
+    gift_card_created_by_staff.current_balance_amount = balance
     gift_card_created_by_staff.save(update_fields=["current_balance_amount"])
 
     transaction = transaction_item_generator(
@@ -3173,6 +3027,9 @@ def test_order_confirmed_charges_funds_authorized_from_gift_card(
         gift_card_created_by_staff.current_balance_amount
         == Decimal(100) - order.total_gross_amount
     )
+    assert gift_card_created_by_staff.used_by == order.user
+    assert gift_card_created_by_staff.used_by_email == order.user_email
+    assert gift_card_created_by_staff.last_used_on is not None
 
     transaction.events.get(type=TransactionEventType.CHARGE_REQUEST)
     charge_success_event = transaction.events.get(
@@ -3184,6 +3041,17 @@ def test_order_confirmed_charges_funds_authorized_from_gift_card(
     assert order.charge_status == OrderChargeStatus.FULL
     assert order.total_authorized_amount == Decimal(0)
     assert order.total_charged_amount == order.total_gross_amount
+
+    gift_card_event = GiftCardEvent.objects.get(
+        gift_card=gift_card_created_by_staff, type=GiftCardEvents.USED_IN_ORDER
+    )
+    assert gift_card_event.order == order
+    assert Decimal(gift_card_event.parameters["balance"]["old_current_balance"]) == (
+        balance
+    )
+    assert Decimal(gift_card_event.parameters["balance"]["current_balance"]) == (
+        balance - order.total_gross_amount
+    )
 
 
 def test_order_confirmed_checks_gift_card_funds_amount_when_charging_funds_authorized_from_gift_card(
@@ -3239,6 +3107,10 @@ def test_order_confirmed_checks_gift_card_funds_amount_when_charging_funds_autho
     assert order.total_authorized_amount == Decimal(10)
     assert order.total_charged_amount == Decimal(0)
 
+    assert not GiftCardEvent.objects.filter(
+        gift_card=gift_card_created_by_staff, type=GiftCardEvents.USED_IN_ORDER
+    ).exists()
+
 
 def test_order_confirmed_does_not_charge_the_same_authorized_funds_more_than_once(
     order_with_lines,
@@ -3283,6 +3155,13 @@ def test_order_confirmed_does_not_charge_the_same_authorized_funds_more_than_onc
     assert order.total_authorized_amount == Decimal(0)
     assert order.total_charged_amount == Decimal(10)
 
+    assert (
+        GiftCardEvent.objects.filter(
+            gift_card=gift_card_created_by_staff, type=GiftCardEvents.USED_IN_ORDER
+        ).count()
+        == 1
+    )
+
     # when
     with django_capture_on_commit_callbacks(execute=True):
         order_confirmed(order, user=customer_user, app=None, manager=manager)
@@ -3306,5 +3185,13 @@ def test_order_confirmed_does_not_charge_the_same_authorized_funds_more_than_onc
 
     assert order.authorize_status == OrderAuthorizeStatus.PARTIAL
     assert order.charge_status == OrderChargeStatus.PARTIAL
+
+    # Gift card event should still be exactly 1 (not duplicated by second confirmation)
+    assert (
+        GiftCardEvent.objects.filter(
+            gift_card=gift_card_created_by_staff, type=GiftCardEvents.USED_IN_ORDER
+        ).count()
+        == 1
+    )
     assert order.total_authorized_amount == Decimal(0)
     assert order.total_charged_amount == Decimal(10)

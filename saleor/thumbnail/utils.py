@@ -1,3 +1,4 @@
+import logging
 import mimetypes
 import os
 import secrets
@@ -12,17 +13,23 @@ from django.core.files.storage import default_storage
 from django.urls import reverse
 from PIL import Image
 
+from ..product import ProductMediaTypes
 from . import (
     DEFAULT_THUMBNAIL_SIZE,
+    DEFAULT_THUMBNAIL_SIZE_ROUNDING,
     FILE_NAME_MAX_LENGTH,
     MIME_TYPE_TO_PIL_IDENTIFIER,
     THUMBNAIL_SIZES,
     IconThumbnailFormat,
     ThumbnailFormat,
+    ThumbnailSizeRounding,
 )
+from .exceptions import ImageTooLargeError
 
 if TYPE_CHECKING:
     from .models import Thumbnail
+
+logger = logging.getLogger(__name__)
 
 
 def get_image_or_proxy_url(
@@ -50,8 +57,26 @@ def prepare_image_proxy_url(
     return reverse("thumbnail", kwargs=kwargs)
 
 
-def get_thumbnail_size(size: int | None) -> int:
-    """Return the closest size to the given one of the available sizes."""
+def get_original_image_proxy_url(
+    instance_pk: str,
+    object_type: str,
+):
+    instance_id = graphene.Node.to_global_id(object_type, instance_pk)
+    kwargs = {"instance_id": instance_id}
+
+    return reverse("original-image", kwargs=kwargs)
+
+
+def get_thumbnail_size(
+    size: int | None, rounding: ThumbnailSizeRounding | None = None
+) -> int:
+    """Return the available size matching the given one.
+
+    With `NEAREST` rounding the closest available size is returned, with `UP`
+    rounding the smallest available size not smaller than the given one. Sizes
+    above the largest available size resolve to the largest one. When `rounding`
+    is not given, `DEFAULT_THUMBNAIL_SIZE_ROUNDING` is used.
+    """
     if size is None:
         requested_size = DEFAULT_THUMBNAIL_SIZE
     else:
@@ -59,6 +84,10 @@ def get_thumbnail_size(size: int | None) -> int:
     if requested_size in THUMBNAIL_SIZES:
         return requested_size
 
+    if (rounding or DEFAULT_THUMBNAIL_SIZE_ROUNDING) == ThumbnailSizeRounding.UP:
+        return next(
+            (s for s in THUMBNAIL_SIZES if s >= requested_size), THUMBNAIL_SIZES[-1]
+        )
     return min(THUMBNAIL_SIZES, key=lambda x: abs(x - requested_size))
 
 
@@ -131,7 +160,25 @@ class ProcessedImage:
         if isinstance(self.image_source, str):
             image = self.storage.open(self.image_source, "rb")
         image_format = self.get_image_metadata_from_file(image)
-        return (Image.open(image), image_format)
+        try:
+            return (Image.open(image), image_format)
+        except Image.DecompressionBombError as e:
+            source = self.get_image_source_name()
+            logger.warning(
+                "Refusing to decode image %s, it exceeds the pixel limit: %s",
+                source,
+                e,
+                extra={"image_source": source, "pillow_error": str(e)},
+            )
+            raise ImageTooLargeError(
+                f"Image {source} exceeds the maximum allowed number of pixels: {e}"
+            ) from e
+
+    def get_image_source_name(self) -> str:
+        """Return the storage path of the source image, for logging."""
+        if isinstance(self.image_source, str):
+            return self.image_source
+        return getattr(self.image_source, "name", "") or ""
 
     @classmethod
     def get_image_metadata_from_file(cls, file_like):
@@ -264,3 +311,12 @@ def get_filename_from_url(url: str, mime_type: str | None = None) -> str:
     name = name[:FILE_NAME_MAX_LENGTH]
     hash = secrets.token_hex(nbytes=4)
     return f"{name}_{hash}{format}"
+
+
+def is_product_media_image_pending(object_type: str, instance) -> bool:
+    """Check if instance is a ProductMedia of IMAGE type with a pending image download."""
+    return (
+        object_type == "ProductMedia"
+        and instance.type == ProductMediaTypes.IMAGE
+        and instance.external_url
+    )

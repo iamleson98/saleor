@@ -1,20 +1,62 @@
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 from uuid import UUID
 
 import graphene
+import graphql.validation
 from babel.numbers import get_currency_precision
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from graphene.utils.str_converters import to_camel_case
 from graphql.error import GraphQLError
+from graphql.language.ast import Document
+from graphql.type import GraphQLSchema
 
+from ....core.editorjs import clean_editorjs
 from ....core.utils import generate_unique_slug
 from ....product.models import ProductVariantChannelListing
+from .alias_count_limit_rule import AliasCountLimitRule
+from .mutation_count_limit_rule import MutationCountLimitRule
+from .query_cost import cost_validator as cost_validation_rule
 
 if TYPE_CHECKING:
     from decimal import Decimal
 
     from django.db.models import Model
+
+
+def clean_editorjs_field(
+    value: dict[str, Any] | None, field_name: str
+) -> dict[str, Any] | None:
+    try:
+        return clean_editorjs(value)
+    except ValidationError as exc:
+        raise ValidationError({field_name: exc}) from exc
+
+
+def validate_query(
+    *,
+    schema: GraphQLSchema,
+    document_ast: Document,
+    variables: dict[str, Any] | None,
+    cost_map: dict[str, Any] | None,
+):
+    cost_validator = cost_validation_rule(
+        maximum_cost=settings.GRAPHQL_QUERY_MAX_COMPLEXITY,
+        variables=variables,
+        cost_map=cost_map,
+    )
+    error = graphql.validation.validate(
+        schema,
+        document_ast,
+        [
+            cost_validator,  # type: ignore[list-item] # cost validator is an instance that pretends to be a class # noqa: E501
+            AliasCountLimitRule,
+            MutationCountLimitRule,
+        ],
+    )
+    if error:
+        return cost_validator.cost, error
+    return cost_validator.cost, None
 
 
 def validate_one_of_args_is_in_mutation(*args, **kwargs):
@@ -102,10 +144,10 @@ def get_not_available_variants_in_channel(
 ) -> tuple[set[int], set[str]]:
     available_variants = (
         ProductVariantChannelListing.objects.using(database_connection_name)
+        .sellable()
         .filter(
             variant__id__in=variants_id,
             channel_id=channel_id,
-            price_amount__isnull=False,
         )
         .values_list("variant_id", flat=True)
     )

@@ -859,32 +859,27 @@ def product_types_for_pagination(db):
             ProductType(
                 name="ProductType1",
                 slug="pt_1",
-                is_digital=True,
                 is_shipping_required=False,
             ),
             ProductType(
                 name="ProductTypeProductType1",
                 slug="pt_pt_1",
-                is_digital=False,
                 is_shipping_required=False,
             ),
             ProductType(
                 name="ProductTypeProductType2",
                 slug="pt_pt_2",
-                is_digital=False,
                 is_shipping_required=True,
             ),
             ProductType(
                 name="ProductType2",
                 slug="pt_2",
-                is_digital=False,
                 is_shipping_required=True,
                 has_variants=False,
             ),
             ProductType(
                 name="ProductType3",
                 slug="pt_3",
-                is_digital=True,
                 is_shipping_required=False,
                 has_variants=False,
             ),
@@ -929,10 +924,6 @@ QUERY_PRODUCT_TYPES_PAGINATION = """
             ["ProductTypeProductType2", "ProductTypeProductType1", "ProductType3"],
         ),
         (
-            {"field": "DIGITAL", "direction": "ASC"},
-            ["ProductType2", "ProductTypeProductType1", "ProductTypeProductType2"],
-        ),
-        (
             {"field": "SHIPPING_REQUIRED", "direction": "ASC"},
             ["ProductType1", "ProductType3", "ProductTypeProductType1"],
         ),
@@ -965,10 +956,6 @@ def test_product_types_pagination_with_sorting(
         ),
         ({"search": "ProductType1"}, ["ProductType1", "ProductTypeProductType1"]),
         ({"search": "pt_pt"}, ["ProductTypeProductType1", "ProductTypeProductType2"]),
-        (
-            {"productType": "DIGITAL"},
-            ["ProductType1", "ProductType3"],
-        ),
         ({"productType": "SHIPPABLE"}, ["ProductType2", "ProductTypeProductType2"]),
         ({"configurable": "CONFIGURABLE"}, ["ProductType1", "ProductTypeProductType1"]),
         ({"configurable": "SIMPLE"}, ["ProductType2", "ProductType3"]),

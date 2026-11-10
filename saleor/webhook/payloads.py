@@ -7,15 +7,12 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import graphene
+from django.contrib.sites.models import Site
 from django.db.models import F, QuerySet, Sum
-from django.utils import timezone
-from graphene.utils.str_converters import to_camel_case
 
-from .. import __version__
 from ..account.models import User
 from ..attribute.models import AttributeValueTranslation
-from ..checkout import base_calculations
-from ..checkout.models import Checkout
+from ..checkout.models import Checkout, CheckoutDelivery
 from ..checkout.utils import get_checkout_metadata
 from ..core.db.connection import allow_writer
 from ..core.prices import quantize_price, quantize_price_fields
@@ -26,7 +23,6 @@ from ..core.utils.anonymization import (
     generate_fake_user,
 )
 from ..core.utils.json_serializer import CustomJsonEncoder
-from ..discount.utils.voucher import is_order_level_voucher
 from ..order import FulfillmentStatus, OrderStatus
 from ..order.models import Fulfillment, FulfillmentLine, Order, OrderLine
 from ..order.utils import get_order_country
@@ -38,20 +34,19 @@ from ..product.models import Collection, Product, ProductMedia, ProductVariant
 from ..shipping.models import ShippingMethod
 from ..tax.models import TaxClassCountryRate
 from ..thumbnail.models import Thumbnail
-from ..warehouse.models import Stock, Warehouse
+from ..warehouse.models import Warehouse
 from . import traced_payload_generator
 from .event_types import WebhookEventAsyncType
+from .payload_helpers import generate_meta, generate_requestor
 from .payload_serializers import PayloadSerializer
 from .serializers import (
     serialize_checkout_lines,
-    serialize_checkout_lines_for_tax_calculation,
     serialize_product_attributes,
     serialize_variant_attributes,
 )
 from .transport.utils import from_payment_app_id
 
 if TYPE_CHECKING:
-    from ..checkout.fetch import CheckoutInfo, CheckoutLineInfo
     from ..discount.models import Promotion
     from ..invoice.models import Invoice
     from ..payment.interface import (
@@ -106,33 +101,6 @@ ORDER_PRICE_FIELDS = (
     "undiscounted_total_net_amount",
     "undiscounted_total_gross_amount",
 )
-
-
-def generate_requestor(requestor: Optional["RequestorOrLazyObject"] = None):
-    if not requestor:
-        return {"id": None, "type": None}
-    if isinstance(requestor, User):
-        return {"id": graphene.Node.to_global_id("User", requestor.id), "type": "user"}
-    return {"id": requestor.name, "type": "app"}  # type: ignore[union-attr]
-
-
-def generate_meta(*, requestor_data: dict[str, Any], camel_case=False, **kwargs):
-    meta_result = {
-        "issued_at": timezone.now().isoformat(),
-        "version": __version__,
-        "issuing_principal": requestor_data,
-    }
-
-    meta_result.update(kwargs)
-
-    if camel_case:
-        meta = {}
-        for key, value in meta_result.items():
-            meta[to_camel_case(key)] = value
-    else:
-        meta = meta_result
-
-    return meta
 
 
 @allow_writer()
@@ -551,15 +519,32 @@ def generate_checkout_payload(
 
     # todo use the most appropriate warehouse
     warehouse = None
-    if checkout.shipping_address:
-        warehouse = Warehouse.objects.for_country_and_channel(
-            checkout.shipping_address.country.code, checkout.channel_id
-        ).first()
+
+    # refetch the site to make sure that we have the latest settings
+    Site.objects.clear_cache()
+    site = Site.objects.get_current()
+    calculate_stocks_with_shipping_zones = (
+        site.settings.use_legacy_shipping_zone_stock_availability
+    )
+    if calculate_stocks_with_shipping_zones:
+        if checkout.shipping_address:
+            warehouse = Warehouse.objects.for_country_and_channel(
+                checkout.shipping_address.country.code, checkout.channel_id
+            ).first()
+    else:
+        warehouse = Warehouse.objects.for_channel(checkout.channel_id).first()
+
+    try:
+        assigned_delivery = checkout.assigned_delivery
+    except CheckoutDelivery.DoesNotExist:
+        # Deleted by a concurrent request after the checkout was fetched; the DB
+        # has already nulled the FK (SET_NULL), so drop the stale reference.
+        checkout.assigned_delivery = assigned_delivery = None
 
     shipping_method = None
-    if checkout.assigned_delivery and not checkout.assigned_delivery.is_external:
+    if assigned_delivery and not assigned_delivery.is_external:
         shipping_method = ShippingMethod.objects.filter(
-            id=checkout.assigned_delivery.shipping_method_id
+            id=assigned_delivery.shipping_method_id
         ).first()
     checkout_data = serializer.serialize(
         [checkout],
@@ -662,6 +647,7 @@ def generate_collection_payload(
         fields=[
             "name",
             "description",
+            "full_description",
             "background_image_alt",
             "private_metadata",
             "metadata",
@@ -835,28 +821,6 @@ def generate_product_variant_media_payload(product_variant):
 
 @allow_writer()
 @traced_payload_generator
-def generate_product_variant_with_stock_payload(
-    stocks: Iterable["Stock"], requestor: Optional["RequestorOrLazyObject"] = None
-):
-    serializer = PayloadSerializer()
-    extra_dict_data = {
-        "product_id": lambda v: graphene.Node.to_global_id(
-            "Product", v.product_variant.product_id
-        ),
-        "product_variant_id": lambda v: graphene.Node.to_global_id(
-            "ProductVariant", v.product_variant_id
-        ),
-        "warehouse_id": lambda v: graphene.Node.to_global_id(
-            "Warehouse", v.warehouse_id
-        ),
-        "product_slug": lambda v: v.product_variant.product.slug,
-        "meta": generate_meta(requestor_data=generate_requestor(requestor)),
-    }
-    return serializer.serialize(stocks, fields=[], extra_dict_data=extra_dict_data)
-
-
-@allow_writer()
-@traced_payload_generator
 def generate_product_variant_payload(
     product_variants: Iterable["ProductVariant"],
     requestor: Optional["RequestorOrLazyObject"] = None,
@@ -950,18 +914,22 @@ def generate_fulfillment_lines_payload(fulfillment: Fulfillment):
                 )
             ),
             "total_price_net_amount": (
-                lambda fl: quantize_price(
-                    fl.order_line.undiscounted_unit_price.net.amount,
-                    fl.order_line.currency,
+                lambda fl: (
+                    quantize_price(
+                        fl.order_line.undiscounted_unit_price.net.amount,
+                        fl.order_line.currency,
+                    )
+                    * fl.quantity
                 )
-                * fl.quantity
             ),
             "total_price_gross_amount": (
-                lambda fl: quantize_price(
-                    fl.order_line.undiscounted_unit_price.gross.amount,
-                    fl.order_line.currency,
+                lambda fl: (
+                    quantize_price(
+                        fl.order_line.undiscounted_unit_price.gross.amount,
+                        fl.order_line.currency,
+                    )
+                    * fl.quantity
                 )
-                * fl.quantity
             ),
             "currency": lambda fl: fl.order_line.currency,
             "warehouse_id": lambda fl: (
@@ -978,7 +946,9 @@ def generate_fulfillment_lines_payload(fulfillment: Fulfillment):
 @allow_writer()
 @traced_payload_generator
 def generate_fulfillment_payload(
-    fulfillment: Fulfillment, requestor: Optional["RequestorOrLazyObject"] = None
+    fulfillment: Fulfillment,
+    requestor: Optional["RequestorOrLazyObject"] = None,
+    calculate_stocks_with_shipping_zones: bool = True,
 ):
     serializer = PayloadSerializer()
 
@@ -1003,9 +973,12 @@ def generate_fulfillment_payload(
     if fulfillment_line and fulfillment_line.stock:
         warehouse = fulfillment_line.stock.warehouse
     else:
-        warehouse = Warehouse.objects.for_country_and_channel(
-            order_country, order.channel_id
-        ).first()
+        if calculate_stocks_with_shipping_zones:
+            warehouse = Warehouse.objects.for_country_and_channel(
+                order_country, order.channel_id
+            ).first()
+        else:
+            warehouse = Warehouse.objects.for_channel(order.channel_id).first()
     fulfillment_data = serializer.serialize(
         [fulfillment],
         fields=fulfillment_fields,
@@ -1168,7 +1141,7 @@ def generate_sample_payload(event_name: str) -> dict | None:
     ]
 
     if event_name in user_events:
-        user = generate_fake_user()
+        user, _fake_address = generate_fake_user()
         payload = generate_customer_payload(user)
     elif event_name == WebhookEventAsyncType.PRODUCT_CREATED:
         product = _get_sample_object(Product.objects.all())
@@ -1240,95 +1213,6 @@ def generate_translation_payload(
         translation_data.update(context)
 
     return json.dumps(translation_data)
-
-
-@allow_writer()
-@traced_payload_generator
-def generate_checkout_payload_for_tax_calculation(
-    checkout_info: "CheckoutInfo",
-    lines: list["CheckoutLineInfo"],
-):
-    checkout = checkout_info.checkout
-    tax_configuration = checkout_info.tax_configuration
-    prices_entered_with_tax = tax_configuration.prices_entered_with_tax
-
-    serializer = PayloadSerializer()
-
-    checkout_fields = ("currency",)
-
-    # Prepare checkout data
-    address = checkout_info.shipping_address or checkout_info.billing_address
-
-    total_amount = quantize_price(
-        base_calculations.base_checkout_total(checkout_info, lines).amount,
-        checkout.currency,
-    )
-
-    # Prepare user data
-    user = checkout_info.user
-    user_id = None
-    user_public_metadata = {}
-    if user:
-        user_id = graphene.Node.to_global_id("User", user.id)
-        user_public_metadata = user.metadata
-
-    # order promotion discount and entire_order voucher discount with
-    # apply_once_per_order set to False is not already included in the total price
-    discounted_object_promotion = bool(checkout_info.discounts)
-    discount_not_included = discounted_object_promotion or is_order_level_voucher(
-        checkout_info.voucher
-    )
-    if not checkout.discount_amount:
-        discounts = []
-    else:
-        discount_amount = quantize_price(checkout.discount_amount, checkout.currency)
-        discount_name = checkout.discount_name
-        discounts = (
-            [{"name": discount_name, "amount": discount_amount}]
-            if discount_amount and discount_not_included
-            else []
-        )
-
-    # Prepare shipping data
-    assigned_delivery = checkout.assigned_delivery
-    shipping_method_name = None
-    if assigned_delivery:
-        shipping_method_name = assigned_delivery.name
-    shipping_method_amount = quantize_price(
-        base_calculations.base_checkout_delivery_price(checkout_info, lines).amount,
-        checkout.currency,
-    )
-
-    # Prepare line data
-    lines_dict_data = serialize_checkout_lines_for_tax_calculation(checkout_info, lines)
-
-    checkout_data = serializer.serialize(
-        [checkout],
-        fields=checkout_fields,
-        pk_field_name="token",
-        additional_fields={
-            "channel": (lambda c: c.channel, CHANNEL_FIELDS),
-            "address": (lambda _: address, ADDRESS_FIELDS),
-        },
-        extra_dict_data={
-            "user_id": user_id,
-            "user_public_metadata": user_public_metadata,
-            "included_taxes_in_prices": prices_entered_with_tax,
-            "total_amount": total_amount,
-            "shipping_amount": shipping_method_amount,
-            "shipping_name": shipping_method_name,
-            "discounts": discounts,
-            "lines": lines_dict_data,
-            "metadata": (
-                lambda c=checkout: (
-                    get_checkout_metadata(c).metadata  # type: ignore[union-attr]
-                    if hasattr(c, "metadata_storage")
-                    else {}
-                )
-            ),
-        },
-    )
-    return checkout_data
 
 
 @allow_writer()

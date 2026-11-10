@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from ..page.models import Page
     from .models import FulfillmentLine
 
 
@@ -217,7 +218,6 @@ class OrderEventsEmails:
     ORDER_CANCEL = "order_cancel"
     ORDER_REFUND = "order_refund"
     FULFILLMENT = "fulfillment_confirmation"
-    DIGITAL_LINKS = "digital_links"
 
     CHOICES = [
         (PAYMENT, "The payment confirmation email was sent"),
@@ -228,7 +228,6 @@ class OrderEventsEmails:
         (ORDER_CANCEL, "The order cancel confirmation email was sent"),
         (ORDER_REFUND, "The order refund confirmation email was sent"),
         (FULFILLMENT, "The fulfillment confirmation email was sent"),
-        (DIGITAL_LINKS, "The email containing the digital links was sent"),
     ]
 
 
@@ -306,6 +305,8 @@ class FulfillmentLineData:
     line: "FulfillmentLine"
     quantity: int
     replace: bool = False
+    reason: str | None = None
+    reason_reference: "Page | None" = None
 
 
 class StockUpdatePolicy:

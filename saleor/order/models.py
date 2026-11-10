@@ -9,7 +9,7 @@ from django.contrib.postgres.indexes import BTreeIndex, GinIndex
 from django.contrib.postgres.search import SearchVectorField
 from django.core.validators import MinValueValidator
 from django.db import connection, models
-from django.db.models import F, JSONField, Max
+from django.db.models import F, JSONField, Max, Q
 from django.db.models.expressions import Exists, OuterRef
 from django.utils.timezone import now
 from django_measurement.models import MeasurementField
@@ -342,6 +342,31 @@ class Order(ModelWithMetadata, ModelWithExternalReference):
         net_amount_field="subtotal_net_amount",
         gross_amount_field="subtotal_gross_amount",
     )
+    # base prices contain only catalogue discounts (do not contain voucher discount).
+    # They are kept apart from `subtotal`/`total` so that the pre-tax values needed to
+    # qualify order promotions never overwrite the prices that carry the taxes.
+    #
+    # These are internal to the price recalculation: `_set_order_base_prices` writes
+    # them right before the order promotion predicates read them, in the same pass,
+    # and nothing else reads them. That is why existing orders were not backfilled -
+    # orders that never recalculate keep the default 0. Exposing these fields anywhere
+    # else (API, webhook payloads, filters) requires backfilling them first.
+    base_subtotal_amount = models.DecimalField(
+        max_digits=settings.DEFAULT_MAX_DIGITS,
+        decimal_places=settings.DEFAULT_DECIMAL_PLACES,
+        default=Decimal(0),
+        db_default=Decimal(0),
+    )
+    base_subtotal = MoneyField(
+        amount_field="base_subtotal_amount", currency_field="currency"
+    )
+    base_total_amount = models.DecimalField(
+        max_digits=settings.DEFAULT_MAX_DIGITS,
+        decimal_places=settings.DEFAULT_DECIMAL_PLACES,
+        default=Decimal(0),
+        db_default=Decimal(0),
+    )
+    base_total = MoneyField(amount_field="base_total_amount", currency_field="currency")
 
     voucher = models.ForeignKey(
         Voucher, blank=True, null=True, related_name="+", on_delete=models.SET_NULL
@@ -539,23 +564,6 @@ class Order(ModelWithMetadata, ModelWithExternalReference):
         return self.total_charged - self.total.gross
 
 
-class OrderLineQueryset(models.QuerySet["OrderLine"]):
-    def digital(self):
-        """Return lines with digital products."""
-        for line in self.all():
-            if line.is_digital:
-                yield line
-
-    def physical(self):
-        """Return lines with physical products."""
-        for line in self.all():
-            if not line.is_digital:
-                yield line
-
-
-OrderLineManager = models.Manager.from_queryset(OrderLineQueryset)
-
-
 class OrderLine(ModelWithMetadata):
     id = models.UUIDField(primary_key=True, editable=False, unique=True, default=uuid4)
     old_id = models.PositiveIntegerField(unique=True, null=True, blank=True)
@@ -733,6 +741,7 @@ class OrderLine(ModelWithMetadata):
     )
 
     is_price_overridden = models.BooleanField(null=True, blank=True)
+    price_override_reason = models.CharField(max_length=255, null=True, blank=True)
 
     # Fulfilled when voucher code was used for product in the line
     voucher_code = models.CharField(max_length=255, null=True, blank=True)
@@ -743,8 +752,6 @@ class OrderLine(ModelWithMetadata):
     # The date time when the line should refresh its prices.
     # It depends on channel.draft_order_line_price_freeze_period setting.
     draft_base_price_expire_at = models.DateTimeField(blank=True, null=True)
-
-    objects = OrderLineManager()
 
     class Meta(ModelWithMetadata.Meta):
         ordering = ("created_at", "id")
@@ -765,15 +772,6 @@ class OrderLine(ModelWithMetadata):
     def quantity_unfulfilled(self):
         return self.quantity - self.quantity_fulfilled
 
-    @property
-    def is_digital(self) -> bool:
-        """Check if a variant is digital and contains digital content."""
-        if not self.variant:
-            return False
-        is_digital = self.variant.is_digital()
-        has_digital = hasattr(self.variant, "digital_content")
-        return is_digital and has_digital
-
 
 class Fulfillment(ModelWithMetadata):
     fulfillment_order = models.PositiveIntegerField(editable=False)
@@ -790,6 +788,15 @@ class Fulfillment(ModelWithMetadata):
     )
     tracking_number = models.CharField(max_length=255, default="", blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    reason = models.TextField(blank=True, default="")
+    reason_reference = models.ForeignKey(
+        "page.Page",
+        related_name="+",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=False,
+    )
 
     shipping_refund_amount = models.DecimalField(
         max_digits=settings.DEFAULT_MAX_DIGITS,
@@ -809,6 +816,11 @@ class Fulfillment(ModelWithMetadata):
         indexes = [
             *ModelWithMetadata.Meta.indexes,
             BTreeIndex(fields=["status"], name="fulfillment_status_idx"),
+            BTreeIndex(
+                fields=["reason_reference"],
+                name="fulfillment_reason_ref_idx",
+                condition=Q(reason_reference__isnull=False),
+            ),
         ]
 
     def __str__(self):
@@ -858,6 +870,24 @@ class FulfillmentLine(models.Model):
         blank=True,
         null=True,
     )
+    reason = models.TextField(blank=True, default="")
+    reason_reference = models.ForeignKey(
+        "page.Page",
+        related_name="+",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=False,
+    )
+
+    class Meta:
+        indexes = [
+            BTreeIndex(
+                fields=["reason_reference"],
+                name="fulfillmentline_reason_ref_idx",
+                condition=Q(reason_reference__isnull=False),
+            ),
+        ]
 
 
 class OrderEvent(models.Model):
@@ -972,3 +1002,20 @@ class OrderGrantedRefundLine(models.Model):
     )
 
     reason = models.TextField(blank=True, null=True, default="")
+    reason_reference = models.ForeignKey(
+        "page.Page",
+        related_name="+",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        db_index=False,
+    )
+
+    class Meta:
+        indexes = [
+            BTreeIndex(
+                fields=["reason_reference"],
+                name="grantedrefundline_reason_ref_idx",
+                condition=Q(reason_reference__isnull=False),
+            ),
+        ]

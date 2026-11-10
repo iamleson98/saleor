@@ -12,10 +12,7 @@ from promise import Promise
 from .....account.models import Address
 from .....checkout.actions import call_checkout_info_event
 from .....checkout.calculations import fetch_checkout_data
-from .....checkout.delivery_context import (
-    PRIVATE_META_APP_SHIPPING_ID,
-    get_or_fetch_checkout_deliveries,
-)
+from .....checkout.delivery_context import get_or_fetch_checkout_deliveries
 from .....checkout.error_codes import CheckoutErrorCode
 from .....checkout.fetch import (
     fetch_checkout_info,
@@ -204,10 +201,8 @@ def test_checkout_shipping_method_update_external_shipping_method(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     fetch_checkout_data(
-        checkout_info,
-        manager,
-        lines,
-    )
+        checkout_info, manager, lines, requestor=staff_api_client.user
+    ).get()
     errors = data["errors"]
     assert not errors
     assert data["checkout"]["token"] == str(checkout_with_item.token)
@@ -215,65 +210,6 @@ def test_checkout_shipping_method_update_external_shipping_method(
     assert checkout.assigned_delivery.shipping_method_id == method_id
     assert checkout.undiscounted_base_shipping_price_amount == method_price
     assert checkout.shipping_method_name == method_name
-    assert (
-        PRIVATE_META_APP_SHIPPING_ID not in checkout.metadata_storage.private_metadata
-    )
-
-
-@mock.patch("saleor.webhook.transport.synchronous.transport.send_webhook_request_sync")
-def test_checkout_shipping_method_update_deletes_external_shipping_when_not_valid(
-    mock_send_request,
-    staff_api_client,
-    address,
-    checkout_with_item,
-    shipping_app,
-    channel_USD,
-    settings,
-    shipping_method,
-):
-    # given
-    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
-    response_method_id = "abcd"
-    mock_json_response = [
-        {
-            "id": response_method_id,
-            "name": "Provider - Economy",
-            "amount": "10",
-            "currency": "USD",
-            "maximum_delivery_days": "7",
-        }
-    ]
-    mock_send_request.return_value = mock_json_response
-
-    checkout = checkout_with_item
-    checkout.shipping_address = address
-    checkout.save(update_fields=["shipping_address"])
-
-    method_id = graphene.Node.to_global_id("ShippingMethod", shipping_method.id)
-
-    checkout.metadata_storage.private_metadata = {
-        PRIVATE_META_APP_SHIPPING_ID: graphene.Node.to_global_id(
-            "app", f"{shipping_app.id}:{response_method_id}"
-        )
-    }
-    checkout.metadata_storage.save()
-
-    # when
-    response = staff_api_client.post_graphql(
-        MUTATION_UPDATE_SHIPPING_METHOD,
-        {"id": to_global_id_or_none(checkout_with_item), "shippingMethodId": method_id},
-    )
-
-    # then
-    data = get_graphql_content(response)["data"]["checkoutShippingMethodUpdate"]
-    checkout.refresh_from_db()
-
-    errors = data["errors"]
-    assert not errors
-    assert data["checkout"]["token"] == str(checkout_with_item.token)
-    assert (
-        PRIVATE_META_APP_SHIPPING_ID not in checkout.metadata_storage.private_metadata
-    )
 
 
 @mock.patch(
@@ -383,10 +319,8 @@ def test_checkout_shipping_method_update_with_not_all_required_shipping_address_
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     fetch_checkout_data(
-        checkout_info,
-        manager,
-        lines,
-    )
+        checkout_info, manager, lines, requestor=staff_api_client.user
+    ).get()
 
     assert not data["errors"]
     assert checkout.assigned_delivery.shipping_method_id == str(shipping_method.id)
@@ -432,10 +366,8 @@ def test_checkout_shipping_method_update_with_not_valid_shipping_address_data(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     fetch_checkout_data(
-        checkout_info,
-        manager,
-        lines,
-    )
+        checkout_info, manager, lines, requestor=staff_api_client.user
+    ).get()
 
     assert not data["errors"]
     assert checkout.assigned_delivery.shipping_method_id == str(shipping_method.id)
@@ -503,10 +435,8 @@ def test_checkout_shipping_method_update_shipping_zone_without_channel(
     lines, _ = fetch_checkout_lines(checkout)
     checkout_info = fetch_checkout_info(checkout, lines, manager)
     fetch_checkout_data(
-        checkout_info,
-        manager,
-        lines,
-    )
+        checkout_info, manager, lines, requestor=staff_api_client.user
+    ).get()
 
     errors = data["errors"]
     assert len(errors) == 1
@@ -517,12 +447,12 @@ def test_checkout_shipping_method_update_shipping_zone_without_channel(
     assert checkout.shipping_method_name is None
 
 
-def test_checkout_update_shipping_method_with_digital(
-    api_client, checkout_with_digital_item, address, shipping_method
+def test_checkout_update_shipping_method_when_shipping_not_required(
+    api_client, checkout_without_shipping_required, address, shipping_method
 ):
-    """Test updating the shipping method of a digital order throws an error."""
+    """Test updating the shipping method of an order without shipping throws an error."""
 
-    checkout = checkout_with_digital_item
+    checkout = checkout_without_shipping_required
     method_id = graphene.Node.to_global_id("ShippingMethod", shipping_method.pk)
     variables = {"id": to_global_id_or_none(checkout), "shippingMethodId": method_id}
 
@@ -658,6 +588,7 @@ def test_checkout_shipping_method_update_triggers_webhooks(
                 "requestor_model_name": None,
                 "requestor_object_id": None,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
@@ -757,6 +688,7 @@ def test_checkout_shipping_method_update_to_none_triggers_webhooks(
                 "requestor_model_name": None,
                 "requestor_object_id": None,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,

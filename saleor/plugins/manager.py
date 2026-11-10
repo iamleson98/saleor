@@ -53,7 +53,7 @@ from .base_plugin import ExternalAccessTokens
 from .models import PluginConfiguration
 
 if TYPE_CHECKING:
-    from ..account.models import Address, Group, User
+    from ..account.models import Address, CustomerType, Group, User
     from ..app.models import App
     from ..attribute.models import Attribute, AttributeValue
     from ..checkout.fetch import CheckoutInfo, CheckoutLineInfo
@@ -80,7 +80,7 @@ if TYPE_CHECKING:
     from ..site.models import SiteSettings
     from ..tax.models import TaxClass
     from ..thumbnail.models import Thumbnail
-    from ..warehouse.models import Stock, Warehouse
+    from ..warehouse.models import Warehouse
     from .base_plugin import BasePlugin
 
 NotifyEventTypeChoice = str
@@ -629,26 +629,6 @@ class PluginsManager(PaymentInterface):
             or default_value
         )
 
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def get_taxes_for_checkout(
-        self,
-        checkout_info,
-        lines,
-        app_identifier,
-        pregenerated_subscription_payloads: dict | None = None,
-    ) -> TaxData | None:
-        if pregenerated_subscription_payloads is None:
-            pregenerated_subscription_payloads = {}
-        return self.__run_tax_method_until_first_success(
-            "get_taxes_for_checkout",
-            checkout_info,
-            lines,
-            app_identifier,
-            pregenerated_subscription_payloads=pregenerated_subscription_payloads,
-            channel_slug=checkout_info.channel.slug,
-        )
-
     def __run_tax_method_until_first_success(
         self,
         method_name: str,
@@ -734,6 +714,28 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
+    def customer_type_created(self, customer_type: "CustomerType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_created", default_value, customer_type, channel_slug=None
+        )
+
+    def customer_type_updated(self, customer_type: "CustomerType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_updated", default_value, customer_type, channel_slug=None
+        )
+
+    def customer_type_deleted(self, customer_type: "CustomerType", webhooks=None):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "customer_type_deleted",
+            default_value,
+            customer_type,
+            webhooks=webhooks,
+            channel_slug=None,
+        )
+
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def collection_created(self, collection: "Collection"):
@@ -809,6 +811,34 @@ class PluginsManager(PaymentInterface):
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
+    def product_type_created(self, product_type: "ProductType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "product_type_created", default_value, product_type, channel_slug=None
+        )
+
+    # Note: this method is deprecated and will be removed in a future release.
+    # Webhook-related functionality will be moved from plugin to core modules.
+    def product_type_updated(self, product_type: "ProductType"):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "product_type_updated", default_value, product_type, channel_slug=None
+        )
+
+    # Note: this method is deprecated and will be removed in a future release.
+    # Webhook-related functionality will be moved from plugin to core modules.
+    def product_type_deleted(self, product_type: "ProductType", webhooks=None):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "product_type_deleted",
+            default_value,
+            product_type,
+            webhooks=webhooks,
+            channel_slug=None,
+        )
+
+    # Note: this method is deprecated and will be removed in a future release.
+    # Webhook-related functionality will be moved from plugin to core modules.
     def product_media_created(self, media: "ProductMedia"):
         default_value = None
         return self.__run_method_on_plugins(
@@ -866,6 +896,18 @@ class PluginsManager(PaymentInterface):
             channel_slug=None,
         )
 
+    def product_variant_discounted_price_updated(
+        self, variant_price_info, webhooks=None
+    ):
+        default_value = None
+        return self.__run_method_on_plugins(
+            "product_variant_discounted_price_updated",
+            default_value,
+            variant_price_info,
+            webhooks=webhooks,
+            channel_slug=None,
+        )
+
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def product_variant_deleted(self, product_variant: "ProductVariant", webhooks=None):
@@ -874,42 +916,6 @@ class PluginsManager(PaymentInterface):
             "product_variant_deleted",
             default_value,
             product_variant,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_out_of_stock(self, stock: "Stock", webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_out_of_stock",
-            default_value,
-            stock,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_back_in_stock(self, stock: "Stock", webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_back_in_stock",
-            default_value,
-            stock,
-            webhooks=webhooks,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def product_variant_stocks_updated(self, stocks: list["Stock"], webhooks=None):
-        default_value = None
-        self.__run_method_on_plugins(
-            "product_variant_stocks_updated",
-            default_value,
-            stocks,
             webhooks=webhooks,
             channel_slug=None,
         )
@@ -1275,7 +1281,10 @@ class PluginsManager(PaymentInterface):
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_created(
-        self, fulfillment: "Fulfillment", notify_customer: bool | None = True
+        self,
+        fulfillment: "Fulfillment",
+        notify_customer: bool | None = True,
+        calculate_stocks_with_shipping_zones: bool = True,
     ):
         default_value = None
         return self.__run_method_on_plugins(
@@ -1284,23 +1293,32 @@ class PluginsManager(PaymentInterface):
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
             notify_customer=notify_customer,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
-    def fulfillment_canceled(self, fulfillment: "Fulfillment"):
+    def fulfillment_canceled(
+        self,
+        fulfillment: "Fulfillment",
+        calculate_stocks_with_shipping_zones: bool = True,
+    ):
         default_value = None
         return self.__run_method_on_plugins(
             "fulfillment_canceled",
             default_value,
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
     def fulfillment_approved(
-        self, fulfillment: "Fulfillment", notify_customer: bool | None = True
+        self,
+        fulfillment: "Fulfillment",
+        notify_customer: bool | None = True,
+        calculate_stocks_with_shipping_zones: bool = True,
     ):
         default_value = None
         return self.__run_method_on_plugins(
@@ -1309,6 +1327,7 @@ class PluginsManager(PaymentInterface):
             fulfillment,
             channel_slug=fulfillment.order.channel.slug,
             notify_customer=notify_customer,
+            calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
         )
 
     # Note: this method is deprecated and will be removed in a future release.
@@ -1937,17 +1956,6 @@ class PluginsManager(PaymentInterface):
 
     # Note: this method is deprecated and will be removed in a future release.
     # Webhook-related functionality will be moved from plugin to core modules.
-    def gift_card_export_completed(self, export: "ExportFile"):
-        default_value = None
-        return self.__run_method_on_plugins(
-            "gift_card_export_completed",
-            default_value,
-            export,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
     def menu_created(self, menu: "Menu"):
         default_value = None
         return self.__run_method_on_plugins(
@@ -2270,17 +2278,6 @@ class PluginsManager(PaymentInterface):
             "voucher_metadata_updated",
             default_value,
             voucher,
-            channel_slug=None,
-        )
-
-    # Note: this method is deprecated and will be removed in a future release.
-    # Webhook-related functionality will be moved from plugin to core modules.
-    def voucher_code_export_completed(self, export: "ExportFile"):
-        default_value = None
-        return self.__run_method_on_plugins(
-            "voucher_code_export_completed",
-            default_value,
-            export,
             channel_slug=None,
         )
 

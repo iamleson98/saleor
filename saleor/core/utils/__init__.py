@@ -1,13 +1,16 @@
 import socket
 from collections.abc import Iterable
+from io import BytesIO
 from typing import TYPE_CHECKING
 from urllib.parse import urljoin, urlparse
 
 from django.conf import settings
 from django.contrib.sites.models import Site
+from django.core.files import File
 from django.db.models import Model
 from django.utils.encoding import iri_to_uri
 from django.utils.text import slugify
+from requests import Response
 from text_unidecode import unidecode
 
 if TYPE_CHECKING:
@@ -150,3 +153,32 @@ def prepare_unique_attribute_value_slug(attribute: "Attribute", slug: str):
         "slug", flat=True
     )
     return prepare_unique_slug(slug, value_slugs)
+
+
+def create_file_from_response(
+    response: Response, filename: str, max_file_size: int
+) -> File:
+    """Create a Django File object from an HTTP response.
+
+    HTTP response should contain the file content. Response should use streaming.
+    https://requests.readthedocs.io/en/latest/user/advanced/#body-content-workflow
+    """
+    content_length = response.headers.get("content-length")
+
+    try:
+        declared_file_size = int(content_length) if content_length is not None else None
+    except ValueError as exc:
+        raise ValueError("Received an invalid content-length header") from exc
+
+    if declared_file_size is not None and declared_file_size > max_file_size:
+        raise ValueError(f"File too big. Maximal file size is {max_file_size}.")
+
+    file_data = BytesIO()
+    for chunk in response.iter_content(chunk_size=File.DEFAULT_CHUNK_SIZE):
+        if not chunk:
+            continue
+        if file_data.tell() + len(chunk) > max_file_size:
+            raise ValueError(f"File too big. Maximal file size is {max_file_size}.")
+        file_data.write(chunk)
+    file_data.seek(0)
+    return File(file_data, filename)

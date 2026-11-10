@@ -12,6 +12,7 @@ from prices import Money, TaxedMoney
 from ...account.models import Address
 from ...core.taxes import zero_money
 from ...discount import (
+    NOT_APPLICABLE_MESSAGE,
     DiscountType,
     DiscountValueType,
     RewardType,
@@ -816,10 +817,10 @@ def test_get_discount_for_checkout_shipping_voucher_not_applicable_missing_deliv
 
 
 def test_get_discount_for_checkout_shipping_voucher_not_applicable_delivery_not_required(
-    checkout_with_digital_item,
+    checkout_without_shipping_required,
 ):
     # given
-    checkout = checkout_with_digital_item
+    checkout = checkout_without_shipping_required
     voucher = Voucher.objects.create(
         type=VoucherType.SHIPPING,
         discount_value_type=DiscountValueType.FIXED,
@@ -886,7 +887,7 @@ def test_get_discount_for_checkout_shipping_voucher_not_applicable_in_country(
             checkout_with_items.shipping_address,
         )
     # then
-    assert str(e.value) == "This offer is not valid in your country."
+    assert str(e.value) == NOT_APPLICABLE_MESSAGE
 
 
 def test_get_discount_for_checkout_shipping_voucher_not_applicable_spent_not_enough(
@@ -1172,7 +1173,6 @@ def test_recalculate_checkout_discount_with_promotion(
             manager=manager,
             checkout_info=checkout_info,
             lines=lines,
-            address=checkout.shipping_address,
         ).gross.amount
         == discounted_subtotal - voucher_discount
     )
@@ -1346,7 +1346,6 @@ def test_recalculate_checkout_discount_free_shipping_subtotal_less_than_shipping
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     ).gross + Money("10.00", "USD")
     checkout.assigned_delivery.save()
 
@@ -1362,13 +1361,11 @@ def test_recalculate_checkout_discount_free_shipping_subtotal_less_than_shipping
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     checkout_subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert checkout_total == checkout_subtotal
 
@@ -1388,7 +1385,6 @@ def test_recalculate_checkout_discount_free_shipping_subtotal_bigger_than_shippi
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     ).gross - Money("10.00", "USD")
     checkout.assigned_delivery.save()
 
@@ -1404,13 +1400,11 @@ def test_recalculate_checkout_discount_free_shipping_subtotal_bigger_than_shippi
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     checkout_subtotal = calculations.checkout_subtotal(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     assert checkout_total == checkout_subtotal
 
@@ -1753,7 +1747,6 @@ def test_is_fully_paid(checkout_with_item, payment_dummy):
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     payment = payment_dummy
     payment.is_active = True
@@ -1775,7 +1768,6 @@ def test_is_fully_paid_mg_payments(checkout_with_item, payment_dummy):
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     payment = payment_dummy
     payment.is_active = True
@@ -1805,7 +1797,6 @@ def test_is_fully_paid_partially_paid(checkout_with_item, payment_dummy):
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=checkout.shipping_address,
     )
     payment = payment_dummy
     payment.is_active = True

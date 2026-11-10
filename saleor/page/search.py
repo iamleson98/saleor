@@ -9,8 +9,8 @@ from ..attribute.models import Attribute, AttributeValue
 from ..attribute.search import get_search_vectors_for_attribute_values
 from ..core.context import with_promise_context
 from ..core.db.connection import allow_writer
+from ..core.editorjs import editorjs_to_text
 from ..core.postgres import FlatConcatSearchVector, NoValidationSearchVector
-from ..core.utils.editorjs import clean_editor_js
 from ..graphql.attribute.dataloaders.assigned_attributes import (
     AttributesByPageIdAndLimitLoader,
     AttributeValuesByPageIdAndAttributeIdAndLimitLoader,
@@ -48,7 +48,7 @@ def update_pages_search_vector(
 
     # Save updates
     with transaction.atomic():
-        _locked_pages = (
+        _locked_pages = list(
             page_qs_select_for_update()
             .filter(id__in=[page.id for page in pages])
             .values_list("id", flat=True)
@@ -164,7 +164,7 @@ def prepare_page_search_vector_value(
     if content := page.content:
         search_vectors += [
             NoValidationSearchVector(
-                Value(clean_editor_js(content, to_string=True)),
+                Value(editorjs_to_text(content)),
                 config="simple",
                 weight="A",
             )

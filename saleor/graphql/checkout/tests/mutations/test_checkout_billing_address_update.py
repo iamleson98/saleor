@@ -17,7 +17,6 @@ from ..utils import assert_address_data
 
 MUTATION_CHECKOUT_BILLING_ADDRESS_UPDATE = """
     mutation checkoutBillingAddressUpdate(
-            $checkoutId: ID,
             $id: ID,
             $billingAddress: AddressInput!
             $saveAddress: Boolean
@@ -25,7 +24,6 @@ MUTATION_CHECKOUT_BILLING_ADDRESS_UPDATE = """
         ) {
         checkoutBillingAddressUpdate(
                 id: $id,
-                checkoutId: $checkoutId,
                 billingAddress: $billingAddress
                 validationRules: $validationRules
                 saveAddress: $saveAddress
@@ -825,6 +823,7 @@ def test_checkout_billing_address_triggers_webhooks(
                 "requestor_model_name": "account.user",
                 "requestor_object_id": user_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.CHECKOUT_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,

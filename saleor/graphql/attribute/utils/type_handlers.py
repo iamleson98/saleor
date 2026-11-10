@@ -13,11 +13,11 @@ from text_unidecode import unidecode
 from ....attribute import AttributeEntityType, AttributeInputType
 from ....attribute import models as attribute_models
 from ....attribute.models import AttributeValue
+from ....core.editorjs import editorjs_to_text
 from ....core.utils import (
     generate_unique_slug,
     prepare_unique_slug,
 )
-from ....core.utils.editorjs import clean_editor_js
 from ....core.utils.text import safe_truncate
 from ....core.utils.url import get_default_storage_root_url
 from ...core.utils import from_global_id_or_error, get_duplicated_values
@@ -116,7 +116,21 @@ class AttributeTypeHandler(abc.ABC):
         instance: T_INSTANCE,
         value_defaults: dict,
     ):
-        slug = slugify(unidecode(f"{instance.id}_{self.attribute.id}"))
+        """Prepare an update-or-create action for a value owned by the instance.
+
+        The slug must encode the entity type: products, variants and pages use
+        independent pk sequences, so the bare `{pk}_{attribute pk}` slug used
+        historically made a product and a variant with the same pk share (and
+        overwrite) a single value row.
+
+        The slug is a fallback for matching new values only — a value already
+        assigned to the instance is matched by the assignment and updated in
+        place under its existing slug; see
+        `AttributeAssignmentMixin._use_assigned_value_slugs`.
+        """
+        slug = slugify(
+            unidecode(f"{instance._meta.model_name}-{instance.pk}_{self.attribute.pk}")
+        )
         value = {
             "attribute": self.attribute,
             "slug": slug,
@@ -664,7 +678,7 @@ class RichTextAttributeHandler(AttributeTypeHandler):
     """Handler for Rich Text attribute type."""
 
     def clean_and_validate(self, attribute_errors: T_ERROR_DICT):
-        text = clean_editor_js(self.values_input.rich_text or {}, to_string=True)
+        text = editorjs_to_text(self.values_input.rich_text or {})
 
         if not text.strip() and self.attribute.value_required:
             attribute_errors[AttributeInputErrors.VALUE_REQUIRED].append(
@@ -678,7 +692,7 @@ class RichTextAttributeHandler(AttributeTypeHandler):
 
         defaults = {
             "rich_text": rich_text,
-            "name": safe_truncate(clean_editor_js(rich_text, to_string=True), 200),
+            "name": safe_truncate(editorjs_to_text(rich_text), 200),
         }
         return self._update_or_create_value(instance, defaults)
 

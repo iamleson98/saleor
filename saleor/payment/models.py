@@ -184,6 +184,24 @@ class TransactionItem(ModelWithMetadata):
         on_delete=models.SET_NULL,
     )
 
+    def has_money_movement(self) -> bool:
+        """Return True if any money was moved by this transaction.
+
+        A transaction with all amounts at zero is an abandoned payment attempt.
+        """
+        return any(
+            (
+                self.authorized_value,
+                self.authorize_pending_value,
+                self.charged_value,
+                self.charge_pending_value,
+                self.refunded_value,
+                self.refund_pending_value,
+                self.canceled_value,
+                self.cancel_pending_value,
+            )
+        )
+
     class Meta:
         ordering = ("pk",)
         indexes = [
@@ -192,6 +210,8 @@ class TransactionItem(ModelWithMetadata):
             BTreeIndex(fields=["cc_brand"], name="cc_brand_idx"),
             BTreeIndex(fields=["psp_reference"], name="psp_reference_idx"),
             BTreeIndex(fields=["app_identifier"], name="app_identifier_idx"),
+            BTreeIndex(fields=["created_at"], name="transaction_created_at_idx"),
+            BTreeIndex(fields=["modified_at"], name="transaction_modified_at_idx"),
         ]
         constraints = [
             models.UniqueConstraint(
@@ -256,6 +276,10 @@ class TransactionEvent(models.Model):
 
     class Meta:
         ordering = ("pk",)
+        indexes = [
+            BTreeIndex(fields=["created_at"], name="transactionevent_created_at_idx"),
+            BTreeIndex(fields=["type"], name="transactionevent_type_idx"),
+        ]
         constraints = [
             models.UniqueConstraint(
                 fields=["transaction_id", "idempotency_key"],

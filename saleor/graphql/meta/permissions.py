@@ -17,6 +17,7 @@ from ...permission.enums import (
     BasePermissionEnum,
     ChannelPermissions,
     CheckoutPermissions,
+    CustomerTypePermissions,
     DiscountPermissions,
     GiftcardPermissions,
     MenuPermissions,
@@ -48,7 +49,7 @@ def public_user_permissions(
 
     Customer have access to own public metadata.
     Staff user with `MANAGE_USERS` have access to customers public metadata.
-    Staff user with `MANAGE_STAFF` have access to staff users public metadata.
+    Staff user and apps with `MANAGE_STAFF` have access to staff users public metadata.
     """
     database_connection_name = get_database_connection_name(info.context)
     user = (
@@ -95,7 +96,7 @@ def public_address_permissions(
     Customer have access to the public metadata of their own addresses.
     Staff user with `MANAGE_USERS` have access to public metadata of customer
     addresses.
-    Staff user with `MANAGE_STAFF` have access to public metadata of staff user
+    Staff user and apps with `MANAGE_STAFF` have access to public metadata of staff user
     addresses.
     For now, updating warehouse and shop addresses is forbidden.
     """
@@ -243,6 +244,12 @@ def page_type_permissions(
     return [PageTypePermissions.MANAGE_PAGE_TYPES_AND_ATTRIBUTES]
 
 
+def customer_type_permissions(
+    _info: ResolveInfo, _object_pk: Any
+) -> list[BasePermissionEnum]:
+    return [CustomerTypePermissions.MANAGE_CUSTOMER_TYPES_AND_ATTRIBUTES]
+
+
 def attribute_permissions(info: ResolveInfo, attribute_pk: int):
     database_connection_name = get_database_connection_name(info.context)
     attribute = attribute_models.Attribute.objects.using(database_connection_name).get(
@@ -250,6 +257,8 @@ def attribute_permissions(info: ResolveInfo, attribute_pk: int):
     )
     if attribute.type == AttributeType.PAGE_TYPE:
         return page_type_permissions(info, attribute_pk)
+    if attribute.type == AttributeType.CUSTOMER_TYPE:
+        return customer_type_permissions(info, attribute_pk)
     return product_type_permissions(info, attribute_pk)
 
 
@@ -315,7 +324,7 @@ PUBLIC_META_PERMISSION_MAP: dict[
     "Checkout": no_permissions,
     "CheckoutLine": no_permissions,
     "Collection": product_permissions,
-    "DigitalContent": product_permissions,
+    "CustomerType": customer_type_permissions,
     "Fulfillment": order_permissions,
     "GiftCard": gift_card_permissions,
     "Invoice": invoice_permissions,
@@ -355,7 +364,7 @@ PRIVATE_META_PERMISSION_MAP: dict[
     "Checkout": checkout_permissions,
     "CheckoutLine": checkout_permissions,
     "Collection": product_permissions,
-    "DigitalContent": product_permissions,
+    "CustomerType": customer_type_permissions,
     "Fulfillment": order_permissions,
     "GiftCard": gift_card_permissions,
     "Invoice": invoice_permissions,

@@ -1,5 +1,6 @@
 """Checkout-related utility functions."""
 
+from collections import defaultdict
 from collections.abc import Iterable
 from decimal import Decimal
 from typing import TYPE_CHECKING, Optional, cast
@@ -18,7 +19,6 @@ from ..core.db.connection import allow_writer
 from ..core.exceptions import (
     NonExistingCheckout,
     NonExistingCheckoutLines,
-    ProductNotPublished,
 )
 from ..core.taxes import zero_taxed_money
 from ..core.utils.metadata_manager import (
@@ -33,7 +33,13 @@ from ..core.utils.promo_code import (
 )
 from ..core.utils.translations import get_translation
 from ..core.weight import zero_weight
-from ..discount import DiscountType, VoucherType
+from ..discount import (
+    NOT_APPLICABLE_MESSAGE,
+    DiscountType,
+    PromoCodeRejection,
+    PromoCodeRejectionReason,
+    VoucherType,
+)
 from ..discount.interface import fetch_voucher_info
 from ..discount.models import CheckoutDiscount, NotApplicable, Voucher, VoucherCode
 from ..discount.utils.checkout import (
@@ -55,7 +61,6 @@ from ..giftcard.utils import (
 from ..payment.models import Payment
 from ..plugins.manager import PluginsManager
 from ..product import models as product_models
-from ..warehouse.availability import check_stock_and_preorder_quantity
 from ..warehouse.reservations import reserve_stocks_and_preorders
 from . import AddressType, base_calculations, calculations
 from .delivery_context import is_shipping_required
@@ -151,14 +156,16 @@ def delete_checkouts(checkout_pks_to_delete: list[UUID]) -> int:
     """Delete a checkouts with lock applied on them."""
     with transaction.atomic():
         CheckoutLine.objects.filter(
-            id__in=CheckoutLine.objects.order_by("id")
-            .select_for_update()
+            id__in=checkout_lines_qs_select_for_update()
             .filter(checkout_id__in=checkout_pks_to_delete)
             .values_list("id", flat=True)
         ).delete()
-        deleted_count, _ = Checkout.objects.filter(
-            pk__in=checkout_pks_to_delete
-        ).delete()
+        locked_pks = list(
+            checkout_qs_select_for_update()
+            .filter(pk__in=checkout_pks_to_delete)
+            .values_list("pk", flat=True)
+        )
+        deleted_count, _ = Checkout.objects.filter(pk__in=locked_pks).delete()
     return deleted_count
 
 
@@ -170,119 +177,6 @@ def get_user_checkout(
     if not checkout_queryset:
         checkout_queryset = Checkout.objects.using(database_connection_name).all()
     return checkout_queryset.filter(user=user, channel__is_active=True).first()
-
-
-def check_variant_in_stock(
-    checkout: Checkout,
-    variant: product_models.ProductVariant,
-    channel_slug: str,
-    quantity: int = 1,
-    replace: bool = False,
-    check_quantity: bool = True,
-    checkout_lines: list["CheckoutLine"] | None = None,
-    check_reservations: bool = False,
-) -> tuple[int, CheckoutLine | None]:
-    """Check if a given variant is in stock and return the new quantity + line."""
-    line = checkout.lines.filter(variant=variant).first()
-    line_quantity = 0 if line is None else line.quantity
-
-    new_quantity = quantity if replace else (quantity + line_quantity)
-
-    if new_quantity < 0:
-        raise ValueError(
-            f"{quantity!r} is not a valid quantity (results in {new_quantity!r})"
-        )
-
-    if new_quantity > 0 and check_quantity:
-        check_stock_and_preorder_quantity(
-            variant,
-            checkout.get_country(),
-            channel_slug,
-            new_quantity,
-            checkout_lines,
-            check_reservations,
-        )
-
-    return new_quantity, line
-
-
-def add_variant_to_checkout(
-    checkout_info: "CheckoutInfo",
-    variant: product_models.ProductVariant,
-    quantity: int = 1,
-    price_override: Optional["Decimal"] = None,
-    replace: bool = False,
-    check_quantity: bool = True,
-    force_new_line: bool = False,
-):
-    """Add a product variant to checkout.
-
-    If `replace` is truthy then any previous quantity is discarded instead
-    of added to.
-
-    This function is not used outside of test suite.
-    """
-    checkout = checkout_info.checkout
-    channel_slug = checkout_info.channel.slug
-
-    product_channel_listing = product_models.ProductChannelListing.objects.filter(
-        channel_id=checkout.channel_id, product_id=variant.product_id
-    ).first()
-    if not product_channel_listing or not product_channel_listing.is_published:
-        raise ProductNotPublished()
-
-    variant_channel_listing = product_models.ProductVariantChannelListing.objects.get(
-        channel_id=checkout.channel_id, variant_id=variant.id
-    )
-    variant_price_amount = variant.get_base_price(
-        variant_channel_listing, price_override
-    ).amount
-    variant_prior_price_amount = variant.get_prior_price_amount(variant_channel_listing)
-
-    new_quantity, line = check_variant_in_stock(
-        checkout,
-        variant,
-        channel_slug,
-        quantity=quantity,
-        replace=replace,
-        check_quantity=check_quantity,
-    )
-
-    if force_new_line:
-        checkout.lines.create(
-            variant=variant,
-            quantity=quantity,
-            price_override=price_override,
-            undiscounted_unit_price_amount=variant_price_amount,
-            prior_unit_price_amount=variant_prior_price_amount,
-        )
-        return checkout
-
-    if line is None:
-        line = checkout.lines.filter(variant=variant).first()
-
-    if new_quantity == 0:
-        if line is not None:
-            line.delete()
-    elif line is None:
-        checkout.lines.create(
-            variant=variant,
-            quantity=new_quantity,
-            currency=checkout.currency,
-            price_override=price_override,
-            undiscounted_unit_price_amount=variant_price_amount,
-            prior_unit_price_amount=variant_prior_price_amount,
-        )
-    elif new_quantity > 0:
-        line.quantity = new_quantity
-        line.save(update_fields=["quantity"])
-
-    # invalidate calculated prices
-    price_expiration = timezone.now()
-    checkout.price_expiration = price_expiration
-    checkout.discount_expiration = price_expiration
-
-    return checkout
 
 
 def calculate_checkout_quantity(lines: list["CheckoutLineInfo"]):
@@ -298,6 +192,8 @@ def add_variants_to_checkout(
     replace_reservations=False,
     reservation_length: int | None = None,
     raise_error_for_missing_lines=False,
+    *,
+    calculate_stocks_with_shipping_zones: bool,
 ):
     """Add variants to checkout.
 
@@ -327,6 +223,8 @@ def add_variants_to_checkout(
         )
         lines_by_id = {str(line.pk): line for line in checkout_lines}
         variants_map = {str(variant.pk): variant for variant in variants}
+
+        _match_lines_data_to_locked_lines(checkout_lines_data, checkout_lines)
 
         new_variant_ids = set()
         non_existing_line_ids = set()
@@ -367,7 +265,8 @@ def add_variants_to_checkout(
 
         if to_update:
             checkout_lines_bulk_update(
-                to_update, ["quantity", "price_override", "metadata"]
+                to_update,
+                ["quantity", "price_override", "price_override_reason", "metadata"],
             )
 
         if to_create:
@@ -394,6 +293,7 @@ def add_variants_to_checkout(
                 country_code,
                 channel,
                 reservation_length,
+                calculate_stocks_with_shipping_zones=calculate_stocks_with_shipping_zones,
                 replace=replace_reservations,
             )
 
@@ -404,6 +304,28 @@ def _get_line_if_exist(line_data, lines_by_ids):
     if line_data.line_id and line_data.line_id in lines_by_ids:
         return lines_by_ids[line_data.line_id]
     return None
+
+
+def _match_lines_data_to_locked_lines(checkout_lines_data, checkout_lines):
+    """Point input lines at the lines that exist now that the checkout is locked.
+
+    The input lines are resolved against the checkout lines before the checkout
+    row lock is taken, so a concurrent request may have created a line for the
+    same variant in the meantime. Without this step both requests would create
+    their own line for the variant instead of merging into one.
+    """
+    lines_by_variant_id: dict[str, list[CheckoutLine]] = defaultdict(list)
+    for line in checkout_lines:
+        lines_by_variant_id[str(line.variant_id)].append(line)
+
+    for line_data in checkout_lines_data:
+        if line_data.line_id or line_data.force_new_line or not line_data.variant_id:
+            continue
+        matching_lines = lines_by_variant_id[str(line_data.variant_id)]
+        # When the variant is already in multiple lines a new line is created,
+        # which mirrors the resolution done before the lock was taken.
+        if len(matching_lines) == 1:
+            line_data.line_id = str(matching_lines[0].pk)
 
 
 def _append_line_to_update(to_update, to_delete, line_data, replace, line):
@@ -423,6 +345,11 @@ def _append_line_to_update(to_update, to_delete, line_data, replace, line):
         if line not in to_delete:
             line.price_override = line_data.custom_price
             to_update.append(line)
+    if line_data.custom_price_reason_to_update:
+        if line not in to_delete:
+            line.price_override_reason = line_data.custom_price_reason
+            if line not in to_update:
+                to_update.append(line)
 
 
 def _append_line_to_delete(to_delete, line_data, line):
@@ -451,6 +378,7 @@ def _append_line_to_create(
             quantity=line_data.quantity,
             currency=checkout.currency,
             price_override=line_data.custom_price,
+            price_override_reason=line_data.custom_price_reason,
             undiscounted_unit_price_amount=variant_price_amount,
             prior_unit_price_amount=variant_prior_price_amount,
         )
@@ -546,17 +474,20 @@ def _get_shipping_voucher_discount_for_checkout(
     """Calculate discount value for a voucher of shipping type."""
     if not is_shipping_required(lines):
         msg = "Your order does not require shipping."
-        raise NotApplicable(msg)
+        raise NotApplicable(msg, reason=PromoCodeRejectionReason.SHIPPING_NOT_REQUIRED)
     shipping_method = checkout_info.get_delivery_method_info().delivery_method
     if not shipping_method:
         msg = "Please select a delivery method first."
-        raise NotApplicable(msg)
+        raise NotApplicable(
+            msg, reason=PromoCodeRejectionReason.DELIVERY_METHOD_NOT_SET
+        )
 
     # check if voucher is limited to specified countries
     if address:
         if voucher.countries and address.country.code not in voucher.countries:
-            msg = "This offer is not valid in your country."
-            raise NotApplicable(msg)
+            raise NotApplicable(
+                NOT_APPLICABLE_MESSAGE, reason=PromoCodeRejectionReason.NOT_APPLICABLE
+            )
 
     shipping_price = base_calculations.base_checkout_undiscounted_delivery_price(
         checkout_info=checkout_info, lines=lines
@@ -637,7 +568,7 @@ def _get_products_voucher_discount(
         prices = get_prices_of_discounted_specific_product(lines, voucher)
     if not prices:
         msg = "This offer is only valid for selected items."
-        raise NotApplicable(msg)
+        raise NotApplicable(msg, reason=PromoCodeRejectionReason.NO_ELIGIBLE_PRODUCTS)
     return get_products_voucher_discount(voucher, prices, checkout_info.channel)
 
 
@@ -800,12 +731,7 @@ def add_promo_code_to_checkout(
     Raise InvalidPromoCode if promo code does not match to any voucher or gift card.
     """
     if promo_code_is_voucher(promo_code):
-        add_voucher_code_to_checkout(
-            manager,
-            checkout_info,
-            lines,
-            promo_code,
-        )
+        add_voucher_code_to_checkout(manager, checkout_info, lines, promo_code)
     elif promo_code_is_gift_card(promo_code):
         if not checkout_info.channel.allow_legacy_gift_card_use:
             raise ValidationError(
@@ -825,7 +751,11 @@ def add_promo_code_to_checkout(
             checkout_info.channel.currency_code,
         )
     else:
-        raise InvalidPromoCode()
+        raise InvalidPromoCode(
+            promo_code_rejection=PromoCodeRejection(
+                reason=PromoCodeRejectionReason.NOT_FOUND
+            )
+        )
 
 
 def add_voucher_code_to_checkout(
@@ -849,6 +779,7 @@ def add_voucher_code_to_checkout(
                 "promo_code": ValidationError(
                     "Voucher is not applicable to this checkout.",
                     code=CheckoutErrorCode.VOUCHER_NOT_APPLICABLE.value,
+                    params={"promo_code_details": e.rejection},
                 )
             }
         ) from e
@@ -977,12 +908,10 @@ def is_fully_paid(
     checkout = checkout_info.checkout
     payments = [payment for payment in checkout.payments.all() if payment.is_active]
     total_paid = sum([p.total for p in payments])
-    address = checkout_info.shipping_address or checkout_info.billing_address
     checkout_total = calculations.calculate_checkout_total_with_gift_cards(
         manager=manager,
         checkout_info=checkout_info,
         lines=lines,
-        address=address,
         database_connection_name=database_connection_name,
     )
     checkout_total = max(

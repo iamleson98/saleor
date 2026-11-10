@@ -1,6 +1,6 @@
 import datetime
 from decimal import Decimal
-from unittest.mock import ANY, call, patch
+from unittest.mock import ANY, MagicMock, call, patch
 
 import graphene
 import pytest
@@ -26,7 +26,7 @@ from .....order.actions import order_created
 from .....order.calculations import fetch_order_prices_if_expired
 from .....order.error_codes import OrderErrorCode
 from .....order.interface import OrderTaxedPricesData
-from .....order.models import OrderEvent, OrderLine
+from .....order.models import Order, OrderEvent, OrderLine
 from .....payment.model_helpers import get_subtotal
 from .....plugins import PLUGIN_IDENTIFIER_PREFIX
 from .....plugins.tests.sample_plugins import PluginSample
@@ -104,7 +104,7 @@ DRAFT_ORDER_COMPLETE_MUTATION = """
     "saleor.graphql.order.mutations.draft_order_complete.order_created",
     wraps=order_created,
 )
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete(
     product_variant_out_of_stock_webhook_mock,
     order_created_mock,
@@ -114,7 +114,12 @@ def test_draft_order_complete(
     staff_user,
     draft_order,
     customer_user,
+    mocker,
 ):
+    mocked_send_order_confirmation: MagicMock = mocker.patch(
+        "saleor.graphql.order.mutations.draft_order_complete.send_order_confirmation"
+    )
+
     # given
     order = draft_order
     order.user = customer_user
@@ -163,13 +168,21 @@ def test_draft_order_complete(
     assert matching_events[0].type != matching_events[1].type
     assert not OrderEvent.objects.exclude(**event_params).exists()
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
-        Stock.objects.last()
+        Stock.objects.last(), requestor=staff_api_client.user
     )
     assert order_created_mock.called
     store_user_addresses_from_draft_order_mock.assert_called_once()
 
     customer_user.refresh_from_db()
     assert customer_user.number_of_orders == user_orders_count + 1
+
+    # Should have notified staff
+    mocked_send_order_confirmation.assert_called_once_with(
+        order_info=ANY,
+        redirect_url=order.redirect_url,
+        manager=ANY,
+        notify_customer=False,
+    )
 
 
 def test_draft_order_complete_no_automatically_confirm_all_new_orders(
@@ -238,7 +251,7 @@ def test_draft_order_complete_by_user_no_channel_access(
     assert_no_permission(response)
 
 
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete_by_app(
     product_variant_out_of_stock_webhook_mock,
     app_api_client,
@@ -268,7 +281,7 @@ def test_draft_order_complete_by_app(
     assert order.search_vector
 
 
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete_with_voucher(
     product_variant_out_of_stock_webhook_mock,
     staff_api_client,
@@ -346,7 +359,7 @@ def test_draft_order_complete_with_voucher(
     assert matching_events[0].type != matching_events[1].type
     assert not OrderEvent.objects.exclude(**event_params).exists()
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
-        Stock.objects.last()
+        Stock.objects.last(), requestor=staff_user
     )
     assert not VoucherCustomer.objects.filter(
         voucher_code=code_instance, customer_email=order.get_customer_email()
@@ -409,7 +422,7 @@ def test_draft_order_complete_with_voucher_once_per_customer(
     ).exists()
 
 
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete_0_total(
     product_variant_out_of_stock_webhook_mock,
     staff_api_client,
@@ -473,11 +486,11 @@ def test_draft_order_complete_0_total(
     assert matching_events[0].type != matching_events[1].type
     assert not OrderEvent.objects.exclude(**event_params).exists()
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
-        Stock.objects.last()
+        Stock.objects.last(), requestor=staff_user
     )
 
 
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete_without_sku(
     product_variant_out_of_stock_webhook_mock,
     staff_api_client,
@@ -529,11 +542,11 @@ def test_draft_order_complete_without_sku(
     assert matching_events[0].type != matching_events[1].type
     assert not OrderEvent.objects.exclude(**event_params).exists()
     product_variant_out_of_stock_webhook_mock.assert_called_once_with(
-        Stock.objects.last()
+        Stock.objects.last(), requestor=staff_user
     )
 
 
-@patch("saleor.plugins.manager.PluginsManager.product_variant_out_of_stock")
+@patch("saleor.warehouse.management.trigger_product_variant_out_of_stock")
 def test_draft_order_complete_with_out_of_stock_webhook(
     product_variant_out_of_stock_webhook_mock,
     staff_api_client,
@@ -562,7 +575,9 @@ def test_draft_order_complete_with_out_of_stock_webhook(
     )["quantity_allocated__sum"]
     assert total_stock == total_allocation
     assert product_variant_out_of_stock_webhook_mock.call_count == 2
-    product_variant_out_of_stock_webhook_mock.assert_called_with(Stock.objects.last())
+    product_variant_out_of_stock_webhook_mock.assert_called_with(
+        Stock.objects.last(), requestor=staff_api_client.user
+    )
 
 
 def test_draft_order_from_reissue_complete(
@@ -669,7 +684,7 @@ def test_draft_order_complete_with_unavailable_variant(
     assert data["errors"][0]["variants"] == [variant_id]
 
 
-def test_draft_order_complete_channel_without_shipping_zones(
+def test_draft_order_complete_channel_without_shipping_zones_assigned(
     staff_api_client,
     permission_group_manage_orders,
     staff_user,
@@ -702,6 +717,40 @@ def test_draft_order_complete_channel_without_shipping_zones(
         OrderErrorCode.INSUFFICIENT_STOCK.name,
     }
     assert {error["field"] for error in data["errors"]} == {"shipping", "lines"}
+
+
+def test_draft_order_complete_channel_with_shipping_zones_excluded_from_stock_calculation(
+    staff_api_client,
+    permission_group_manage_orders,
+    staff_user,
+    draft_order,
+    site_settings,
+):
+    # given
+    site_settings.use_legacy_shipping_zone_stock_availability = False
+    site_settings.save(update_fields=["use_legacy_shipping_zone_stock_availability"])
+
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order = draft_order
+    order.channel.shipping_zones.clear()
+
+    assert not OrderEvent.objects.exists()
+    assert not Allocation.objects.filter(order_line__order=order).exists()
+
+    order_id = graphene.Node.to_global_id("Order", order.id)
+    variables = {"id": order_id}
+
+    # when
+    response = staff_api_client.post_graphql(DRAFT_ORDER_COMPLETE_MUTATION, variables)
+
+    # then - INSUFFICIENT_STOCK is not raised, only SHIPPING_METHOD_NOT_APPLICABLE
+    content = get_graphql_content(response)
+    data = content["data"]["draftOrderComplete"]
+
+    assert len(data["errors"]) == 1
+    assert (
+        data["errors"][0]["code"] == OrderErrorCode.SHIPPING_METHOD_NOT_APPLICABLE.name
+    )
 
 
 def test_draft_order_complete_product_without_inventory_tracking(
@@ -1805,6 +1854,7 @@ def test_draft_order_complete_triggers_webhooks(
                         "requestor_model_name": "account.user",
                         "requestor_object_id": staff_api_client.user.pk,
                         "request_time": None,
+                        "subscribable_object_data": None,
                     },
                     "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
                     "telemetry_context": ANY,
@@ -2052,3 +2102,45 @@ def test_draft_order_complete_with_single_use_voucher(
 
     code_instance.refresh_from_db()
     assert not code_instance.is_active
+
+
+def test_draft_order_complete_is_rejected_when_recalculation_collides(
+    staff_api_client,
+    permission_group_manage_orders,
+    draft_order,
+):
+    # given
+    # Another process touches the order while its prices are being recalculated, so
+    # the recalculated prices are not stored and the order keeps the ones from before
+    # the change that made it need a recalculation.
+    order = draft_order
+    order.should_refresh_prices = True
+    order.save(update_fields=["should_refresh_prices"])
+
+    def touch_order_from_another_process(*args, **kwargs):
+        Order.objects.filter(pk=order.pk).update(updated_at=timezone.now())
+
+    permission_group_manage_orders.user_set.add(staff_api_client.user)
+    order_id = graphene.Node.to_global_id("Order", order.id)
+
+    # when
+    with race_condition.RunBefore(
+        "saleor.order.calculations.calculate_taxes", touch_order_from_another_process
+    ):
+        response = staff_api_client.post_graphql(
+            DRAFT_ORDER_COMPLETE_MUTATION, {"id": order_id}
+        )
+    content = get_graphql_content(response)
+
+    # then
+    errors = content["data"]["draftOrderComplete"]["errors"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == OrderErrorCode.TAX_ERROR.name
+    assert errors[0]["message"] == (
+        "Order prices could not be recalculated. Please try again."
+    )
+    # The order was not completed, so it stays recalculable instead of being frozen
+    # with prices that carry no tax.
+    order.refresh_from_db()
+    assert order.status == OrderStatus.DRAFT
+    assert order.should_refresh_prices is True

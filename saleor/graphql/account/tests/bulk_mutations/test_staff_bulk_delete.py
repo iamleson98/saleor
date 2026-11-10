@@ -1,9 +1,11 @@
 from unittest.mock import patch
 
 import graphene
+from django.conf import settings
 
 from .....account.error_codes import AccountErrorCode
 from .....account.models import Group, User
+from .....attribute.models import AssignedUserAttributeValue, AttributeValue
 from .....permission.enums import AccountPermissions, OrderPermissions
 from ....tests.utils import assert_no_permission, get_graphql_content
 
@@ -46,6 +48,32 @@ def test_delete_staff_members(
         id__in=[user.id for user in [staff_1, staff_2]]
     ).exists()
     assert User.objects.filter(id__in=[user.id for user in users]).count() == len(users)
+
+
+def test_delete_staff_members_exceeding_max_input_size(
+    staff_api_client, user_list, permission_manage_staff
+):
+    # given
+    *_, staff_1, _staff_2 = user_list
+    query = STAFF_BULK_DELETE_MUTATION
+    limit = settings.BULK_DELETE_LIMIT
+    staff_id = graphene.Node.to_global_id("User", staff_1.id)
+    variables = {"ids": [staff_id] * (limit + 1)}
+
+    # when
+    response = staff_api_client.post_graphql(
+        query, variables, permissions=[permission_manage_staff]
+    )
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["staffBulkDelete"]
+    errors = data["errors"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == AccountErrorCode.INVALID.name
+    assert errors[0]["field"] == "ids"
+    assert data["count"] == 0
+    assert User.objects.filter(id=staff_1.id).exists()
 
 
 @patch("saleor.graphql.account.bulk_mutations.staff_bulk_delete.get_webhooks_for_event")
@@ -360,3 +388,51 @@ def test_delete_staff_members_superuser_can_delete__out_of_scope_users(
     assert not User.objects.filter(
         id__in=[user.id for user in [staff_user1, staff_user2]]
     ).exists()
+
+
+def test_deletes_unique_attribute_values_and_keeps_shared_choices(
+    staff_api_client,
+    permission_manage_staff,
+    description_customer_attribute,
+    loyalty_customer_attribute,
+):
+    # given: each staff user has a unique (plain text) value and a shared choice
+    staff_users = [
+        User.objects.create(email="staff1@example.com", is_staff=True),
+        User.objects.create(email="staff2@example.com", is_staff=True),
+    ]
+    unique_values = []
+    choice_value = loyalty_customer_attribute.values.get(slug="gold")
+    for staff_user in staff_users:
+        plain_text = f"Notes about staff member {staff_user.pk}"
+        unique_value = AttributeValue.objects.create(
+            attribute=description_customer_attribute,
+            name=plain_text,
+            slug=f"{staff_user.pk}_{description_customer_attribute.pk}",
+            plain_text=plain_text,
+        )
+        unique_values.append(unique_value)
+        AssignedUserAttributeValue.objects.create(user=staff_user, value=unique_value)
+        AssignedUserAttributeValue.objects.create(user=staff_user, value=choice_value)
+    variables = {
+        "ids": [graphene.Node.to_global_id("User", user.pk) for user in staff_users]
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        STAFF_BULK_DELETE_MUTATION, variables, permissions=[permission_manage_staff]
+    )
+
+    # then: the unique values are deleted with the users, the shared choice stays
+    content = get_graphql_content(response)
+    assert content["data"]["staffBulkDelete"]["count"] == len(staff_users)
+    assert (
+        User.objects.filter(pk__in=[user.pk for user in staff_users]).exists() is False
+    )
+    assert (
+        AttributeValue.objects.filter(
+            pk__in=[value.pk for value in unique_values]
+        ).exists()
+        is False
+    )
+    assert AttributeValue.objects.filter(pk=choice_value.pk).exists() is True

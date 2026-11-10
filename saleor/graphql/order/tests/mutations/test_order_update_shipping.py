@@ -729,6 +729,7 @@ def test_order_update_shipping_triggers_webhooks(
                 "requestor_model_name": "account.user",
                 "requestor_object_id": staff_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
@@ -825,6 +826,7 @@ def test_draft_order_update_shipping_triggers_proper_updated_webhook(
                 "requestor_model_name": "account.user",
                 "requestor_object_id": staff_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
@@ -893,6 +895,7 @@ def test_draft_order_update_shipping_triggers_proper_updated_webhook_for_null_sh
                 "requestor_model_name": "account.user",
                 "requestor_object_id": staff_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,
@@ -924,9 +927,9 @@ def test_editable_order_update_shipping_triggers_proper_updated_webhook_for_null
     setup_order_webhooks,
     staff_api_client,
     permission_group_manage_orders,
-    # Only digital-lines order is affected, because orders with physical items
+    # Only orders without shipping are affected, because orders with physical items
     # must have shopping method. In such scenario validation will raise without webhook
-    order_with_digital_line,
+    order_without_shipping_required,
     settings,
 ):
     # given
@@ -938,7 +941,7 @@ def test_editable_order_update_shipping_triggers_proper_updated_webhook_for_null
     ) = setup_order_webhooks(WebhookEventAsyncType.ORDER_UPDATED)
 
     permission_group_manage_orders.user_set.add(staff_api_client.user)
-    order = order_with_digital_line
+    order = order_without_shipping_required
     order.base_shipping_price = zero_money(order.currency)
     order.status = OrderStatus.UNCONFIRMED
     order.save()
@@ -963,6 +966,7 @@ def test_editable_order_update_shipping_triggers_proper_updated_webhook_for_null
                 "requestor_model_name": "account.user",
                 "requestor_object_id": staff_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,

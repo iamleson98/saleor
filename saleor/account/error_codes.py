@@ -37,7 +37,9 @@ class AccountErrorCode(Enum):
     MISSING_CHANNEL_SLUG = "missing_channel_slug"
     ACCOUNT_NOT_CONFIRMED = "account_not_confirmed"
     LOGIN_ATTEMPT_DELAYED = "login_attempt_delayed"
+    DISABLED_AUTHENTICATION_METHOD = "disabled_authentication_method"
     UNKNOWN_IP_ADDRESS = "unknown_ip_address"
+    FILE_SIZE_LIMIT_EXCEEDED = "file_size_limit_exceeded"
 
 
 class CustomerBulkUpdateErrorCode(Enum):
@@ -49,6 +51,49 @@ class CustomerBulkUpdateErrorCode(Enum):
     UNIQUE = "unique"
     NOT_FOUND = "not_found"
     MAX_LENGTH = "max_length"
+
+
+class CustomerTypeCreateErrorCode(Enum):
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+    REQUIRED = "required"
+    UNIQUE = "unique"
+
+
+class CustomerTypeUpdateErrorCode(Enum):
+    CANNOT_UNSET_DEFAULT = "cannot_unset_default"
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+    REQUIRED = "required"
+    UNIQUE = "unique"
+
+
+class CustomerTypeDeleteErrorCode(Enum):
+    CANNOT_DELETE_DEFAULT = "cannot_delete_default"
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+
+
+class CustomerTypeAssignAttributesErrorCode(Enum):
+    ATTRIBUTE_ALREADY_ASSIGNED = "attribute_already_assigned"
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+
+
+class CustomerTypeUnassignAttributesErrorCode(Enum):
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
+
+
+class CustomerTypeReorderAttributesErrorCode(Enum):
+    GRAPHQL_ERROR = "graphql_error"
+    INVALID = "invalid"
+    NOT_FOUND = "not_found"
 
 
 class PermissionGroupErrorCode(Enum):

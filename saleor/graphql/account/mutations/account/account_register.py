@@ -7,7 +7,7 @@ from django.db import IntegrityError, transaction
 from .....account import models
 from .....account.error_codes import AccountErrorCode
 from .....account.tasks import finish_creating_user
-from .....account.utils import RequestorAwareContext
+from .....account.utils import RequestorAwareContext, get_default_customer_type
 from .....core.utils.url import validate_storefront_url
 from .....webhook.event_types import WebhookEventAsyncType
 from ....channel.utils import clean_channel
@@ -114,11 +114,8 @@ class AccountRegister(DeprecatedModelMutation):
             response.user.NEWLY_CREATED_USER = True
         return response
 
-    @classmethod
-    def clean_input(cls, info: ResolveInfo, instance, data, **kwargs):
-        site = get_site_promise(info.context).get()
-        if not site.settings.enable_account_confirmation_by_email:
-            return super().clean_input(info, instance, data, **kwargs)
+    @staticmethod
+    def clean_redirect_url(data: dict) -> None:
         if not data.get("redirect_url"):
             raise ValidationError(
                 {
@@ -139,9 +136,16 @@ class AccountRegister(DeprecatedModelMutation):
                 }
             ) from e
 
-        data["channel"] = clean_channel(
-            data.get("channel"), error_class=AccountErrorCode, allow_replica=False
-        ).slug
+    @classmethod
+    def clean_input(cls, info: ResolveInfo, instance, data, **kwargs):
+        site = get_site_promise(info.context).get()
+
+        if site.settings.enable_account_confirmation_by_email:
+            cls.clean_redirect_url(data)
+
+            data["channel"] = clean_channel(
+                data.get("channel"), error_class=AccountErrorCode, allow_replica=False
+            ).slug
 
         data["email"] = data["email"].lower()
 
@@ -233,6 +237,7 @@ class AccountRegister(DeprecatedModelMutation):
             cleaned_input["password"]
         )
         instance.is_confirmed = False
+        instance.customer_type = get_default_customer_type()
 
         user_created = False
         if not user_exists:

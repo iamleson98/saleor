@@ -51,6 +51,7 @@ def resolve_object_with_metadata_type(instance):
 
     MODEL_TO_TYPE_MAP: dict[type, type[models.Model]] = {
         account_models.Address: account_types.Address,
+        account_models.CustomerType: account_types.CustomerType,
         account_models.User: account_types.User,
         app_models.App: app_types.App,
         attribute_models.Attribute: attribute_types.Attribute,
@@ -73,7 +74,6 @@ def resolve_object_with_metadata_type(instance):
         payment_models.TransactionItem: payment_types.TransactionItem,
         product_models.Category: product_types.Category,
         product_models.Collection: product_types.Collection,
-        product_models.DigitalContent: product_types.DigitalContent,
         product_models.Product: product_types.Product,
         product_models.ProductMedia: product_types.ProductMedia,
         product_models.ProductType: product_types.ProductType,
@@ -91,8 +91,6 @@ def resolve_object_with_metadata_type(instance):
             instance, "old_sale_id", False
         ):
             return discount_types.Sale, instance.pk
-        if instance.__class__ not in MODEL_TO_TYPE_MAP:
-            raise ValueError(f"Unknown type: {instance.__class__}")
         return MODEL_TO_TYPE_MAP[instance.__class__], instance.pk
 
     if dataclasses.is_dataclass(instance):

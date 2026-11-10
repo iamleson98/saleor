@@ -21,7 +21,11 @@ from .....product.models import (
 from .....tests.utils import dummy_editorjs
 from .....thumbnail.models import Thumbnail
 from .....warehouse.models import Allocation, Stock
-from ....core.enums import LanguageCodeEnum, ThumbnailFormatEnum
+from ....core.enums import (
+    LanguageCodeEnum,
+    ThumbnailFormatEnum,
+    ThumbnailSizeRoundingEnum,
+)
 from ....tests.utils import get_graphql_content, get_graphql_content_from_response
 
 QUERY_PRODUCT = """
@@ -2041,6 +2045,93 @@ def test_query_product_media_by_id_with_size_proxy_url_returned(
     )
 
 
+QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING = """
+    query (
+        $productId: ID!
+        $mediaId: ID!
+        $channel: String
+        $size: Int
+        $sizeRounding: ThumbnailSizeRoundingEnum
+    ) {
+        product(id: $productId, channel: $channel) {
+            mediaById(id: $mediaId) {
+                url(size: $size, sizeRounding: $sizeRounding)
+            }
+        }
+    }
+"""
+
+
+@pytest.mark.parametrize(
+    ("size_rounding", "expected_size"),
+    [
+        (ThumbnailSizeRoundingEnum.UP.name, 2048),
+        (ThumbnailSizeRoundingEnum.NEAREST.name, 1024),
+    ],
+)
+def test_query_product_media_by_id_with_size_rounding(
+    size_rounding, expected_size, user_api_client, product_with_image, channel_USD
+):
+    # given
+    media_id = graphene.Node.to_global_id(
+        "ProductMedia", product_with_image.media.get().pk
+    )
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product_with_image.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 1500,
+        "sizeRounding": size_rounding,
+    }
+
+    # when
+    response = user_api_client.post_graphql(
+        QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING, variables
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/{expected_size}/"
+    )
+
+
+@pytest.mark.parametrize(
+    ("_case", "size_rounding_variables"),
+    [
+        ("omitted", {}),
+        ("null", {"sizeRounding": None}),
+    ],
+)
+def test_query_product_media_by_id_size_rounding_defaults_to_up(
+    _case, size_rounding_variables, user_api_client, product_with_image, channel_USD
+):
+    # given
+    media_id = graphene.Node.to_global_id(
+        "ProductMedia", product_with_image.media.get().pk
+    )
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product_with_image.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 1500,
+        **size_rounding_variables,
+    }
+
+    # when
+    response = user_api_client.post_graphql(
+        QUERY_PRODUCT_MEDIA_BY_ID_WITH_SIZE_ROUNDING, variables
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/2048/"
+    )
+
+
 def test_query_product_media_by_id_with_size_thumbnail_url_returned(
     user_api_client, product_with_image, channel_USD
 ):
@@ -2174,6 +2265,60 @@ def test_query_product_media_by_id_zero_size_value_original_image_returned(
     assert (
         content["data"]["product"]["mediaById"]["url"]
         == f"https://example.com/media/{media.image.name}"
+    )
+
+
+def test_query_product_media_by_id_without_image_returns_thumbnail_proxy_url(
+    user_api_client, product, channel_USD
+):
+    # given
+    query = QUERY_PRODUCT_MEDIA_BY_ID
+    media = product.media.create(image=None)
+    media_id = graphene.Node.to_global_id("ProductMedia", media.pk)
+
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 120,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["product"]["mediaById"]["id"]
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/thumbnail/{media_id}/128/"
+    )
+
+
+def test_query_product_media_by_id_without_image_zero_size_returns_original_image_proxy_url(
+    user_api_client, product, channel_USD
+):
+    # given
+    query = QUERY_PRODUCT_MEDIA_BY_ID
+    media = product.media.create(image=None)
+    media_id = graphene.Node.to_global_id("ProductMedia", media.pk)
+
+    variables = {
+        "productId": graphene.Node.to_global_id("Product", product.pk),
+        "mediaId": media_id,
+        "channel": channel_USD.slug,
+        "size": 0,
+    }
+
+    # when
+    response = user_api_client.post_graphql(query, variables)
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"]["product"]["mediaById"]["id"]
+    assert (
+        content["data"]["product"]["mediaById"]["url"]
+        == f"https://example.com/image/{media_id}/"
     )
 
 
@@ -2456,138 +2601,6 @@ def test_query_product_media_for_federation(
             "url": "https://example.com/media/products/product.jpg",
         }
     ]
-
-
-QUERY_PRODUCT_WITH_VARIANT = """
-    query Product($id: ID!, $channel: String, $variant_id: ID, $sku: String){
-        product(id: $id, channel: $channel){
-           variant(id: $variant_id, sku: $sku){
-            id
-            sku
-           }
-        }
-    }
-    """
-
-
-@pytest.mark.parametrize(
-    ("variant_id", "sku", "result"),
-    [(False, "123", "123"), (True, None, "123")],
-)
-def test_product_variant_field_filtering(
-    staff_api_client,
-    product,
-    variant_id,
-    sku,
-    result,
-    channel_USD,
-):
-    # given
-    variant = product.variants.first()
-    variables = {
-        "id": graphene.Node.to_global_id("Product", product.pk),
-        "variant_id": (
-            graphene.Node.to_global_id("ProductVariant", variant.pk)
-            if variant_id
-            else None
-        ),
-        "sku": sku,
-        "channel": channel_USD.slug,
-    }
-
-    # when
-    response = staff_api_client.post_graphql(
-        QUERY_PRODUCT_WITH_VARIANT,
-        variables,
-    )
-
-    # then
-    content = get_graphql_content(response)
-    assert content["data"]["product"]["variant"]["sku"] == result
-
-
-def test_product_variant_field_filtering_null_response(
-    staff_api_client,
-    product,
-    channel_USD,
-):
-    # given
-    sku = "not_existing"
-    variant_id = None
-
-    variables = {
-        "id": graphene.Node.to_global_id("Product", product.pk),
-        "variant_id": variant_id,
-        "sku": sku,
-        "channel": channel_USD.slug,
-    }
-
-    # when
-    response = staff_api_client.post_graphql(
-        QUERY_PRODUCT_WITH_VARIANT,
-        variables,
-    )
-
-    # then
-    content = get_graphql_content(response)
-    assert content["data"]["product"]["variant"] is None
-
-
-def test_product_variant_field_filtering_argument_required_error(
-    staff_api_client,
-    product,
-    channel_USD,
-):
-    # given
-    sku = None
-    variant_id = None
-
-    variables = {
-        "id": graphene.Node.to_global_id("Product", product.pk),
-        "variant_id": variant_id,
-        "sku": sku,
-        "channel": channel_USD.slug,
-    }
-
-    # when
-    response = staff_api_client.post_graphql(
-        QUERY_PRODUCT_WITH_VARIANT,
-        variables,
-    )
-
-    # then
-    content = get_graphql_content(response, ignore_errors=True)
-    error_message = "At least one of arguments is required"
-    assert error_message in content["errors"][0]["message"]
-
-
-def test_product_variant_field_filtering_argument_cannot_be_combined_error(
-    staff_api_client,
-    product,
-    channel_USD,
-):
-    # given
-    sku = "123"
-    variant = product.variants.first()
-    variant_id = graphene.Node.to_global_id("ProductVariant", variant.pk)
-
-    variables = {
-        "id": graphene.Node.to_global_id("Product", product.pk),
-        "variant_id": variant_id,
-        "sku": sku,
-        "channel": channel_USD.slug,
-    }
-
-    # when
-    response = staff_api_client.post_graphql(
-        QUERY_PRODUCT_WITH_VARIANT,
-        variables,
-    )
-
-    # then
-    content = get_graphql_content(response, ignore_errors=True)
-    error_message = "Argument 'id' cannot be combined"
-    assert error_message in content["errors"][0]["message"]
 
 
 QUERY_PRODUCT_WITH_SORTED_MEDIA = """
@@ -3162,3 +3175,30 @@ def test_applies_limit_on_product_assigned_attributes(
         content["data"]["product"]["assignedAttributes"][0]["attribute"]["slug"]
         == first_attribute.slug
     )
+
+
+CHANNEL_FIELD_QUERY = """
+query getProduct($id: ID!) {
+    product(id: $id) {
+        id
+        channel
+    }
+}
+"""
+
+
+def test_channel_field_with_default_channel_anonymous(api_client, product, channel_USD):
+    """No `channel` argument is passed and the anonymous requestor has no product permissions, so the resolver falls back to the lazy default channel slug."""
+
+    # given
+    product_id = graphene.Node.to_global_id("Product", product.pk)
+    variables = {"id": product_id}
+
+    # when
+    response = api_client.post_graphql(CHANNEL_FIELD_QUERY, variables)
+
+    # then
+    content = get_graphql_content(response)
+    data = content["data"]["product"]
+    assert data["id"] == product_id
+    assert data["channel"] == channel_USD.slug

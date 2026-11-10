@@ -3,7 +3,11 @@ import graphene
 from ...permission.enums import OrderPermissions, PaymentPermissions
 from ..core import ResolveInfo
 from ..core.connection import create_connection_slice, filter_connection_queryset
-from ..core.descriptions import ADDED_IN_322
+from ..core.descriptions import (
+    ADDED_IN_322,
+    ADDED_IN_323,
+    DEPRECATED_LEGACY_PAYMENTS,
+)
 from ..core.doc_category import DOC_CATEGORY_PAYMENTS
 from ..core.fields import FilterConnectionField, PermissionsField
 from ..core.scalars import UUID
@@ -34,6 +38,7 @@ from .resolvers import (
     resolve_transaction,
     resolve_transactions,
 )
+from .sorters import TransactionSortingInput
 from .types import (
     CardPaymentMethodDetails,
     GiftCardPaymentMethodDetails,
@@ -62,6 +67,7 @@ class PaymentQueries(graphene.ObjectType):
             OrderPermissions.MANAGE_ORDERS,
         ],
         doc_category=DOC_CATEGORY_PAYMENTS,
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS,
     )
     payments = FilterConnectionField(
         PaymentCountableConnection,
@@ -71,6 +77,7 @@ class PaymentQueries(graphene.ObjectType):
             OrderPermissions.MANAGE_ORDERS,
         ],
         doc_category=DOC_CATEGORY_PAYMENTS,
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS,
     )
     transaction = PermissionsField(
         TransactionItem,
@@ -101,6 +108,9 @@ class PaymentQueries(graphene.ObjectType):
         TransactionCountableConnection,
         where=TransactionWhereInput(
             description="Where filtering options for transactions."
+        ),
+        sort_by=TransactionSortingInput(
+            description="Sort transactions." + ADDED_IN_323
         ),
         description=(
             "List of transactions. "
@@ -154,11 +164,17 @@ class PaymentQueries(graphene.ObjectType):
 
 
 class PaymentMutations(graphene.ObjectType):
-    payment_capture = PaymentCapture.Field()
-    payment_refund = PaymentRefund.Field()
-    payment_void = PaymentVoid.Field()
-    payment_initialize = PaymentInitialize.Field()
-    payment_check_balance = PaymentCheckBalance.Field()
+    payment_capture = PaymentCapture.Field(
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS
+    )
+    payment_refund = PaymentRefund.Field(deprecation_reason=DEPRECATED_LEGACY_PAYMENTS)
+    payment_void = PaymentVoid.Field(deprecation_reason=DEPRECATED_LEGACY_PAYMENTS)
+    payment_initialize = PaymentInitialize.Field(
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS
+    )
+    payment_check_balance = PaymentCheckBalance.Field(
+        deprecation_reason=DEPRECATED_LEGACY_PAYMENTS
+    )
 
     transaction_create = TransactionCreate.Field()
     transaction_update = TransactionUpdate.Field()

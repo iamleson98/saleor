@@ -11,10 +11,10 @@ from ...product.models import Category
 from .. import calculations, utils
 from ..models import Checkout
 from ..utils import (
-    add_variant_to_checkout,
     calculate_checkout_quantity,
     calculate_checkout_weight,
 )
+from .utils import add_variant_to_checkout
 
 
 @pytest.fixture
@@ -59,7 +59,6 @@ def test_adding_same_variant(checkout, product):
             manager=manager,
             checkout_info=checkout_info,
             lines=lines,
-            address=checkout.shipping_address,
         )
         == subtotal
     )

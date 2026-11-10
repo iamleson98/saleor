@@ -1,9 +1,12 @@
 import graphene
 
 from ...webhook.event_types import WebhookEventAsyncType, WebhookEventSyncType
+from ...webhook.models import WebhookPayloadGeneration
 from ..core.descriptions import (
-    ADDED_IN_318,
+    ADDED_IN_323,
     DEFAULT_DEPRECATION_REASON,
+    DEPRECATED_EXPORT_MUTATIONS,
+    DEPRECATED_LEGACY_PAYMENTS,
 )
 from ..core.doc_category import DOC_CATEGORY_WEBHOOKS
 from ..core.types import BaseEnum
@@ -87,13 +90,18 @@ WEBHOOK_EVENT_DESCRIPTION = {
     WebhookEventAsyncType.CUSTOMER_UPDATED: "A customer account is updated.",
     WebhookEventAsyncType.CUSTOMER_DELETED: "A customer account is deleted.",
     WebhookEventAsyncType.CUSTOMER_METADATA_UPDATED: "A customer account metadata is updated.",
+    WebhookEventAsyncType.CUSTOMER_TYPE_CREATED: "A new customer type is created."
+    + ADDED_IN_323,
+    WebhookEventAsyncType.CUSTOMER_TYPE_UPDATED: "A customer type is updated."
+    + ADDED_IN_323,
+    WebhookEventAsyncType.CUSTOMER_TYPE_DELETED: "A customer type is deleted."
+    + ADDED_IN_323,
     WebhookEventAsyncType.GIFT_CARD_CREATED: "A new gift card created.",
     WebhookEventAsyncType.GIFT_CARD_UPDATED: "A gift card is updated.",
     WebhookEventAsyncType.GIFT_CARD_DELETED: "A gift card is deleted.",
     WebhookEventAsyncType.GIFT_CARD_SENT: "A gift card has been sent.",
     WebhookEventAsyncType.GIFT_CARD_STATUS_CHANGED: "A gift card status is changed.",
     WebhookEventAsyncType.GIFT_CARD_METADATA_UPDATED: "A gift card metadata is updated.",
-    WebhookEventAsyncType.GIFT_CARD_EXPORT_COMPLETED: "A gift card export is completed.",
     WebhookEventAsyncType.INVOICE_REQUESTED: "An invoice for order requested.",
     WebhookEventAsyncType.INVOICE_DELETED: "An invoice is deleted.",
     WebhookEventAsyncType.INVOICE_SENT: "Invoice has been sent.",
@@ -156,6 +164,9 @@ WEBHOOK_EVENT_DESCRIPTION = {
     WebhookEventAsyncType.PRODUCT_UPDATED: "A product is updated.",
     WebhookEventAsyncType.PRODUCT_DELETED: "A product is deleted.",
     WebhookEventAsyncType.PRODUCT_METADATA_UPDATED: "A product metadata is updated.",
+    WebhookEventAsyncType.PRODUCT_TYPE_CREATED: "A new product type is created.",
+    WebhookEventAsyncType.PRODUCT_TYPE_UPDATED: "A product type is updated.",
+    WebhookEventAsyncType.PRODUCT_TYPE_DELETED: "A product type is deleted.",
     WebhookEventAsyncType.PRODUCT_MEDIA_CREATED: "A new product media is created.",
     WebhookEventAsyncType.PRODUCT_MEDIA_UPDATED: "A product media is updated.",
     WebhookEventAsyncType.PRODUCT_MEDIA_DELETED: "A product media is deleted.",
@@ -173,6 +184,30 @@ WEBHOOK_EVENT_DESCRIPTION = {
     ),
     WebhookEventAsyncType.PRODUCT_VARIANT_STOCK_UPDATED: (
         "A product variant stock is updated"
+    ),
+    WebhookEventAsyncType.PRODUCT_VARIANT_OUT_OF_STOCK_IN_CHANNEL: (
+        "A product variant becomes out of stock across all non click-and-collect "
+        "warehouses in a channel. "
+        "\n\nNote: Only triggered when the `useLegacyShippingZoneStockAvailability` "
+        "shop setting is disabled."
+    ),
+    WebhookEventAsyncType.PRODUCT_VARIANT_BACK_IN_STOCK_IN_CHANNEL: (
+        "A product variant becomes available again across non click-and-collect "
+        "warehouses in a channel. "
+        "\n\nNote: Only triggered when the `useLegacyShippingZoneStockAvailability` "
+        "shop setting is disabled."
+    ),
+    WebhookEventAsyncType.PRODUCT_VARIANT_OUT_OF_STOCK_FOR_CLICK_AND_COLLECT: (
+        "A product variant becomes out of stock across all click-and-collect "
+        "warehouses in a channel. "
+        "\n\nNote: Only triggered when the `useLegacyShippingZoneStockAvailability` "
+        "shop setting is disabled."
+    ),
+    WebhookEventAsyncType.PRODUCT_VARIANT_BACK_IN_STOCK_FOR_CLICK_AND_COLLECT: (
+        "A product variant becomes available again across click-and-collect "
+        "warehouses in a channel. "
+        "\n\nNote: Only triggered when the `useLegacyShippingZoneStockAvailability` "
+        "shop setting is disabled."
     ),
     WebhookEventAsyncType.PRODUCT_EXPORT_COMPLETED: "A product export is completed.",
     WebhookEventAsyncType.SHIPPING_PRICE_CREATED: "A new shipping price is created.",
@@ -205,9 +240,6 @@ WEBHOOK_EVENT_DESCRIPTION = {
     WebhookEventAsyncType.VOUCHER_UPDATED: "A voucher is updated.",
     WebhookEventAsyncType.VOUCHER_DELETED: "A voucher is deleted.",
     WebhookEventAsyncType.VOUCHER_METADATA_UPDATED: "A voucher metadata is updated.",
-    WebhookEventAsyncType.VOUCHER_CODE_EXPORT_COMPLETED: (
-        "A voucher code export is completed." + ADDED_IN_318
-    ),
     WebhookEventAsyncType.ANY: "All the events.",
     WebhookEventAsyncType.OBSERVABILITY: "An observability event is created.",
     WebhookEventAsyncType.THUMBNAIL_CREATED: "A thumbnail is created.",
@@ -252,14 +284,29 @@ def description(enum):
     return "Enum determining type of webhook."
 
 
+# Events emitted only by the deprecated export mutations, removed together with them.
+EXPORT_COMPLETED_EVENTS = {
+    WebhookEventAsyncType.PRODUCT_EXPORT_COMPLETED,
+}
+
+
 def deprecation_reason(enum):
     if enum.value == WebhookEventAsyncType.NOTIFY_USER:
         return (
             "See the docs for more details about migrating from NOTIFY_USER to other events: "
             "https://docs.saleor.io/upgrade-guides/core/3-16-to-3-17#migrating-from-notify_user"
         )
+    if enum.value == WebhookEventAsyncType.OBSERVABILITY:
+        return (
+            "The observability feature is no longer supported. "
+            "This event will be removed in Saleor 3.24."
+        )
+    if enum.value in EXPORT_COMPLETED_EVENTS:
+        return DEPRECATED_EXPORT_MUTATIONS
     if enum.value == WebhookEventAsyncType.ANY:
         return DEFAULT_DEPRECATION_REASON
+    if enum.value in WebhookEventSyncType.PAYMENT_EVENTS:
+        return DEPRECATED_LEGACY_PAYMENTS
     return None
 
 
@@ -298,6 +345,7 @@ WebhookSampleEventTypeEnum = graphene.Enum(
         for e_type in WebhookEventAsyncType.CHOICES
         if e_type[0] != WebhookEventAsyncType.ANY
     ],
+    deprecation_reason=deprecation_reason,
 )
 WebhookSampleEventTypeEnum.doc_category = DOC_CATEGORY_WEBHOOKS
 
@@ -308,4 +356,22 @@ class EventDeliveryStatusEnum(BaseEnum):
     FAILED = "failed"
 
     class Meta:
+        doc_category = DOC_CATEGORY_WEBHOOKS
+
+
+class WebhookPayloadGenerationEnum(BaseEnum):
+    DEFERRED = WebhookPayloadGeneration.DEFERRED
+    IMMEDIATE = WebhookPayloadGeneration.IMMEDIATE
+
+    class Meta:
+        description = (
+            "Determines when the subscription payload of an asynchronous webhook "
+            "is built for events that defer payload generation."
+            "\n\n`DEFERRED`: the payload is built in a background task and "
+            "reflects the object's state at the time the task runs."
+            "\n\n`IMMEDIATE`: the payload is built by whatever triggered the "
+            "event, a request or a background task, and reflects the object's "
+            "state at that moment, at the cost of slowing that request or task."
+            + ADDED_IN_323
+        )
         doc_category = DOC_CATEGORY_WEBHOOKS

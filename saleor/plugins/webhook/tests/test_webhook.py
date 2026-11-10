@@ -28,7 +28,7 @@ from ....core import EventDeliveryStatus
 from ....core.models import EventDelivery, EventDeliveryAttempt, EventPayload
 from ....core.notification.utils import get_site_context
 from ....core.notify import NotifyEventType
-from ....core.tokens import token_generator
+from ....core.tokens import account_confirm_token_generator
 from ....core.utils.url import prepare_url
 from ....discount import DiscountType, DiscountValueType, RewardType, RewardValueType
 from ....discount.interface import VariantPromotionRuleInfo
@@ -52,7 +52,6 @@ from ....webhook.payloads import (
 )
 from ....webhook.transport import signature_for_payload
 from ....webhook.transport.asynchronous.transport import (
-    WebhookPayloadData,
     send_webhook_request_async,
     trigger_webhooks_async,
 )
@@ -845,106 +844,6 @@ def test_product_variant_metadata_updated(
 
 @mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
 @mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async")
-def test_product_variant_out_of_stock(
-    mocked_webhook_trigger,
-    mocked_get_webhooks_for_event,
-    any_webhook,
-    settings,
-    variant_with_many_stocks,
-):
-    variant = variant_with_many_stocks.stocks.first()
-    mocked_get_webhooks_for_event.return_value = [any_webhook]
-    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
-    manager = get_plugins_manager(allow_replica=False)
-    manager.product_variant_out_of_stock(variant)
-
-    mocked_webhook_trigger.assert_called_once_with(
-        None,
-        WebhookEventAsyncType.PRODUCT_VARIANT_OUT_OF_STOCK,
-        [any_webhook],
-        variant,
-        None,
-        legacy_data_generator=ANY,
-        allow_replica=False,
-    )
-    assert callable(mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"])
-    assert isinstance(
-        mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"], partial
-    )
-
-
-@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
-@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async")
-def test_product_variant_back_in_stock(
-    mocked_webhook_trigger,
-    mocked_get_webhooks_for_event,
-    any_webhook,
-    settings,
-    variant_with_many_stocks,
-):
-    variant = variant_with_many_stocks.stocks.first()
-    mocked_get_webhooks_for_event.return_value = [any_webhook]
-    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
-    manager = get_plugins_manager(allow_replica=False)
-    manager.product_variant_back_in_stock(variant)
-
-    mocked_webhook_trigger.assert_called_once_with(
-        None,
-        WebhookEventAsyncType.PRODUCT_VARIANT_BACK_IN_STOCK,
-        [any_webhook],
-        variant,
-        None,
-        legacy_data_generator=ANY,
-        allow_replica=False,
-    )
-    assert callable(mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"])
-    assert isinstance(
-        mocked_webhook_trigger.call_args.kwargs["legacy_data_generator"], partial
-    )
-
-
-@freeze_time("2014-06-28 10:50")
-@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
-@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async_for_multiple_objects")
-def test_product_variant_stocks_updated(
-    mocked_webhook_trigger_for_multiple_objects,
-    mocked_get_webhooks_for_event,
-    any_webhook,
-    settings,
-    variant_with_many_stocks,
-):
-    stock = variant_with_many_stocks.stocks.first()
-    mocked_get_webhooks_for_event.return_value = [any_webhook]
-    settings.PLUGINS = ["saleor.plugins.webhook.plugin.WebhookPlugin"]
-    manager = get_plugins_manager(allow_replica=False)
-    manager.product_variant_stocks_updated([stock])
-
-    mocked_webhook_trigger_for_multiple_objects.assert_called_once_with(
-        WebhookEventAsyncType.PRODUCT_VARIANT_STOCK_UPDATED,
-        [any_webhook],
-        webhook_payloads_data=[
-            WebhookPayloadData(
-                subscribable_object=stock, legacy_data_generator=ANY, data=None
-            )
-        ],
-        requestor=None,
-    )
-
-    assert callable(
-        mocked_webhook_trigger_for_multiple_objects.call_args.kwargs[
-            "webhook_payloads_data"
-        ][0].legacy_data_generator
-    )
-    assert isinstance(
-        mocked_webhook_trigger_for_multiple_objects.call_args.kwargs[
-            "webhook_payloads_data"
-        ][0].legacy_data_generator,
-        partial,
-    )
-
-
-@mock.patch("saleor.plugins.webhook.plugin.get_webhooks_for_event")
-@mock.patch("saleor.plugins.webhook.plugin.trigger_webhooks_async")
 def test_order_updated(
     mocked_webhook_trigger,
     mocked_get_webhooks_for_event,
@@ -1718,7 +1617,7 @@ def test_notify_user(
     redirect_url = "http://redirect.com/"
     send_account_confirmation(customer_user, redirect_url, manager, channel_USD.slug)
 
-    token = token_generator.make_token(customer_user)
+    token = account_confirm_token_generator.make_token(customer_user)
     params = urlencode({"email": customer_user.email, "token": token})
     confirm_url = prepare_url(params, redirect_url)
 

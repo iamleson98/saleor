@@ -6,7 +6,11 @@ import graphene
 
 from .....discount import PromotionEvents, RewardType, RewardValueType
 from .....tests.utils import dummy_editorjs
-from ....tests.utils import assert_no_permission, get_graphql_content
+from ....tests.utils import (
+    assert_no_permission,
+    get_graphql_content,
+    get_graphql_content_from_response,
+)
 
 QUERY_PROMOTION_BY_ID = """
     query Promotion($id: ID!) {
@@ -65,6 +69,131 @@ def _assert_promotion_data(promotion, content_data):
             "rewardType": rule.reward_type.upper() if rule.reward_type else None,
         }
         assert rule_data in promotion_data["rules"]
+
+
+QUERY_PROMOTION_BY_EXTERNAL_REFERENCE = """
+    query ($id: ID, $externalReference: String) {
+        promotion(
+            id: $id,
+            externalReference: $externalReference,
+        ) {
+            id
+            name
+            externalReference
+        }
+    }
+    """
+
+
+def test_query_promotion_by_external_reference(
+    staff_api_client, catalogue_promotion, permission_manage_discounts
+):
+    # given
+    external_reference = "test-ext-ref"
+    catalogue_promotion.external_reference = external_reference
+    catalogue_promotion.save(update_fields=("external_reference",))
+    variables = {"externalReference": external_reference}
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_PROMOTION_BY_EXTERNAL_REFERENCE,
+        variables,
+        permissions=[permission_manage_discounts],
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"] == {
+        "promotion": {
+            "id": graphene.Node.to_global_id("Promotion", catalogue_promotion.pk),
+            "name": catalogue_promotion.name,
+            "externalReference": external_reference,
+        }
+    }
+
+
+def test_query_promotion_by_external_reference_not_found(
+    staff_api_client, permission_manage_discounts
+):
+    # given
+    variables = {"externalReference": "non-existing-ext-ref"}
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_PROMOTION_BY_EXTERNAL_REFERENCE,
+        variables,
+        permissions=[permission_manage_discounts],
+    )
+
+    # then
+    content = get_graphql_content(response)
+    assert content["data"] == {"promotion": None}
+
+
+def test_query_promotion_by_empty_string_external_reference(
+    staff_api_client, catalogue_promotion, permission_manage_discounts
+):
+    """An empty string is treated as a missing argument, so it can't be looked up."""
+    # given
+    external_reference = ""
+    catalogue_promotion.external_reference = external_reference
+    catalogue_promotion.save(update_fields=("external_reference",))
+    variables = {"externalReference": external_reference}
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_PROMOTION_BY_EXTERNAL_REFERENCE,
+        variables,
+        permissions=[permission_manage_discounts],
+    )
+
+    # then
+    content = get_graphql_content_from_response(response)
+    assert content["data"] == {"promotion": None}
+    assert len(content["errors"]) == 1
+    assert content["errors"][0]["message"] == (
+        "At least one of arguments is required: 'id', 'external_reference'."
+    )
+    assert content["errors"][0]["path"] == ["promotion"]
+
+
+def test_query_promotion_by_external_reference_no_permission(
+    api_client, catalogue_promotion
+):
+    # given
+    variables = {"externalReference": "non-existing-ext-ref"}
+
+    # when
+    response = api_client.post_graphql(QUERY_PROMOTION_BY_EXTERNAL_REFERENCE, variables)
+
+    # then
+    assert_no_permission(response)
+
+
+def test_query_promotion_external_reference_conflicting_identifiers(
+    staff_api_client, catalogue_promotion, permission_manage_discounts
+):
+    # given
+    variables = {
+        "id": graphene.Node.to_global_id("Promotion", catalogue_promotion.pk),
+        "externalReference": "promotion-reference",
+    }
+
+    # when
+    response = staff_api_client.post_graphql(
+        QUERY_PROMOTION_BY_EXTERNAL_REFERENCE,
+        variables,
+        permissions=[permission_manage_discounts],
+    )
+
+    # then
+    content = get_graphql_content_from_response(response)
+    assert content["data"] == {"promotion": None}
+    assert len(content["errors"]) == 1
+    assert content["errors"][0]["message"] == (
+        "Argument 'id' cannot be combined with 'external_reference'"
+    )
+    assert content["errors"][0]["path"] == ["promotion"]
 
 
 def test_query_promotion_by_id_by_staff_user(
@@ -342,7 +471,7 @@ def test_query_promotion_rule_translation(
         ):
             assert rule["translation"]["name"] == promotion_rule_translation_fr.name
             assert rule["translation"]["description"] == json.dumps(
-                promotion_rule_translation_fr.description
+                promotion_rule_translation_fr.description, sort_keys=True
             )
             assert rule["translation"]["language"]["code"] == "FR"
         else:
@@ -407,3 +536,32 @@ def test_query_promotion_events(
             event_data["ruleId"] = db_event.parameters.get("rule_id")
 
         assert event_data in events
+
+
+def test_query_promotion_event_created_by_hidden_for_app_with_only_manage_staff(
+    promotion_events,
+    app_api_client,
+    permission_manage_discounts,
+    permission_manage_staff,
+):
+    # given
+    # MANAGE_STAFF must NOT, on its own, expose a PromotionEvent's createdBy
+    # user to an app caller. The resolver returns None when the requestor is
+    # not the owner and lacks an effective MANAGE_STAFF scope (apps cannot
+    # use MANAGE_STAFF as a general-purpose pass-through).
+    promotion = promotion_events[0].promotion
+    promotion_id = graphene.Node.to_global_id("Promotion", promotion.id)
+    variables = {"id": promotion_id}
+
+    # when
+    response = app_api_client.post_graphql(
+        QUERY_PROMOTION_BY_ID_WITH_EVENTS,
+        variables,
+        permissions=(permission_manage_discounts, permission_manage_staff),
+    )
+
+    # then
+    content = get_graphql_content(response)
+    events = content["data"]["promotion"]["events"]
+    assert len(events) == promotion.events.count()
+    assert all(event["createdBy"] is None for event in events)

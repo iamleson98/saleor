@@ -4,6 +4,7 @@ from typing import NamedTuple
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import (
+    HttpResponse,
     HttpResponseBadRequest,
     HttpResponseNotFound,
     HttpResponseRedirect,
@@ -19,14 +20,18 @@ from ..plugins.manager import get_plugins_manager
 from ..product.models import Category, Collection, ProductMedia
 from ..thumbnail.models import Thumbnail
 from . import ALLOWED_ICON_THUMBNAIL_FORMATS, ALLOWED_THUMBNAIL_FORMATS
+from .exceptions import ImageTooLargeError
 from .utils import (
     ProcessedIconImage,
     ProcessedImage,
     get_thumbnail_size,
+    is_product_media_image_pending,
     prepare_thumbnail_file_name,
 )
 
 logger = logging.getLogger(__name__)
+
+PENDING_IMAGE_RETRY_AFTER = "60"
 
 
 class ModelData(NamedTuple):
@@ -93,20 +98,22 @@ def handle_thumbnail(request, instance_id: str, size: str, format: str | None = 
     ):
         return HttpResponseRedirect(thumbnail.image.url)
 
+    pk_field = "uuid" if object_type in UUID_IDENTIFIABLE_TYPES else "id"
     try:
-        if object_type in UUID_IDENTIFIABLE_TYPES:
-            instance = model_data.model.objects.using(
-                settings.DATABASE_CONNECTION_REPLICA_NAME
-            ).get(uuid=pk)  # type: ignore[misc]
-        else:
-            instance = model_data.model.objects.using(
-                settings.DATABASE_CONNECTION_REPLICA_NAME
-            ).get(id=pk)
+        instance = model_data.model.objects.using(
+            settings.DATABASE_CONNECTION_REPLICA_NAME
+        ).get(**{pk_field: pk})
     except ObjectDoesNotExist:
         return HttpResponseNotFound("Instance with the given id cannot be found.")
 
     image = getattr(instance, model_data.image_field)
     if not bool(image):
+        if is_product_media_image_pending(object_type, instance):
+            return HttpResponse(
+                "Image has not been fetched yet, try later.",
+                status=503,
+                headers={"Retry-After": PENDING_IMAGE_RETRY_AFTER},
+            )
         return HttpResponseNotFound("There is no image for provided instance.")
 
     # prepare thumbnail
@@ -121,6 +128,19 @@ def handle_thumbnail(request, instance_id: str, size: str, format: str | None = 
     except FileNotFoundError as error:
         logger.info(str(error))
         return HttpResponseNotFound("Cannot found image file.")
+    except ImageTooLargeError as error:
+        # Logged at warning level rather than error: this view is unauthenticated, so
+        # repeated requests for a known-oversized image are attacker-controlled volume.
+        logger.warning(
+            "Cannot create a thumbnail, image exceeds the pixel limit: %s",
+            error,
+            extra={
+                "image_source": image.name,
+                "object_type": object_type,
+                "object_pk": pk,
+            },
+        )
+        return HttpResponseBadRequest("Image is too large.")
     except ValueError as error:
         logger.info(str(error))
         return HttpResponseBadRequest("Invalid image.")
@@ -142,3 +162,36 @@ def handle_thumbnail(request, instance_id: str, size: str, format: str | None = 
         call_event(manager.thumbnail_created, thumbnail)
 
     return HttpResponseRedirect(thumbnail.image.url)
+
+
+def handle_original_image(request, instance_id: str):
+    """Redirect to original image URL."""
+    try:
+        object_type, pk = from_global_id_or_error(instance_id, raise_error=True)
+    except GraphQLError:
+        return HttpResponseNotFound("Cannot find instance with the given id.")
+
+    if object_type not in TYPE_TO_MODEL_DATA_MAPPING:
+        return HttpResponseNotFound("Invalid instance type.")
+
+    model_data = TYPE_TO_MODEL_DATA_MAPPING[object_type]
+
+    pk_field = "uuid" if object_type in UUID_IDENTIFIABLE_TYPES else "id"
+    try:
+        instance = model_data.model.objects.using(
+            settings.DATABASE_CONNECTION_REPLICA_NAME
+        ).get(**{pk_field: pk})
+    except ObjectDoesNotExist:
+        return HttpResponseNotFound("Instance with the given id cannot be found.")
+
+    image = getattr(instance, model_data.image_field)
+    if not bool(image):
+        if is_product_media_image_pending(object_type, instance):
+            return HttpResponse(
+                "Image has not been fetched yet, try later.",
+                status=503,
+                headers={"Retry-After": PENDING_IMAGE_RETRY_AFTER},
+            )
+        return HttpResponseNotFound("There is no image for provided instance.")
+
+    return HttpResponseRedirect(image.url)

@@ -1,10 +1,17 @@
 *.py[cod]
 .*
 !.devcontainer
+!.worktree-container
 !.dockerignore
 !.github
 !.gitignore
 !.vscode
+!.semgrep/
+!.semgrepignore
+
+# Track only .claude/skills/; keep the rest of .claude/ (local settings, state) ignored.
+.claude
+!.claude/skills/
 *.log
 *.pot
 *.pyc
@@ -20,7 +27,6 @@ dist/
 /media/
 /node_modules/
 /static/
-/digital_contents/
 # Environments
 .env
 .venv

@@ -111,7 +111,7 @@ def test_order_note_add_fail_on_empty_message(
     order_updated_webhook_mock.assert_not_called()
 
 
-def test_order_add_note_as_user_no_channel_access(
+def test_order_note_add_as_user_no_channel_access(
     staff_api_client,
     permission_group_all_perms_channel_USD_only,
     order_with_lines,
@@ -136,7 +136,7 @@ def test_order_add_note_as_user_no_channel_access(
 
 
 @patch("saleor.plugins.manager.PluginsManager.order_updated")
-def test_order_add_note_by_app(
+def test_order_note_add_by_app(
     order_updated_webhook_mock,
     app_api_client,
     permission_manage_orders,
@@ -242,6 +242,7 @@ def test_order_note_add_user_triggers_webhooks(
                 "requestor_model_name": "account.user",
                 "requestor_object_id": staff_api_client.user.pk,
                 "request_time": None,
+                "subscribable_object_data": None,
             },
             "send_webhook_queue": settings.ORDER_WEBHOOK_EVENTS_CELERY_QUEUE_NAME,
             "telemetry_context": ANY,

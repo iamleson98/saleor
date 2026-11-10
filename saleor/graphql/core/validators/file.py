@@ -87,29 +87,11 @@ def detect_mime_type(file_data) -> str:
     return mime_type
 
 
-def get_mime_type(content_type_header: str | None) -> str | None:
-    if content_type_header is None:
-        return None
-    return content_type_header.split(";", maxsplit=1)[0].strip().lower()
-
-
-def is_image_mimetype(mimetype: str | None) -> bool:
-    """Check if mimetype is image."""
-    if mimetype is None:
-        return False
-    return mimetype.startswith("image/")
-
-
 def is_supported_image_mimetype(mimetype: str) -> bool:
     """Check if mimetype is a mimetype that thumbnails support."""
     if mimetype is None:
         return False
     return mimetype in MIME_TYPE_TO_PIL_IDENTIFIER.keys()
-
-
-def is_valid_image_content_type(content_type: str | None) -> bool:
-    """Check if content type is a valid image content type."""
-    return content_type is not None and is_supported_image_mimetype(content_type)
 
 
 def clean_image_file(cleaned_input, img_field_name, error_class):
@@ -123,6 +105,16 @@ def clean_image_file(cleaned_input, img_field_name, error_class):
             {
                 img_field_name: ValidationError(
                     "File is required.", code=error_class.REQUIRED
+                )
+            }
+        )
+    if img_file.size > settings.MAX_IMAGE_FILE_SIZE:
+        raise ValidationError(
+            {
+                img_field_name: ValidationError(
+                    f"File size exceeds the maximum allowed size "
+                    f"of {settings.MAX_IMAGE_FILE_SIZE / (1024 * 1024):.0f}MB.",
+                    code=error_class.FILE_SIZE_LIMIT_EXCEEDED,
                 )
             }
         )
@@ -140,6 +132,22 @@ def clean_image_file(cleaned_input, img_field_name, error_class):
         with Image.open(img_file) as image:
             _validate_image_exif(image, img_field_name, error_class)
             img_file.seek(0)
+    except Image.DecompressionBombError as e:
+        logger.warning(
+            "Upload for file %s was blocked, it exceeds the pixel limit: %s",
+            img_file.name,
+            e,
+            extra={"image_source": img_file.name, "pillow_error": str(e)},
+        )
+        raise ValidationError(
+            {
+                img_field_name: ValidationError(
+                    "Image exceeds the maximum allowed number of pixels of "
+                    f"{settings.MAX_IMAGE_PIXELS}.",
+                    code=error_class.FILE_SIZE_LIMIT_EXCEEDED,
+                )
+            }
+        ) from e
     except (SyntaxError, TypeError, UnidentifiedImageError) as e:
         raise ValidationError(
             {

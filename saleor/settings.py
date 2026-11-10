@@ -497,6 +497,16 @@ COUNTRIES_OVERRIDE = {
 }
 
 MAX_USER_ADDRESSES = int(os.environ.get("MAX_USER_ADDRESSES", 100))
+MAX_IMAGE_FILE_SIZE = int(
+    os.environ.get("MAX_IMAGE_FILE_SIZE", 10 * 1024 * 1024)
+)  # 10MB
+
+# Maximum number of pixels (width * height) of an image we are willing to decode.
+# This bounds decode memory, which `MAX_IMAGE_FILE_SIZE` does not: an 8000x8000 WebP
+# is 0.11MB on disk but needs ~1GB of RAM to decode, because the encoded size says
+# nothing about the decoded size. The default admits 5000x5000 with some headroom.
+# Applied to Pillow in `CoreAppConfig.ready`.
+MAX_IMAGE_PIXELS = int(os.environ.get("MAX_IMAGE_PIXELS", 30_000_000))
 
 TEST_RUNNER = "saleor.tests.runner.PytestTestRunner"
 
@@ -854,6 +864,14 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
         "street_address_1",
         "street_address_2",
         "user_email",
+        # Order/customer filter input (`customer` CharFilter) accepts a raw
+        # email or name fragment as a scalar string value, so the PII lives
+        # directly under the `customer` key rather than a nested `email` key.
+        # It must be denylisted by name; recursion alone won't redact it.
+        "customer",
+        "line1",
+        "line2",
+        "from_street_address",
     ]
 
     sentry_sdk.init(
@@ -861,7 +879,9 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
         release=__version__,
         send_default_pii=False,
         event_scrubber=EventScrubber(
-            denylist=SALEOR_DENYLIST, pii_denylist=SALEOR_PII_DENYLIST
+            denylist=SALEOR_DENYLIST,
+            pii_denylist=SALEOR_PII_DENYLIST,
+            recursive=True,
         ),
         **sentry_opts,
     )
@@ -869,8 +889,20 @@ def SENTRY_INIT(dsn: str, sentry_opts: dict):
     ignore_logger("graphql.execution.executor")
 
 
+# Number of seconds after which GraphQL requests will marked
+# as slow (error status)
+GRAPHQL_SPANS_MARK_SLOW_AFTER: float = 30.0
+
 GRAPHQL_PAGINATION_LIMIT = 100
 GRAPHQL_MIDDLEWARE: list[str] = []
+GRAPHQL_BATCH_MAX_COUNT: int = int(os.environ.get("GRAPHQL_BATCH_MAX_COUNT", 1))
+GRAPHQL_ALIAS_COUNT_LIMIT: int = int(os.environ.get("GRAPHQL_ALIAS_COUNT_LIMIT", 100))
+GRAPHQL_MUTATION_COUNT_LIMIT: int = int(
+    os.environ.get("GRAPHQL_MUTATION_COUNT_LIMIT", 4)
+)
+
+# Maximum number of IDs accepted by a single bulk delete mutation call
+BULK_DELETE_LIMIT: int = int(os.environ.get("BULK_DELETE_LIMIT", 100))
 
 # Set GRAPHQL_QUERY_MAX_COMPLEXITY=0 in env to disable (not recommended)
 GRAPHQL_QUERY_MAX_COMPLEXITY = int(
@@ -883,18 +915,38 @@ GRAPHQL_QUERY_MAX_COMPLEXITY = int(
 # Set FEDERATED_QUERY_MAX_ENTITIES=0 in env to disable (not recommended)
 FEDERATED_QUERY_MAX_ENTITIES = int(os.environ.get("FEDERATED_QUERY_MAX_ENTITIES", 100))
 
+# Optional - Python import path of a GraphQL resolver to allow Saleor to return
+# announcements. See ``saleor/site/apps.py`` and ``saleor/graphql/shop/types.py``
+# for details around the Announcements API.
+#
+# Value must be an import path, e.g.:
+#   SHOP_ANNOUNCEMENT_RESOLVER_IMPORT="saleor.custom.announcements.resolve_announcements"
+#
+# Where ``resolve_announcements`` should have the following signature:
+#
+# >>> from saleor.graphql.shop.types import Announcement
+# >>>
+# >>> def resolve_announcements() -> list[Announcement]: ...
+SHOP_ANNOUNCEMENT_RESOLVER_IMPORT = None
+
+# Optional - Python import path of a function returning the namespace (the
+# Postgres `classid` integer) used by ``saleor.core.db.locks`` for advisory
+# locks. When unset, the built-in default namespace is used.
+#
+# Value must be an import path, e.g.:
+#   ADVISORY_LOCK_NAMESPACE_IMPORT="saleor.custom.locks.get_namespace"
+#
+# Where ``get_namespace`` should have the following signature:
+#
+# >>> def get_namespace() -> int: ...
+ADVISORY_LOCK_NAMESPACE_IMPORT = None
+
 BUILTIN_PLUGINS = [
     "saleor.plugins.avatax.plugin.DeprecatedAvataxPlugin",
     "saleor.plugins.webhook.plugin.WebhookPlugin",
-    "saleor.payment.gateways.dummy.plugin.DeprecatedDummyGatewayPlugin",
-    "saleor.payment.gateways.dummy_credit_card.plugin.DeprecatedDummyCreditCardGatewayPlugin",
     "saleor.payment.gateways.stripe.plugin.StripeGatewayPlugin",
-    "saleor.payment.gateways.braintree.plugin.DeprecatedBraintreeGatewayPlugin",
-    "saleor.payment.gateways.razorpay.plugin.DeprecatedRazorpayGatewayPlugin",
-    "saleor.payment.gateways.authorize_net.plugin.AuthorizeNetGatewayPlugin",
     "saleor.plugins.user_email.plugin.UserEmailPlugin",
     "saleor.plugins.admin_email.plugin.AdminEmailPlugin",
-    "saleor.plugins.sendgrid.plugin.DeprecatedSendgridEmailPlugin",
     "saleor.plugins.openid_connect.plugin.OpenIDConnectPlugin",
 ]
 
@@ -1008,12 +1060,23 @@ CHECKOUT_SEARCH_UPDATE_PARALLEL_TASKS = int(
     os.environ.get("CHECKOUT_SEARCH_UPDATE_PARALLEL_TASKS", 5)
 )
 
+# Sets the default behavior for new Saleor installations.
+# When set to 'False', it disables account merging by default in DB
+# migrations, and when to 'True', it enables account merging but requires
+# password confirmation.
+# This setting has no effect against existing Saleor installations and
+# shouldn't be changed.
+ACCOUNT_CONFIRM_ASSOCIATE_ANONYMOUS_OBJECTS = False
+
 # Patch SubscriberExecutionContext class from `graphql-core-legacy` package
 # to fix bug causing not returning errors for subscription queries.
 
 executor.SubscriberExecutionContext = PatchedSubscriberExecutionContext  # type: ignore[assignment,misc]
 
 patch_executor()
+
+# Default queue into which messages will be pushed.
+CELERY_TASK_DEFAULT_QUEUE = os.environ.get("CELERY_TASK_DEFAULT_QUEUE", "celery")
 
 # Optional queue names for Celery tasks.
 # Set None to route to the default queue, or a string value to use a separate one
@@ -1058,6 +1121,8 @@ AUTOMATIC_CHECKOUT_COMPLETION_QUEUE_NAME = os.environ.get(
 DATA_MIGRATIONS_TASKS_QUEUE_NAME = os.environ.get(
     "DATA_MIGRATIONS_TASKS_QUEUE_NAME", None
 )
+
+FETCH_IMAGES_QUEUE_NAME = os.environ.get("FETCH_IMAGES_QUEUE_NAME", None)
 
 # Lock time for request password reset mutation per user (seconds)
 RESET_PASSWORD_LOCK_TIME = parse(
@@ -1150,6 +1215,20 @@ BREAKER_BOARD_DRY_RUN_SYNC_EVENTS = get_list(
 
 TELEMETRY_TRACER_CLASS = "saleor.core.telemetry.trace.Tracer"
 TELEMETRY_METER_CLASS = "saleor.core.telemetry.metric.Meter"
+# OpenTelemetry library instrumentors enabled when telemetry is initialized, by
+# entry point name in the `opentelemetry_instrumentor` group (registered by the
+# opentelemetry-instrumentation-* packages). They produce spans for database
+# queries, cache and broker calls, AWS calls and Celery tasks. The
+# threading instrumentor produces no spans of its own, it carries the current trace
+# context into threads and thread pools (for example the ones boto3 uses for S3
+# uploads and downloads), so spans created there keep their parent.
+#
+# The requests instrumentor (opentelemetry-instrumentation-requests) is deliberately not installed and must not be added here. It opens its own span for every outgoing HTTP request and writes that span's context into the `traceparent` header. For webhooks this overwrites the `traceparent` that `send_webhook_using_http` injects for the `webhooks.<event>` span, so apps would continue the instrumentor's span instead of the webhook span, and the header sent would differ from the one stored in the delivery attempt's `request_headers`. Every other outgoing call would get a `traceparent` with internal span ids.
+#
+# Set to an empty string to disable library instrumentation.
+TELEMETRY_INSTRUMENTORS = get_list(
+    os.environ.get("TELEMETRY_INSTRUMENTORS", "psycopg,celery,redis,botocore,threading")
+)
 # Whether to raise or log exceptions for telemetry unit conversion errors
 # Disabled by default to prevent disruptions caused by unexpected unit conversion issues
 TELEMETRY_RAISE_UNIT_CONVERSION_ERRORS = False

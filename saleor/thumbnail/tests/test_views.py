@@ -1,8 +1,10 @@
+import logging
 from unittest.mock import patch
 
 import graphene
 from PIL import Image
 
+from ...product import ProductMediaTypes
 from .. import IconThumbnailFormat, ThumbnailFormat
 from ..models import Thumbnail
 
@@ -197,6 +199,26 @@ def test_handle_thumbnail_view_no_image(client, category):
 
     # then
     assert response.status_code == 404
+
+
+def test_handle_thumbnail_view_for_product_media_image_type_with_external_url_but_no_image(
+    client, product
+):
+    # given
+    size = 500
+    product_media = product.media.create(
+        image=None,
+        type=ProductMediaTypes.IMAGE,
+        external_url="https://example.com/image.jpg",
+    )
+    product_media_id = graphene.Node.to_global_id("ProductMedia", product_media.id)
+
+    # when
+    response = client.get(f"/thumbnail/{product_media_id}/{size}/")
+
+    # then
+    assert response.status_code == 503
+    assert response["Retry-After"] == "60"
 
 
 def test_handle_thumbnail_view_invalid_object_type(client, order):
@@ -413,3 +435,210 @@ def test_handle_thumbnail_view_for_app_installation_logo_default_thumbnail_exist
     assert response.status_code == 302
     assert response.url == thumbnail.image.url
     assert Thumbnail.objects.count() == thumbnail_count
+
+
+def test_handle_original_image_for_category(client, category_with_image, settings):
+    # given
+    category_id = graphene.Node.to_global_id("Category", category_with_image.id)
+
+    # when
+    response = client.get(f"/image/{category_id}/")
+
+    # then
+    assert response.status_code == 302
+    assert (
+        response.url == settings.MEDIA_URL + category_with_image.background_image.name
+    )
+
+
+def test_handle_original_image_for_collection(client, collection_with_image, settings):
+    # given
+    collection_id = graphene.Node.to_global_id("Collection", collection_with_image.id)
+
+    # when
+    response = client.get(f"/image/{collection_id}/")
+
+    # then
+    assert response.status_code == 302
+    assert (
+        response.url == settings.MEDIA_URL + collection_with_image.background_image.name
+    )
+
+
+def test_handle_original_image_for_user(
+    client, staff_user, image, media_root, settings
+):
+    # given
+    staff_user.avatar = image
+    staff_user.save(update_fields=["avatar"])
+
+    user_uuid = graphene.Node.to_global_id("User", staff_user.uuid)
+
+    # when
+    response = client.get(f"/image/{user_uuid}/")
+
+    # then
+    assert response.status_code == 302
+    assert response.url == settings.MEDIA_URL + staff_user.avatar.name
+
+
+def test_handle_original_image_for_product_media(client, product_with_image, settings):
+    # given
+    product_media = product_with_image.media.first()
+    product_media_id = graphene.Node.to_global_id("ProductMedia", product_media.id)
+
+    # when
+    response = client.get(f"/image/{product_media_id}/")
+
+    # then
+    assert response.status_code == 302
+    assert response.url == settings.MEDIA_URL + product_media.image.name
+
+
+def test_handle_original_image_for_app(client, app, icon_image, media_root, settings):
+    # given
+    app.brand_logo_default = icon_image
+    app.save(update_fields=["brand_logo_default"])
+
+    app_uuid = graphene.Node.to_global_id("App", app.uuid)
+
+    # when
+    response = client.get(f"/image/{app_uuid}/")
+
+    # then
+    assert response.status_code == 302
+    assert response.url == settings.MEDIA_URL + app.brand_logo_default.name
+
+
+def test_handle_original_image_for_app_installation(
+    client, app_installation, icon_image, media_root, settings
+):
+    # given
+    app_installation.brand_logo_default = icon_image
+    app_installation.save(update_fields=["brand_logo_default"])
+
+    uuid = graphene.Node.to_global_id("AppInstallation", app_installation.uuid)
+
+    # when
+    response = client.get(f"/image/{uuid}/")
+
+    # then
+    assert response.status_code == 302
+    assert response.url == settings.MEDIA_URL + app_installation.brand_logo_default.name
+
+
+def test_handle_original_image_invalid_instance_id(client):
+    # given
+    instance_id = "invalid-id"
+
+    # when
+    response = client.get(f"/image/{instance_id}/")
+
+    # then
+    assert response.status_code == 404
+
+
+def test_handle_original_image_invalid_object_type(client, order):
+    # given
+    order_id = graphene.Node.to_global_id("Order", order.id)
+
+    # when
+    response = client.get(f"/image/{order_id}/")
+
+    # then
+    assert response.status_code == 404
+
+
+def test_handle_original_image_object_does_not_exist(client):
+    # given
+    category_id = graphene.Node.to_global_id("Category", 1)
+
+    # when
+    response = client.get(f"/image/{category_id}/")
+
+    # then
+    assert response.status_code == 404
+
+
+def test_handle_original_image_no_image(client, category):
+    # given
+    category_id = graphene.Node.to_global_id("Category", category.id)
+    assert not category.background_image
+
+    # when
+    response = client.get(f"/image/{category_id}/")
+
+    # then
+    assert response.status_code == 404
+
+
+def test_handle_original_image_for_product_media_without_image(client, product):
+    # given
+    product_media = product.media.create(image=None)
+    product_media_id = graphene.Node.to_global_id("ProductMedia", product_media.id)
+
+    # when
+    response = client.get(f"/image/{product_media_id}/")
+
+    # then
+    assert response.status_code == 404
+
+
+def test_handle_original_image_for_product_media_image_type_with_external_url_but_no_image(
+    client, product
+):
+    # given
+    product_media = product.media.create(
+        image=None,
+        type=ProductMediaTypes.IMAGE,
+        external_url="https://example.com/image.jpg",
+    )
+    product_media_id = graphene.Node.to_global_id("ProductMedia", product_media.id)
+
+    # when
+    response = client.get(f"/image/{product_media_id}/")
+
+    # then
+    assert response.status_code == 503
+    assert response["Retry-After"] == "60"
+
+
+def test_handle_thumbnail_view_image_exceeds_pixel_limit(
+    client, category_with_image, monkeypatch, caplog
+):
+    # given
+    # Pillow only raises above *twice* `MAX_IMAGE_PIXELS`, so 0 rejects any image and
+    # the tiny fixture image trips the same check a real oversized image would. The
+    # `settings` fixture cannot be used here: `settings.MAX_IMAGE_PIXELS` is applied to
+    # `PIL.Image.MAX_IMAGE_PIXELS` once at app startup.
+    image_name = category_with_image.background_image.name
+    with Image.open(category_with_image.background_image) as stored_image:
+        width, height = stored_image.size
+    # patched only after reading the size above, which would otherwise be rejected too
+    pillow_limit = 0
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", pillow_limit)
+    caplog.set_level(logging.WARNING)
+    size = 128
+    category_id = graphene.Node.to_global_id("Category", category_with_image.pk)
+    thumbnail_count = Thumbnail.objects.count()
+
+    # when
+    response = client.get(f"/thumbnail/{category_id}/{size}/")
+
+    # then
+    assert response.status_code == 400
+    assert response.content == b"Image is too large."
+    assert Thumbnail.objects.count() == thumbnail_count
+
+    # the rejection must be traceable back to both the stored file and the object,
+    # so an operator can find every affected row from the logs alone
+    assert len(caplog.records) == 2
+    decode_record, view_record = caplog.records
+    assert decode_record.image_source == image_name
+    assert decode_record.pillow_error == (
+        f"Image size ({width * height} pixels) exceeds limit of "
+        f"{2 * pillow_limit} pixels, could be decompression bomb DOS attack."
+    )
+    assert view_record.image_source == image_name
+    assert view_record.object_type == "Category"
+    assert view_record.object_pk == str(category_with_image.pk)
